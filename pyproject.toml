@@ -13,4 +13,5 @@ dependencies = [
     "peft>=0.10",
     "modelscope>=1.34.0",
     "psutil>=7.2.2",
+    "matplotlib>=3.10.8",
 ]

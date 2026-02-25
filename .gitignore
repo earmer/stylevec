@@ -9,3 +9,4 @@ lora/checkpoints/
 .DS_Store
 base-models/
 CLAUDE.md
+lora/trained/*
