@@ -17,7 +17,8 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
 from evaluate import silhouette, consistency  # noqa: E402
 
-from data import load_data, make_collate_fn, TextDataset
+from data import load_data, make_collate_fn, cached_collate_fn, load_cached_data, TextDataset, CACHE_DIR
+import preprocess
 from model import StyleModel, MODEL_PATH, LORA_R, LORA_ALPHA
 
 def detect_device() -> torch.device:
@@ -73,9 +74,12 @@ def main():
     parser.add_argument("--alpha", type=int, default=LORA_ALPHA)
     parser.add_argument("--batch", type=int, default=None)
     parser.add_argument("--grad", type=int, default=1)
+    parser.add_argument("--workers", type=int, default=4, help="Number of data loading workers")
+    parser.add_argument("--no-cache", action="store_true", help="Disable preprocessed cached data")
     args = parser.parse_args()
     rank = args.rank
     alpha = args.alpha
+    num_workers = args.workers
 
     if args.batch is not None:
         batch = args.batch
@@ -93,24 +97,32 @@ def main():
     results_csv = Path(__file__).resolve().parent / f"results_r{rank}.csv"
     ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_r{rank}"
 
-    tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
+    # 加载数据
+    if not args.no_cache:
+        if not (CACHE_DIR / "train_cache.pkl").exists():
+            print("Cache not found, preprocessing...")
+            preprocess.main()
+        print("Loading from cache...")
+        train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_cached_data()
+        collate = cached_collate_fn
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        train_ds, val_acc_ds, val_ds, num_train_speakers, info = load_data()
+        all_train_ds = TextDataset(
+            train_ds.texts + val_acc_ds.texts,
+            train_ds.labels + val_acc_ds.labels,
+        )
+        collate = make_collate_fn(tokenizer, MAX_LEN)
 
-    train_ds, val_acc_ds, val_ds, num_train_speakers, info = load_data()
     print(f"num_train_speakers = {num_train_speakers}")
 
-    collate = make_collate_fn(tokenizer, MAX_LEN)
-    train_loader    = DataLoader(train_ds,    batch_size=batch, shuffle=True,  collate_fn=collate)
-    val_acc_loader  = DataLoader(val_acc_ds,  batch_size=batch, shuffle=False, collate_fn=collate)
-    val_loader      = DataLoader(val_ds,      batch_size=batch, shuffle=False, collate_fn=collate)
-
-    # train_sil 用全部 train speakers 的句子（train + val_acc 合并）
-    all_train_ds = TextDataset(
-        train_ds.texts + val_acc_ds.texts,
-        train_ds.labels + val_acc_ds.labels,
-    )
-    all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate)
+    # 使用多worker并行加载数据
+    train_loader    = DataLoader(train_ds,    batch_size=batch, shuffle=True,  collate_fn=collate, num_workers=num_workers, pin_memory=True)
+    val_acc_loader  = DataLoader(val_acc_ds,  batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True)
+    val_loader      = DataLoader(val_ds,      batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True)
+    all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True)
 
     model = StyleModel(num_train_speakers, lora_r=rank, lora_alpha=alpha).to(DEVICE)
     model.base.print_trainable_parameters()
@@ -120,7 +132,7 @@ def main():
     total_opt_steps = opt_steps_per_epoch * EPOCHS
     warmup_steps = math.ceil(total_opt_steps * 0.05)
     print(f"device={DEVICE}  batch={batch}  grad_accum={grad_accum}  effective={batch * grad_accum}")
-    print(f"opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
+    print(f"num_workers={num_workers}  opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad], lr=LR

@@ -1,11 +1,14 @@
 """数据准备：从 genshin.db 查询 ≥100 句说话人，按说话人 85/15 划分。"""
 
+import pickle
 import sqlite3
 import numpy as np
 from pathlib import Path
 from torch.utils.data import Dataset
+import torch
 
 DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
+CACHE_DIR = Path(__file__).resolve().parent / "cache"
 SEED = 42
 MAX_PER_SPEAKER = 200
 MIN_SENTENCES = 100
@@ -21,6 +24,20 @@ class TextDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.texts[idx], self.labels[idx]
+
+
+class TokenizedDataset(Dataset):
+    """预处理后的tokenized数据集，直接返回tensor。"""
+    def __init__(self, input_ids: list, attention_masks: list, labels: list):
+        self.input_ids = input_ids
+        self.attention_masks = attention_masks
+        self.labels = torch.tensor(labels, dtype=torch.long)
+
+    def __len__(self):
+        return len(self.labels)
+
+    def __getitem__(self, idx):
+        return self.input_ids[idx], self.attention_masks[idx], self.labels[idx]
 
 
 def load_data():
@@ -119,3 +136,48 @@ def make_collate_fn(tokenizer, max_len: int = 128):
         )
         return enc["input_ids"], enc["attention_mask"], torch.tensor(labels, dtype=torch.long)
     return collate
+
+
+def cached_collate_fn(batch):
+    input_ids, attention_masks, labels = zip(*batch)
+    return torch.stack(input_ids), torch.stack(attention_masks), torch.stack(labels)
+
+
+def load_cached_data():
+    """从缓存加载预处理的tokenized数据。"""
+    def load_cache(name):
+        path = CACHE_DIR / f"{name}_cache.pkl"
+        if not path.exists():
+            raise FileNotFoundError(f"Cache file not found: {path}")
+        with open(path, "rb") as f:
+            return pickle.load(f)
+
+    print("Loading cached data...")
+    train_cache = load_cache("train")
+    val_acc_cache = load_cache("val_acc")
+    val_cache = load_cache("val")
+    all_train_cache = load_cache("all_train")
+    meta = load_cache("meta")
+
+    train_ds = TokenizedDataset(
+        train_cache["input_ids"],
+        train_cache["attention_masks"],
+        train_cache["labels"],
+    )
+    val_acc_ds = TokenizedDataset(
+        val_acc_cache["input_ids"],
+        val_acc_cache["attention_masks"],
+        val_acc_cache["labels"],
+    )
+    val_ds = TokenizedDataset(
+        val_cache["input_ids"],
+        val_cache["attention_masks"],
+        val_cache["labels"],
+    )
+    all_train_ds = TokenizedDataset(
+        all_train_cache["input_ids"],
+        all_train_cache["attention_masks"],
+        all_train_cache["labels"],
+    )
+
+    return train_ds, val_acc_ds, val_ds, all_train_ds, meta["num_train_speakers"], meta["info"]
