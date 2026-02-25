@@ -23,7 +23,7 @@ def silhouette(vecs, labels):
     n_unique = len(set(labels.tolist()))
     if n_unique < 2:
         return float("nan")
-    return float(silhouette_score(vecs, labels, metric="cosine"))
+    return float(silhouette_score(vecs, labels, metric="cosine", n_jobs=-1))
 
 
 def evaluate_all(vecs_train, labels_train, n_train,

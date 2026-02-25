@@ -21,7 +21,7 @@ LORA_DROPOUT = 0.05
 
 
 class StyleModel(nn.Module):
-    def __init__(self, num_train_speakers: int, lora_r: int = LORA_R):
+    def __init__(self, num_train_speakers: int, lora_r: int = LORA_R, lora_alpha: int = LORA_ALPHA):
         super().__init__()
 
         base = AutoModel.from_pretrained(
@@ -34,7 +34,7 @@ class StyleModel(nn.Module):
 
         lora_cfg = LoraConfig(
             r=lora_r,
-            lora_alpha=LORA_ALPHA,
+            lora_alpha=lora_alpha,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
             lora_dropout=LORA_DROPOUT,
             bias="none",

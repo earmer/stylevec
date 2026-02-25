@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
 from evaluate import silhouette, consistency  # noqa: E402
 
 from data import load_data, make_collate_fn, TextDataset
-from model import StyleModel, MODEL_PATH
+from model import StyleModel, MODEL_PATH, LORA_R, LORA_ALPHA
 
 def detect_device() -> torch.device:
     if torch.cuda.is_available():
@@ -62,18 +62,20 @@ def compute_acc(model: StyleModel, loader: DataLoader) -> float:
             lbl = lbl.to(DEVICE)
             style_norm = model.encode(input_ids.to(DEVICE), attention_mask.to(DEVICE))
             logits = model.arcface_head(style_norm, lbl)
-            correct += (logits.argmax(dim=-1) == lbl).sum().item()
+            correct += (logits.argmax(dim=-1) == lbl).sum()
             total += len(lbl)
-    return correct / total if total > 0 else 0.0
+    return float(correct.item() / total) if total > 0 else 0.0
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rank", type=int, default=16)
+    parser.add_argument("--rank", type=int, default=LORA_R)
+    parser.add_argument("--alpha", type=int, default=LORA_ALPHA)
     parser.add_argument("--batch", type=int, default=None)
     parser.add_argument("--grad", type=int, default=1)
     args = parser.parse_args()
     rank = args.rank
+    alpha = args.alpha
 
     if args.batch is not None:
         batch = args.batch
@@ -110,7 +112,7 @@ def main():
     )
     all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate)
 
-    model = StyleModel(num_train_speakers, lora_r=rank).to(DEVICE)
+    model = StyleModel(num_train_speakers, lora_r=rank, lora_alpha=alpha).to(DEVICE)
     model.base.print_trainable_parameters()
 
     steps_per_epoch = math.ceil(len(train_ds) / batch)
