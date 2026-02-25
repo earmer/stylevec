@@ -49,7 +49,7 @@ def collect_embeddings(model: StyleModel, loader: DataLoader):
     vecs, labels = [], []
     with torch.no_grad():
         for input_ids, attention_mask, lbl in loader:
-            v = model.encode(input_ids.to(DEVICE), attention_mask.to(DEVICE))
+            v = model.encode(input_ids.to(DEVICE, non_blocking=True), attention_mask.to(DEVICE, non_blocking=True))
             vecs.append(v.cpu().numpy())
             labels.append(lbl.numpy())
     return np.concatenate(vecs), np.concatenate(labels)
@@ -60,8 +60,8 @@ def compute_acc(model: StyleModel, loader: DataLoader) -> float:
     correct, total = 0, 0
     with torch.no_grad():
         for input_ids, attention_mask, lbl in loader:
-            lbl = lbl.to(DEVICE)
-            style_norm = model.encode(input_ids.to(DEVICE), attention_mask.to(DEVICE))
+            lbl = lbl.to(DEVICE, non_blocking=True)
+            style_norm = model.encode(input_ids.to(DEVICE, non_blocking=True), attention_mask.to(DEVICE, non_blocking=True))
             logits = model.arcface_head(style_norm, lbl)
             correct += (logits.argmax(dim=-1) == lbl).sum()
             total += len(lbl)
@@ -69,11 +69,15 @@ def compute_acc(model: StyleModel, loader: DataLoader) -> float:
 
 
 def main():
+    if DEVICE.type == "cuda":
+        torch.set_float32_matmul_precision("high")
+    use_amp = DEVICE.type == "cuda"
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--rank", type=int, default=LORA_R)
     parser.add_argument("--alpha", type=int, default=LORA_ALPHA)
     parser.add_argument("--batch", type=int, default=None)
-    parser.add_argument("--grad", type=int, default=1)
+    parser.add_argument("--grad", type=int, default=None)
     parser.add_argument("--workers", type=int, default=4, help="Number of data loading workers")
     parser.add_argument("--no-cache", action="store_true", help="Disable preprocessed cached data")
     args = parser.parse_args()
@@ -92,7 +96,7 @@ def main():
         batch = max(1, int(psutil.virtual_memory().available / 1e9))
         batch = (batch // 8) * 8 or 1
 
-    grad_accum = args.grad
+    grad_accum = args.grad if args.grad is not None else 1
 
     results_csv = Path(__file__).resolve().parent / f"results_r{rank}.csv"
     ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_r{rank}"
@@ -119,13 +123,17 @@ def main():
     print(f"num_train_speakers = {num_train_speakers}")
 
     # 使用多worker并行加载数据
-    train_loader    = DataLoader(train_ds,    batch_size=batch, shuffle=True,  collate_fn=collate, num_workers=num_workers, pin_memory=True)
-    val_acc_loader  = DataLoader(val_acc_ds,  batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True)
-    val_loader      = DataLoader(val_ds,      batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True)
-    all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True)
+    _pw = num_workers > 0
+    train_loader    = DataLoader(train_ds,    batch_size=batch, shuffle=True,  collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
+    val_acc_loader  = DataLoader(val_acc_ds,  batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
+    val_loader      = DataLoader(val_ds,      batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
+    all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
 
     model = StyleModel(num_train_speakers, lora_r=rank, lora_alpha=alpha).to(DEVICE)
+    if args.grad is not None:
+        model.base.gradient_checkpointing_enable()
     model.base.print_trainable_parameters()
+    compiled_model = torch.compile(model) if DEVICE.type == "cuda" else model
 
     steps_per_epoch = math.ceil(len(train_ds) / batch)
     opt_steps_per_epoch = math.ceil(steps_per_epoch / grad_accum)
@@ -135,7 +143,9 @@ def main():
     print(f"num_workers={num_workers}  opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
 
     optimizer = torch.optim.AdamW(
-        [p for p in model.parameters() if p.requires_grad], lr=LR
+        [p for p in model.parameters() if p.requires_grad],
+        lr=LR,
+        fused=DEVICE.type == "cuda",
     )
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_opt_steps)
 
@@ -158,13 +168,15 @@ def main():
         total_loss = 0.0
         optimizer.zero_grad()
         for step, (input_ids, attention_mask, lbl) in enumerate(train_loader):
-            input_ids = input_ids.to(DEVICE)
-            attention_mask = attention_mask.to(DEVICE)
-            lbl = lbl.to(DEVICE)
-            _, _, loss = model(input_ids, attention_mask, lbl)
+            input_ids = input_ids.to(DEVICE, non_blocking=True)
+            attention_mask = attention_mask.to(DEVICE, non_blocking=True)
+            lbl = lbl.to(DEVICE, non_blocking=True)
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
+                _, _, loss = compiled_model(input_ids, attention_mask, lbl)
             (loss / grad_accum).backward()
             total_loss += loss.item()
             if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
