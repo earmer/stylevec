@@ -1,5 +1,6 @@
 """LoRA 风格向量训练：20 epoch，每 epoch 评估 silhouette + ArcFace 准确率。"""
 
+import argparse
 import csv
 import math
 import sys
@@ -9,9 +10,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np
-import psutil
 import torch
-from torch.utils.data import DataLoader, ConcatDataset
+from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
@@ -28,43 +28,14 @@ def detect_device() -> torch.device:
     return torch.device("cpu")
 
 
-def auto_batch(device: torch.device, target_effective: int = 64) -> tuple[int, int]:
-    MODEL_OVERHEAD_GB = 1.5
-    MEM_PER_SAMPLE_MB = 30
-
-    if device.type == "cuda":
-        free_bytes, _ = torch.cuda.mem_get_info()
-        free_gb = free_bytes / 1e9
-        cap = 512
-    elif device.type == "mps":
-        free_gb = max(0.0, psutil.virtual_memory().available / 1e9 - 5.0) * 0.25
-        cap = None
-    else:
-        free_gb = psutil.virtual_memory().available / 1e9 * 0.5
-        cap = 64
-
-    usable_gb = max(0.0, free_gb - MODEL_OVERHEAD_GB)
-    max_batch = max(1, int(usable_gb * 1024 / MEM_PER_SAMPLE_MB))
-    if cap is not None:
-        max_batch = min(max_batch, cap)
-    batch = 2 ** int(math.log2(max_batch))
-    batch = max(1, batch)
-    grad_accum = max(1, target_effective // batch)
-    return batch, grad_accum
-
-
 DEVICE = detect_device()
-BATCH, GRAD_ACCUM = auto_batch(DEVICE)
 EPOCHS = 20
 LR = 2e-4
 MAX_LEN = 128
-RESULTS_CSV = Path(__file__).resolve().parent / "results.csv"
-CKPT_DIR = Path(__file__).resolve().parent / "checkpoints"
 
-
-def save_checkpoint(model: StyleModel, run_ts: str, epoch: int):
+def save_checkpoint(model: StyleModel, run_ts: str, epoch: int, ckpt_dir: Path):
     name = f"{run_ts}-epoch-{epoch:02d}"
-    ckpt_path = CKPT_DIR / name
+    ckpt_path = ckpt_dir / name
     ckpt_path.mkdir(parents=True, exist_ok=True)
     model.base.save_pretrained(str(ckpt_path))
     torch.save(model.style_head.state_dict(), ckpt_path / "style_head.pt")
@@ -97,6 +68,29 @@ def compute_acc(model: StyleModel, loader: DataLoader) -> float:
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--rank", type=int, default=16)
+    parser.add_argument("--batch", type=int, default=None)
+    parser.add_argument("--grad", type=int, default=1)
+    args = parser.parse_args()
+    rank = args.rank
+
+    if args.batch is not None:
+        batch = args.batch
+    elif DEVICE.type == "cuda":
+        free_bytes, _ = torch.cuda.mem_get_info()
+        batch = max(1, int(free_bytes / 1e9))
+        batch = (batch // 8) * 8 or 1
+    else:
+        import psutil
+        batch = max(1, int(psutil.virtual_memory().available / 1e9))
+        batch = (batch // 8) * 8 or 1
+
+    grad_accum = args.grad
+
+    results_csv = Path(__file__).resolve().parent / f"results_r{rank}.csv"
+    ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_r{rank}"
+
     tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -105,27 +99,26 @@ def main():
     print(f"num_train_speakers = {num_train_speakers}")
 
     collate = make_collate_fn(tokenizer, MAX_LEN)
-    train_loader    = DataLoader(train_ds,    batch_size=BATCH, shuffle=True,  collate_fn=collate)
-    val_acc_loader  = DataLoader(val_acc_ds,  batch_size=BATCH, shuffle=False, collate_fn=collate)
-    val_loader      = DataLoader(val_ds,      batch_size=BATCH, shuffle=False, collate_fn=collate)
-    test_loader     = DataLoader(test_ds,     batch_size=BATCH, shuffle=False, collate_fn=collate)
+    train_loader    = DataLoader(train_ds,    batch_size=batch, shuffle=True,  collate_fn=collate)
+    val_acc_loader  = DataLoader(val_acc_ds,  batch_size=batch, shuffle=False, collate_fn=collate)
+    val_loader      = DataLoader(val_ds,      batch_size=batch, shuffle=False, collate_fn=collate)
+    test_loader     = DataLoader(test_ds,     batch_size=batch, shuffle=False, collate_fn=collate)
 
     # train_sil 用全部 train speakers 的句子（train + val_acc 合并）
     all_train_ds = TextDataset(
         train_ds.texts + val_acc_ds.texts,
         train_ds.labels + val_acc_ds.labels,
     )
-    all_train_loader = DataLoader(all_train_ds, batch_size=BATCH, shuffle=False, collate_fn=collate)
+    all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate)
 
-    model = StyleModel(num_train_speakers).to(DEVICE)
+    model = StyleModel(num_train_speakers, lora_r=rank).to(DEVICE)
     model.base.print_trainable_parameters()
 
-    steps_per_epoch = math.ceil(len(train_ds) / BATCH)
-    # scheduler 按 optimizer step 计数（每 GRAD_ACCUM 个 batch 才 step 一次）
-    opt_steps_per_epoch = math.ceil(steps_per_epoch / GRAD_ACCUM)
+    steps_per_epoch = math.ceil(len(train_ds) / batch)
+    opt_steps_per_epoch = math.ceil(steps_per_epoch / grad_accum)
     total_opt_steps = opt_steps_per_epoch * EPOCHS
     warmup_steps = math.ceil(total_opt_steps * 0.05)
-    print(f"device={DEVICE}  batch={BATCH}  grad_accum={GRAD_ACCUM}  effective={BATCH * GRAD_ACCUM}")
+    print(f"device={DEVICE}  batch={batch}  grad_accum={grad_accum}  effective={batch * grad_accum}")
     print(f"opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
 
     optimizer = torch.optim.AdamW(
@@ -133,7 +126,7 @@ def main():
     )
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_opt_steps)
 
-    with open(RESULTS_CSV, "w", newline="") as f:
+    with open(results_csv, "w", newline="") as f:
         csv.writer(f).writerow([
             "epoch", "train_loss",
             "train_sil", "val_sil", "test_sil",
@@ -142,7 +135,7 @@ def main():
         ])
 
     run_ts = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    CKPT_DIR.mkdir(parents=True, exist_ok=True)
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, EPOCHS + 1):
         model.train()
@@ -153,9 +146,9 @@ def main():
             attention_mask = attention_mask.to(DEVICE)
             lbl = lbl.to(DEVICE)
             _, _, loss = model(input_ids, attention_mask, lbl)
-            (loss / GRAD_ACCUM).backward()
+            (loss / grad_accum).backward()
             total_loss += loss.item()
-            if (step + 1) % GRAD_ACCUM == 0 or (step + 1) == len(train_loader):
+            if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
@@ -181,7 +174,7 @@ def main():
             f"acc  tr={tr_acc:.3f}  va={va_acc:.3f}"
         )
 
-        with open(RESULTS_CSV, "a", newline="") as f:
+        with open(results_csv, "a", newline="") as f:
             csv.writer(f).writerow([
                 epoch, f"{avg_loss:.4f}",
                 f"{tr_sil:.4f}", f"{va_sil:.4f}", f"{te_sil:.4f}",
@@ -189,7 +182,7 @@ def main():
                 f"{tr_acc:.4f}", f"{va_acc:.4f}",
             ])
 
-        save_checkpoint(model, run_ts, epoch)
+        save_checkpoint(model, run_ts, epoch, ckpt_dir)
 
 
 if __name__ == "__main__":

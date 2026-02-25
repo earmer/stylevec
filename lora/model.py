@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM
+from transformers import AutoModel
 from peft import LoraConfig, get_peft_model
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
@@ -21,10 +21,10 @@ LORA_DROPOUT = 0.05
 
 
 class StyleModel(nn.Module):
-    def __init__(self, num_train_speakers: int):
+    def __init__(self, num_train_speakers: int, lora_r: int = LORA_R):
         super().__init__()
 
-        base = AutoModelForCausalLM.from_pretrained(
+        base = AutoModel.from_pretrained(
             str(MODEL_PATH),
             dtype=torch.bfloat16,
             trust_remote_code=True,
@@ -33,7 +33,7 @@ class StyleModel(nn.Module):
             p.requires_grad = False
 
         lora_cfg = LoraConfig(
-            r=LORA_R,
+            r=lora_r,
             lora_alpha=LORA_ALPHA,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
             lora_dropout=LORA_DROPOUT,
@@ -52,11 +52,11 @@ class StyleModel(nn.Module):
         out = self.base(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            output_hidden_states=True,
         )
-        h = out.hidden_states[-1].float()          # (B, L, 1024)
-        mask = attention_mask.unsqueeze(-1).float()
-        pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # (B, 1024)
+        h = out.last_hidden_state                  # (B, L, 1024) bfloat16
+        mask = attention_mask.unsqueeze(-1)
+        pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # (B, 1024) bfloat16
+        pooled = pooled.float()
         style = self.style_head(pooled)            # (B, 128)
         return F.normalize(style, dim=-1)
 
