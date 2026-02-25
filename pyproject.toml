@@ -11,4 +11,5 @@ dependencies = [
     "torch",
     "accelerate",
     "peft>=0.10",
+    "modelscope>=1.34.0",
 ]
