@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 cache/
+cache_core/
 lora/checkpoints/
 **/*.ckpt
 **/*.pt

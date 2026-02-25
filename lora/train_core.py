@@ -3,6 +3,7 @@
 import argparse
 import csv
 import math
+import pickle
 import sqlite3
 import sys
 from datetime import datetime
@@ -18,7 +19,8 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
 from evaluate import silhouette, consistency  # noqa: E402
 
-from data import TextDataset, make_collate_fn
+from data import TextDataset, TokenizedDataset, make_collate_fn, cached_collate_fn
+import preprocess_core
 from model import StyleModel, MODEL_PATH, LORA_R, LORA_ALPHA
 
 DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
@@ -114,6 +116,33 @@ def load_core_data():
     )
 
 
+def load_cached_core_data():
+    """从缓存加载预处理的 tokenized 数据。"""
+    cache_dir = preprocess_core.CACHE_DIR
+
+    def load_cache(name):
+        with open(cache_dir / f"{name}_cache.pkl", "rb") as f:
+            return pickle.load(f)
+
+    train_cache = load_cache("train")
+    val_acc_cache = load_cache("val_acc")
+    val_cache = load_cache("val")
+    all_train_cache = load_cache("all_train")
+    meta = load_cache("meta")
+
+    def to_ds(cache):
+        return TokenizedDataset(cache["input_ids"], cache["attention_masks"], cache["labels"])
+
+    return (
+        to_ds(train_cache),
+        to_ds(val_acc_cache),
+        to_ds(val_cache),
+        to_ds(all_train_cache),
+        meta["num_train_speakers"],
+        meta["info"],
+    )
+
+
 def save_checkpoint(model: StyleModel, run_ts: str, epoch: int, ckpt_dir: Path):
     name = f"{run_ts}-epoch-{epoch:02d}"
     ckpt_path = ckpt_dir / name
@@ -159,6 +188,7 @@ def main():
     parser.add_argument("--batch", type=int, default=None)
     parser.add_argument("--grad", type=int, default=None)
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--no-cache", action="store_true", help="Disable preprocessed cached data")
     args = parser.parse_args()
     rank, alpha, num_workers = args.rank, args.alpha, args.workers
 
@@ -177,12 +207,19 @@ def main():
     ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_core_r{rank}"
 
     # 数据
-    tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_core_data()
-    collate = make_collate_fn(tokenizer, MAX_LEN)
+    if not args.no_cache:
+        if not (preprocess_core.CACHE_DIR / "train_cache.pkl").exists():
+            print("Cache not found, preprocessing...")
+            preprocess_core.main()
+        print("Loading from cache...")
+        train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_cached_core_data()
+        collate = cached_collate_fn
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), trust_remote_code=True)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_core_data()
+        collate = make_collate_fn(tokenizer, MAX_LEN)
 
     print(f"num_train_speakers = {num_train_speakers}")
 
