@@ -1,0 +1,23 @@
+{
+    "api": {
+        "base_url": "https://openrouter.ai/api/v1/chat/completions",
+        "api_key": "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",
+        "model": "stepfun/step-3.5-flash:free",
+        "temperature": 0.4,
+        "max_tokens": 65536,
+        "reasoning": {
+            "effort": "minimal"
+        }
+    },
+    "processing": {
+        "batch_size": 75,
+        "max_retries": 6,
+        "retry_delay": 2,
+        "concurrency": 8
+    },
+    "prompt": {
+        "system": "You are a text paraphrasing assistant.\nParaphrase all text below using standard tone and standard written words, avoid colloquial language, use neutral style, keep it plain and prose-like. Return exactly the same number of lines, one paraphrase per line, start with speaker：, with no numbering, no extra text, Simplified Chinese, and no blank lines.\nDo not overthink. Be direct and concise.",
+        "user_template": "{lines}\n\n{strict}\nProceed parapharse. Proceed parapharse.",
+        "strict": "You Must Strictly Keep The Line Numbers And Speakers' Name And Format Consistency! 必须是75条对话不多不少，对话人名称不允许被改写！ You mustn't complete or truncate lines."
+    }
+}
