@@ -8,3 +8,4 @@ lora/checkpoints/
 *.egg-info/
 .DS_Store
 base-models/
+CLAUDE.md

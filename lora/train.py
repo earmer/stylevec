@@ -95,14 +95,13 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    train_ds, val_acc_ds, val_ds, test_ds, num_train_speakers, info = load_data()
+    train_ds, val_acc_ds, val_ds, num_train_speakers, info = load_data()
     print(f"num_train_speakers = {num_train_speakers}")
 
     collate = make_collate_fn(tokenizer, MAX_LEN)
     train_loader    = DataLoader(train_ds,    batch_size=batch, shuffle=True,  collate_fn=collate)
     val_acc_loader  = DataLoader(val_acc_ds,  batch_size=batch, shuffle=False, collate_fn=collate)
     val_loader      = DataLoader(val_ds,      batch_size=batch, shuffle=False, collate_fn=collate)
-    test_loader     = DataLoader(test_ds,     batch_size=batch, shuffle=False, collate_fn=collate)
 
     # train_sil 用全部 train speakers 的句子（train + val_acc 合并）
     all_train_ds = TextDataset(
@@ -129,13 +128,16 @@ def main():
     with open(results_csv, "w", newline="") as f:
         csv.writer(f).writerow([
             "epoch", "train_loss",
-            "train_sil", "val_sil", "test_sil",
-            "train_cons", "val_cons", "test_cons",
+            "train_sil", "val_sil",
+            "train_cons", "val_cons",
             "train_acc", "val_acc",
         ])
 
     run_ts = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    print("Legend: sil=silhouette, cons=consistency, acc=ArcFace accuracy, tr=train, va=val")
+    print()
 
     for epoch in range(1, EPOCHS + 1):
         model.train()
@@ -156,29 +158,26 @@ def main():
 
         tr_vecs, tr_labels = collect_embeddings(model, all_train_loader)
         va_vecs, va_labels = collect_embeddings(model, val_loader)
-        te_vecs, te_labels = collect_embeddings(model, test_loader)
 
         tr_sil  = silhouette(tr_vecs, tr_labels)
         va_sil  = silhouette(va_vecs, va_labels)
-        te_sil  = silhouette(te_vecs, te_labels)
         tr_cons = consistency(tr_vecs, tr_labels, num_train_speakers)
         va_cons = consistency(va_vecs, va_labels, len(info["val"]))
-        te_cons = consistency(te_vecs, te_labels, len(info["test"]))
 
         tr_acc = compute_acc(model, train_loader)
         va_acc = compute_acc(model, val_acc_loader)
 
         print(
             f"Epoch {epoch:02d} | loss={avg_loss:.4f} | "
-            f"sil  tr={tr_sil:+.4f}  va={va_sil:+.4f}  te={te_sil:+.4f} | "
+            f"sil  tr={tr_sil:+.4f}  va={va_sil:+.4f} | "
             f"acc  tr={tr_acc:.3f}  va={va_acc:.3f}"
         )
 
         with open(results_csv, "a", newline="") as f:
             csv.writer(f).writerow([
                 epoch, f"{avg_loss:.4f}",
-                f"{tr_sil:.4f}", f"{va_sil:.4f}", f"{te_sil:.4f}",
-                f"{tr_cons:.4f}", f"{va_cons:.4f}", f"{te_cons:.4f}",
+                f"{tr_sil:.4f}", f"{va_sil:.4f}",
+                f"{tr_cons:.4f}", f"{va_cons:.4f}",
                 f"{tr_acc:.4f}", f"{va_acc:.4f}",
             ])
 

@@ -1,4 +1,4 @@
-"""数据准备：从 genshin.db 查询 ≥100 句说话人，按说话人 70/15/15 划分。"""
+"""数据准备：从 genshin.db 查询 ≥100 句说话人，按说话人 85/15 划分。"""
 
 import sqlite3
 import numpy as np
@@ -26,15 +26,14 @@ class TextDataset(Dataset):
 def load_data():
     """
     返回:
-        train_ds, val_acc_ds, val_ds, test_ds: TextDataset
+        train_ds, val_acc_ds, val_ds: TextDataset
         num_train_speakers: int
-        info: dict {"train": [...], "val": [...], "test": [...]}
+        info: dict {"train": [...], "val": [...]}
 
-    说话人级 70/15/15 split：
-      - train speakers: 70%，其句子再 80/20 分为 train_ds / val_acc_ds
-        （val_acc_ds 用于计算 ArcFace 在已见说话人上的泛化准确率）
+    说话人级 85/15 split：
+      - train speakers: 85%，其句子再 80/20 分为 train_ds / val_acc_ds
+        （val_acc_ds 用于计算 ArcFace 在已见说话人上的准确率）
       - val speakers:   15%，全部句子 → val_ds（用于 val_sil）
-      - test speakers:  15%，全部句子 → test_ds（用于 test_sil）
     """
     conn = sqlite3.connect(DB_PATH)
     rng = np.random.RandomState(SEED)
@@ -53,13 +52,11 @@ def load_data():
     speakers = [r[0] for r in rows]
     N = len(speakers)
 
-    n_train = int(0.70 * N)
-    n_val_end = int(0.85 * N)
+    n_train = int(0.85 * N)
     train_speakers = speakers[:n_train]
-    val_speakers = speakers[n_train:n_val_end]
-    test_speakers = speakers[n_val_end:]
+    val_speakers = speakers[n_train:]
 
-    print(f"说话人总数: {N}  train: {len(train_speakers)}  val: {len(val_speakers)}  test: {len(test_speakers)}")
+    print(f"说话人总数: {N}  train: {len(train_speakers)}  val: {len(val_speakers)}")
 
     def fetch_texts(speaker_list, label_offset=0):
         texts, labels = [], []
@@ -91,21 +88,19 @@ def load_data():
     val_acc_texts = [tr_texts_all[i] for i in va_idx]
     val_acc_labels = [tr_labels_all[i] for i in va_idx]
 
-    # val/test speakers：全部句子用于 silhouette
+    # val speakers：全部句子用于 silhouette
     val_texts, val_labels = fetch_texts(val_speakers, label_offset=0)
-    test_texts, test_labels = fetch_texts(test_speakers, label_offset=0)
 
     conn.close()
 
     print(f"train: {len(train_texts)} 句  val_acc: {len(val_acc_texts)} 句")
-    print(f"val_sil: {len(val_texts)} 句 ({len(val_speakers)} 人)  test_sil: {len(test_texts)} 句 ({len(test_speakers)} 人)")
+    print(f"val_sil: {len(val_texts)} 句 ({len(val_speakers)} 人)")
 
-    info = {"train": train_speakers, "val": val_speakers, "test": test_speakers}
+    info = {"train": train_speakers, "val": val_speakers}
     return (
         TextDataset(train_texts, train_labels),
         TextDataset(val_acc_texts, val_acc_labels),
         TextDataset(val_texts, val_labels),
-        TextDataset(test_texts, test_labels),
         len(train_speakers),
         info,
     )
