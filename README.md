@@ -1,3 +1,38 @@
+# stylevec
+
+Research project exploring **style** (not content) embeddings for short texts, using Genshin Impact dialogue data as the benchmark corpus.
+
+The goal: given two sentences from the same speaker, their style vectors should be closer than sentences from different speakers — independent of topic or content.
+
+## Setup
+
+```bash
+# Install dependencies
+uv sync
+
+# Download base model
+python download_base_models.py
+```
+
+## Structure
+
+| Directory | Description |
+|-----------|-------------|
+| `genshin/` | Data import, cleaning, paraphrase generation |
+| `naive/` | Residual style vectors, prompt-residual, LDA, MLP+ArcFace |
+| `hidden/` | Causal LM hidden layer probe experiments |
+| `lora/` | LoRA fine-tuning approach |
+| `simlar/` | Fast cosine similarity utility (Rust) |
+| `verifier/` | Algorithm notes and verification |
+| `cache/` | Pre-computed `.npz` embeddings (not tracked in git) |
+| `base-models/` | Local model weights (not tracked in git) |
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).
+
+---
+
 The current project aims to create an style (not content) embedding for short-length texts.
 
 ## Local Models
