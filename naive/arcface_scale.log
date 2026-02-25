@@ -1,0 +1,140 @@
+Speakers: 177 total, train=141, test=36
+  train: (8200, 4096), val: (2050, 4096), test: (1800, 4096)
+
+linear dim=32
+    epoch 100 loss=18.8689
+    epoch 200 loss=18.1834
+    epoch 300 loss=17.3886
+    epoch 400 loss=16.8243
+    epoch 500 loss=16.7396
+  => tr  sil=-0.1983 con=0.9807
+     val sil=-0.2773 con=0.9807
+     te  sil=-0.1459 con=0.9813
+
+linear dim=64
+    epoch 100 loss=18.5269
+    epoch 200 loss=17.2756
+    epoch 300 loss=15.3645
+    epoch 400 loss=14.3173
+    epoch 500 loss=14.2214
+  => tr  sil=-0.1219 con=0.9649
+     val sil=-0.1984 con=0.9647
+     te  sil=-0.0927 con=0.9662
+
+linear dim=128
+    epoch 100 loss=17.9200
+    epoch 200 loss=15.3371
+    epoch 300 loss=12.5264
+    epoch 400 loss=10.9469
+    epoch 500 loss=10.6347
+  => tr  sil=-0.0750 con=0.9840
+     val sil=-0.1602 con=0.9837
+     te  sil=-0.0714 con=0.9842
+
+1h-512 dim=32
+    epoch 100 loss=18.6801
+    epoch 200 loss=17.6517
+    epoch 300 loss=16.0566
+    epoch 400 loss=14.8216
+    epoch 500 loss=14.6842
+  => tr  sil=-0.2386 con=0.8629
+     val sil=-0.3807 con=0.8395
+     te  sil=-0.2759 con=0.8287
+
+1h-512 dim=64
+    epoch 100 loss=18.0427
+    epoch 200 loss=15.8550
+    epoch 300 loss=13.6232
+    epoch 400 loss=12.7865
+    epoch 500 loss=12.6451
+  => tr  sil=-0.2496 con=0.7685
+     val sil=-0.4154 con=0.7059
+     te  sil=-0.3362 con=0.6995
+
+1h-512 dim=128
+    epoch 100 loss=17.7387
+    epoch 200 loss=14.3211
+    epoch 300 loss=11.1265
+    epoch 400 loss=9.3918
+    epoch 500 loss=9.0485
+  => tr  sil=-0.1097 con=0.9952
+     val sil=-0.2457 con=0.9949
+     te  sil=-0.1310 con=0.9949
+
+2h-1k dim=32
+    epoch 100 loss=18.8352
+    epoch 200 loss=17.9467
+    epoch 300 loss=16.0975
+    epoch 400 loss=15.2405
+    epoch 500 loss=14.8915
+  => tr  sil=-0.2096 con=0.9453
+     val sil=-0.3922 con=0.9227
+     te  sil=-0.2952 con=0.9221
+
+2h-1k dim=64
+    epoch 100 loss=18.3020
+    epoch 200 loss=15.6832
+    epoch 300 loss=12.9785
+    epoch 400 loss=11.6796
+    epoch 500 loss=11.1512
+  => tr  sil=-0.3615 con=0.9806
+     val sil=-0.5222 con=0.9557
+     te  sil=-0.5124 con=0.9545
+
+2h-1k dim=128
+    epoch 100 loss=17.5055
+    epoch 200 loss=13.9664
+    epoch 300 loss=10.7436
+    epoch 400 loss=9.1851
+    epoch 500 loss=8.6434
+  => tr  sil=-0.3141 con=0.9760
+     val sil=-0.5926 con=0.9073
+     te  sil=-0.6854 con=0.8870
+
+1h-2k dim=32
+    epoch 100 loss=18.8887
+    epoch 200 loss=17.9978
+    epoch 300 loss=16.5988
+    epoch 400 loss=15.8726
+    epoch 500 loss=15.6011
+  => tr  sil=-0.2742 con=0.9896
+     val sil=-0.3662 con=0.9894
+     te  sil=-0.2211 con=0.9896
+
+1h-2k dim=64
+    epoch 100 loss=18.2417
+    epoch 200 loss=15.6892
+    epoch 300 loss=13.0015
+    epoch 400 loss=11.5379
+    epoch 500 loss=11.3151
+  => tr  sil=-0.2246 con=0.9940
+     val sil=-0.3322 con=0.9939
+     te  sil=-0.1898 con=0.9939
+
+1h-2k dim=128
+    epoch 100 loss=17.6328
+    epoch 200 loss=14.2354
+    epoch 300 loss=10.5665
+    epoch 400 loss=8.6358
+    epoch 500 loss=8.3167
+  => tr  sil=-0.2079 con=0.9979
+     val sil=-0.3439 con=0.9978
+     te  sil=-0.2000 con=0.9978
+
+================================================================================
+SUMMARY (ArcFace, 141 train / 36 test speakers)
+================================================================================
+Arch      Dim   Tr Sil   Tr Con   Va Sil   Va Con   Te Sil   Te Con
+------------------------------------------------------------------------
+linear     32  -0.1983   0.9807  -0.2773   0.9807  -0.1459   0.9813
+linear     64  -0.1219   0.9649  -0.1984   0.9647  -0.0927   0.9662
+linear    128  -0.0750   0.9840  -0.1602   0.9837  -0.0714   0.9842
+1h-512     32  -0.2386   0.8629  -0.3807   0.8395  -0.2759   0.8287
+1h-512     64  -0.2496   0.7685  -0.4154   0.7059  -0.3362   0.6995
+1h-512    128  -0.1097   0.9952  -0.2457   0.9949  -0.1310   0.9949
+2h-1k      32  -0.2096   0.9453  -0.3922   0.9227  -0.2952   0.9221
+2h-1k      64  -0.3615   0.9806  -0.5222   0.9557  -0.5124   0.9545
+2h-1k     128  -0.3141   0.9760  -0.5926   0.9073  -0.6854   0.8870
+1h-2k      32  -0.2742   0.9896  -0.3662   0.9894  -0.2211   0.9896
+1h-2k      64  -0.2246   0.9940  -0.3322   0.9939  -0.1898   0.9939
+1h-2k     128  -0.2079   0.9979  -0.3439   0.9978  -0.2000   0.9978
