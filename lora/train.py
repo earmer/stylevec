@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import numpy as np
+import psutil
 import torch
 from torch.utils.data import DataLoader, ConcatDataset
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
@@ -19,9 +20,41 @@ from evaluate import silhouette, consistency  # noqa: E402
 from data import load_data, make_collate_fn, TextDataset
 from model import StyleModel, MODEL_PATH
 
-DEVICE = torch.device("mps")
-BATCH = 32
-GRAD_ACCUM = 2   # effective batch = 64
+def detect_device() -> torch.device:
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def auto_batch(device: torch.device, target_effective: int = 64) -> tuple[int, int]:
+    MODEL_OVERHEAD_GB = 1.5
+    MEM_PER_SAMPLE_MB = 30
+
+    if device.type == "cuda":
+        free_bytes, _ = torch.cuda.mem_get_info()
+        free_gb = free_bytes / 1e9
+        cap = 512
+    elif device.type == "mps":
+        free_gb = max(0.0, psutil.virtual_memory().available / 1e9 - 5.0) * 0.25
+        cap = None
+    else:
+        free_gb = psutil.virtual_memory().available / 1e9 * 0.5
+        cap = 64
+
+    usable_gb = max(0.0, free_gb - MODEL_OVERHEAD_GB)
+    max_batch = max(1, int(usable_gb * 1024 / MEM_PER_SAMPLE_MB))
+    if cap is not None:
+        max_batch = min(max_batch, cap)
+    batch = 2 ** int(math.log2(max_batch))
+    batch = max(1, batch)
+    grad_accum = max(1, target_effective // batch)
+    return batch, grad_accum
+
+
+DEVICE = detect_device()
+BATCH, GRAD_ACCUM = auto_batch(DEVICE)
 EPOCHS = 20
 LR = 2e-4
 MAX_LEN = 128
@@ -92,7 +125,8 @@ def main():
     opt_steps_per_epoch = math.ceil(steps_per_epoch / GRAD_ACCUM)
     total_opt_steps = opt_steps_per_epoch * EPOCHS
     warmup_steps = math.ceil(total_opt_steps * 0.05)
-    print(f"batch={BATCH} accum={GRAD_ACCUM}  opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
+    print(f"device={DEVICE}  batch={BATCH}  grad_accum={GRAD_ACCUM}  effective={BATCH * GRAD_ACCUM}")
+    print(f"opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
 
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad], lr=LR
