@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+cache/
+lora/checkpoints/
+**/*.ckpt
+**/*.pt
+*.egg-info/
+.DS_Store
+base-models/
