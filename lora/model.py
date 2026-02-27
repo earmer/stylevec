@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from transformers import AutoModel
 from peft import LoraConfig, get_peft_model
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
 from classifiers import ArcFaceHead  # noqa: E402
 
 MODEL_PATH = Path(__file__).resolve().parent.parent / "base-models" / "qwen-3-0.6b"
@@ -20,8 +20,35 @@ LORA_ALPHA = 32
 LORA_DROPOUT = 0.05
 
 
+class LayerFusion(nn.Module):
+    def __init__(self, layer_indices: list[int]):
+        super().__init__()
+        self.layer_indices = layer_indices
+        self.weights = nn.Parameter(torch.zeros(len(layer_indices)))
+
+    def forward(self, hidden_states: tuple[torch.Tensor, ...]) -> torch.Tensor:
+        w = F.softmax(self.weights, dim=0)
+        selected = torch.stack([hidden_states[i] for i in self.layer_indices])
+        return torch.einsum("n, n b l h -> b l h", w, selected)
+
+
+class AttentionPooling(nn.Module):
+    def __init__(self, hidden_size: int):
+        super().__init__()
+        self.query = nn.Parameter(torch.empty(hidden_size))
+        nn.init.normal_(self.query, mean=0.0, std=0.02)
+
+    def forward(self, h: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        scores = torch.einsum("b l h, h -> b l", h, self.query)
+        scores = scores / (h.size(-1) ** 0.5)
+        scores = scores.masked_fill(attention_mask == 0, float("-inf"))
+        weights = F.softmax(scores, dim=-1)
+        return torch.einsum("b l, b l h -> b h", weights, h)
+
+
 class StyleModel(nn.Module):
-    def __init__(self, num_train_speakers: int, lora_r: int = LORA_R, lora_alpha: int = LORA_ALPHA):
+    def __init__(self, num_train_speakers: int, lora_r: int = LORA_R, lora_alpha: int = LORA_ALPHA,
+                 fusion_layers=None, attn_pool=False):
         super().__init__()
 
         base = AutoModel.from_pretrained(
@@ -43,6 +70,9 @@ class StyleModel(nn.Module):
         self.base.enable_input_require_grads()
         self.base.gradient_checkpointing_enable()
 
+        self.layer_fusion = LayerFusion(fusion_layers) if fusion_layers else None
+        self.attn_pool = AttentionPooling(HIDDEN_SIZE) if attn_pool else None
+
         # float32 头，避免 bfloat16 精度问题影响 ArcFace
         self.style_head = nn.Linear(HIDDEN_SIZE, STYLE_DIM, bias=False)
         self.arcface_head = ArcFaceHead(STYLE_DIM, num_train_speakers, s=30.0, m=0.3)
@@ -52,12 +82,16 @@ class StyleModel(nn.Module):
         out = self.base(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            output_hidden_states=(self.layer_fusion is not None),
         )
-        h = out.last_hidden_state                  # (B, L, 1024) bfloat16
-        mask = attention_mask.unsqueeze(-1)
-        pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1e-9)  # (B, 1024) bfloat16
+        h = self.layer_fusion(out.hidden_states) if self.layer_fusion else out.last_hidden_state
+        if self.attn_pool:
+            pooled = self.attn_pool(h, attention_mask)
+        else:
+            mask = attention_mask.unsqueeze(-1)
+            pooled = (h * mask).sum(1) / mask.sum(1).clamp(min=1e-9)
         pooled = pooled.float()
-        style = self.style_head(pooled)            # (B, 128)
+        style = self.style_head(pooled)
         return F.normalize(style, dim=-1)
 
     def forward(self, input_ids, attention_mask, labels=None):
