@@ -1,0 +1,41 @@
+% \newcommand{\datasetevaltable}{
+%     \begin{table}[!h]
+%     \renewcommand{\arraystretch}{1.4} % Adds space between rows
+%     \centering
+%     \small
+%     \fontsize{10}{11}\selectfont
+%     \setlength{\tabcolsep}{20pt}
+%     \begin{tabular}{lccc}
+%     \toprule[\heavyrulewidth]
+%     \textbf{Metric} & \textbf{Score} \\ \midrule
+%     \makecell{\textbf{Style Feature Presence}~~~~~~ \\ \textit{(\% humans judged correct)}} & 0.92 \\
+%     \textbf{Content Similarity} & 0.88 \\
+%     \textbf{Fluency} & 0.92 \\
+%     \textbf{Diversity} & 0.91 \\
+%     \bottomrule[\heavyrulewidth]
+%     \end{tabular}
+%     \caption{Results of the human and automatic evaluations of our synthetic dataset.}%Human and automatic evaluation metrics of the synthetic dataset.}
+%     \label{table:dataseteval}
+%     \end{table}
+% }
+
+\newcommand{\datasetevaltable}{
+    \begin{table}[!h]
+    \renewcommand{\arraystretch}{1.4} % Adds space between rows
+    \centering
+    \small
+    \fontsize{10}{11}\selectfont
+    \setlength{\tabcolsep}{5pt}
+    \begin{tabular}{lcc}
+    \toprule[\heavyrulewidth]
+    \textbf{Metric} & \textbf{Baseline} & \textbf{Score} \\ \midrule
+    \makecell{\textbf{Style Feature Presence}~~~~~~ \\ \textit{(\% humans judged correct)}} & 0.50 & 0.92 \\
+    \textbf{Content Similarity} & 0.88 & 0.88 \\
+    \textbf{Fluency} & 0.80 & 0.92 \\
+    \textbf{Diversity} & 0.95 & 0.91 \\
+    \bottomrule[\heavyrulewidth]
+    \end{tabular}
+    \caption{Results of the human and automatic evaluations of our synthetic dataset.}%Human and automatic evaluation metrics of the synthetic dataset.}
+    \label{table:dataseteval}
+    \end{table}
+}

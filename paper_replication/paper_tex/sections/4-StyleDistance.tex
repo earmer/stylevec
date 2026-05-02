@@ -1,0 +1,50 @@
+\section{\textsc{StyleDistance}}
+\label{sec:styledistance}
+
+We next describe how we trained \textsc{StyleDistance} embeddings using our synthetic dataset.
+
+\subsection{Sampling Contrastive Triplets}
+\label{sec:triplets}
+
+After generating 100 pairs of positive and negative examples for each style feature, we construct feature-specific triplets as follows:  %triplets. % by iterating over each feature. % For each example, 
+ We select an ``anchor'' ($a$) and a ``positive'' example ($p$) %({\tt pos}) 
+ from different pairs available for a % within the same 
+feature, ensuring that the two examples are {\bf identical in style}  but not in content. For the ``Usage of Active Voice'' example in Figure \ref{fig:main}, % the anchor and {\tt pos} 
+$a$ and $p$ are two active sentences (\textit{I adored ...}, \textit{I observed...}) on  different topics. 
+As a negative example ($n$), we use 
+% is randomly sampled either from the same row as the anchor or from the positive row. 
+the paraphrase of either $a$ or $p$   % the anchor or the {\tt pos} %positive 
+%example 
+which does not contain the feature; therefore, $n$ %negative example 
+is  always different in style. % from %a different style than 
+%both the anchor and {\tt pos}. 
+In the example in Figure \ref{fig:main}, $n$ is the paraphrase of the anchor in passive voice (\textit{...adored by me}). 
+
+In terms of {\bf content}, $n$ % {\tt neg} %the negative example is parallel to 
+is a paraphrase of the anchor $a$ in half of the triplets, and  has different content in the other half. % it is different from the anchor %it differs from it in both style and content.} 
+%and is a parallel example to the anchor in half the triplets and, in the other half, the negative example is different in both style and content. 
+This ensures that the trained model will not only learn to % the embedding does not overfit to only being able to discriminate perfectly 
+discriminate parallel (paraphrased) texts, but will be able to generalize to texts with different content during inference. This sampling process results in \textasciitilde 320K unique triplets. The implementation of this simple algorithm is shared in the supplementary materials.
+
+\subsection{Contrastive Learning Objective}
+
+In our final dataset of triplets $\mathcal{D}$, each triplet $(a, p, n) \in \mathcal{D}$ contains an anchor text ($a$), a positive text ($p$), and a negative text ($n$). We train our embedding model $f_{\theta}(\cdot)$ with a triplet loss (with margin $\alpha$) \citep{tripletloss}:
+\[
+\scalebox{0.72}{
+    $L_{\text{t}}(\theta) = \sum_{(a, p, n) \in \mathcal{D}} \left[\left\|f_\theta(a) - f_\theta(p)\right\|_2^2 - \left\|f_\theta(a) - f_\theta(n)\right\|_2^2 + \alpha\right]_{+}$
+}
+\]
+
+\noindent We use \texttt{roberta-base} as our base model for fine-tuning---the same base model used for the style embeddings in \citet{styleemb}---and perform training with DataDreamer and LoRA \citep{datadreamer,lora}. We use a margin of 0.1, a learning rate of 1e-4, and a batch size of 512. We further split our training set % split 
+into a train and validation split (90\%/10\%) and train using an early stopping patience of 1 epoch. For full details on the training setup, see Appendix \ref{sec:appendix:trainingdetails}.
+
+\stelevaltable
+\ablationtable
+
+\subsection{Training}
+
+We train two versions of our model. $\textsc{StyleDistance}_{\textsc{Synth}}$ is fine-tuned only on the synthetic triplets described in Section \ref{sec:triplets}. We also train a version % where we test the effect of 
+using the synthetic triplets for %as
+data augmentation ($\textsc{StyleDistance}$). In this case, our training set is comprised of % where we use 
+50\% natural data---i.e. the triplets used to train the \citet{styleemb} model\footnote{We use the \texttt{train-conversation} split.}--- and 50\% synthetic data. For the augmented model, we hypothesize that mixing in these perfectly parallel synthetic examples will help regularize the model, and discourage it from representing content-related features in favor of style-related ones offering the potential advantages of both approaches: (1) enhanced content-independence, and (2) the ability to capture niche style features in the natural data. We provide a visualization of the learned embedding space of our model after contrastive training using UMAP \citep{umap} in Appendix \ref{sec:appendix:umap}. %\citep{umap}
+

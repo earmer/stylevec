@@ -1,0 +1,30 @@
+\newcommand{\trainingdetailstable}{
+    \begin{table}[H]
+    \small
+    \centering
+    \begin{tabular}{m{.62\textwidth}>{\centering\arraybackslash}m{.3\textwidth}}
+    \toprule[\heavyrulewidth]
+    \textbf{Hyperparameter} & \textbf{Value} \\ \midrule
+    Model & \texttt{Facebook/roberta-base} \\
+    Hardware & 4x or 8x NVIDIA RTX A6000 \\
+    Distributed Protocol & PyTorch FSDP \\
+    Data Type & \small{\texttt{torch.bfloat16}} \\
+    Loss Function & \texttt{TripletLoss} \citep{tripletloss} \\
+    Triplet Loss Margin & 0.1 \\
+    LoRA \citep{lora} & \small{\texttt{all-linear, r=8\newline \hspace{4em} lora\_alpha=8 \newline lora\_dropout=0.0}} \\
+    Optimizer & \texttt{adamw\_torch} \\
+    Learning Rate & 1e-4 \\
+    Weight Decay & 0.01 \\
+    Learning Rate Scheduler & \small{\texttt{linear}} \\
+    Warmup Steps & 0 \\
+    Batch Size & 512 \\
+    Train-Validation Split & 90/10\% \\
+    Early Stopping Threshold & 0.0 \\
+    Early Stopping Patience & 1 epoch \\
+
+    \bottomrule[\heavyrulewidth]
+    \end{tabular}
+    \caption{Hyperparameters selected for contrastive learning training experiments.}
+    \label{table:hyperparamtable}
+    \end{table}
+}
