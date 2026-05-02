@@ -1,10 +1,14 @@
 """主入口：串联数据准备 → 隐藏层提取 → 分类器 → 评估。"""
 
+import sys
+from pathlib import Path
 import numpy as np
 from data_prep import prepare_data
 from extract_hidden import extract_and_cache, load_cached, detect_n_layers, POOL_METHODS
-from classifiers import run_lda, train_mlp_arcface, extract_mlp_vecs, ARCHS, STYLE_DIMS
-from evaluate import evaluate_all, silhouette, consistency
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
+from classifiers import run_lda, train_mlp_arcface, extract_mlp_vecs, ARCHS, STYLE_DIMS  # noqa: E402
+from evaluate import evaluate_all, silhouette, consistency  # noqa: E402
 
 
 def main():

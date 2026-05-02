@@ -1,23 +1,13 @@
 """LoRA 风格模型：Qwen3-0.6B（冻结）+ LoRA + 风格头 + ArcFace 头。"""
 
-import sys
-from pathlib import Path
-
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModel
 from peft import LoraConfig, get_peft_model
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
-from classifiers import ArcFaceHead  # noqa: E402
-
-MODEL_PATH = Path(__file__).resolve().parent.parent / "base-models" / "qwen-3-0.6b"
-HIDDEN_SIZE = 1024
-STYLE_DIM = 128
-LORA_R = 16
-LORA_ALPHA = 32
-LORA_DROPOUT = 0.05
+from shared.classifiers import ArcFaceHead
 
 
 class LayerFusion(nn.Module):
@@ -47,12 +37,27 @@ class AttentionPooling(nn.Module):
 
 
 class StyleModel(nn.Module):
-    def __init__(self, num_train_speakers: int, lora_r: int = LORA_R, lora_alpha: int = LORA_ALPHA,
-                 fusion_layers=None, attn_pool=False):
+    """LoRA 风格模型。
+
+    参数从 Config 对象传入，而不是硬编码常量。
+    """
+    def __init__(
+        self,
+        num_train_speakers: int,
+        model_path: str,
+        hidden_size: int,
+        style_dim: int,
+        lora_r: int,
+        lora_alpha: int,
+        lora_dropout: float = 0.05,
+        fusion_layers: Optional[list[int]] = None,
+        use_attn_pool: bool = False,
+        use_grad_ckpt: bool = False,
+    ):
         super().__init__()
 
         base = AutoModel.from_pretrained(
-            str(MODEL_PATH),
+            str(model_path),
             dtype=torch.bfloat16,
             trust_remote_code=True,
         )
@@ -63,22 +68,25 @@ class StyleModel(nn.Module):
             r=lora_r,
             lora_alpha=lora_alpha,
             target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-            lora_dropout=LORA_DROPOUT,
+            lora_dropout=lora_dropout,
             bias="none",
         )
         self.base = get_peft_model(base, lora_cfg)
         self.base.enable_input_require_grads()
-        self.base.gradient_checkpointing_enable()
+
+        # 在构造时决定是否启用梯度检查点
+        if use_grad_ckpt:
+            self.base.gradient_checkpointing_enable()
 
         self.layer_fusion = LayerFusion(fusion_layers) if fusion_layers else None
-        self.attn_pool = AttentionPooling(HIDDEN_SIZE) if attn_pool else None
+        self.attn_pool = AttentionPooling(hidden_size) if use_attn_pool else None
 
         # float32 头，避免 bfloat16 精度问题影响 ArcFace
-        self.style_head = nn.Linear(HIDDEN_SIZE, STYLE_DIM, bias=False)
-        self.arcface_head = ArcFaceHead(STYLE_DIM, num_train_speakers, s=30.0, m=0.3)
+        self.style_head = nn.Linear(hidden_size, style_dim, bias=False)
+        self.arcface_head = ArcFaceHead(style_dim, num_train_speakers, s=30.0, m=0.3)
 
     def encode(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """返回 L2 归一化的 128 维风格向量（float32）。"""
+        """返回 L2 归一化的风格向量（float32）。"""
         out = self.base(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -94,7 +102,19 @@ class StyleModel(nn.Module):
         style = self.style_head(pooled)
         return F.normalize(style, dim=-1)
 
-    def forward(self, input_ids, attention_mask, labels=None):
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: torch.Tensor,
+        labels: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """前向传播。
+
+        返回：
+            style_norm: 归一化的风格向量
+            logits: ArcFace logits（如果提供了 labels）
+            loss: 交叉熵损失（如果提供了 labels）
+        """
         style_norm = self.encode(input_ids, attention_mask)
         if labels is not None:
             logits = self.arcface_head(style_norm, labels)

@@ -21,7 +21,9 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoTokenizer
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
 from model import StyleModel, MODEL_PATH
+from device import detect_device  # noqa: E402
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
 TRAINED_DIR  = Path(__file__).resolve().parent / "trained"
@@ -34,14 +36,6 @@ MAX_PER_SPEAKER = 100
 MIN_SENTENCES   = 100
 MAX_LEN         = 128
 EXCLUDE         = ("？？？", "？？")
-
-
-def detect_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 DEVICE = detect_device()

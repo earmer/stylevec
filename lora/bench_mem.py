@@ -9,9 +9,10 @@ from pathlib import Path
 import psutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "hidden"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
 
 import torch
+from device import detect_device  # noqa: E402
 from model import StyleModel, MODEL_PATH
 
 MAX_LEN = 128
@@ -20,14 +21,6 @@ RANK = 16
 BATCH_SIZES = [8, 16, 24, 32, 40, 48]
 WARMUP_STEPS = 3
 STABLE_STEPS = 5
-
-
-def detect_device():
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
 
 
 _proc = psutil.Process(os.getpid())

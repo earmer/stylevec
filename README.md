@@ -19,6 +19,7 @@ python download_base_models.py
 | Directory | Description |
 |-----------|-------------|
 | `genshin/` | Data import, cleaning, paraphrase generation |
+| `genshin/mask_analysis/` | Content masking for style isolation (5021 CN words → 12 masks) |
 | `naive/` | Residual style vectors, prompt-residual, LDA, MLP+ArcFace |
 | `hidden/` | Causal LM hidden layer probe experiments |
 | `lora/` | LoRA fine-tuning approach |

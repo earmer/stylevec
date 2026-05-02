@@ -1,6 +1,15 @@
 #!/bin/bash
 set -e
 
+SYNC_ONLY=false
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --synconly|-s) SYNC_ONLY=true; shift ;;
+        *) echo "Unknown flag: $1"; exit 1 ;;
+    esac
+done
+
 LOCAL_DIR="/Users/earmercarey/stylevec"
 REMOTE_DIR="/root/autodl-tmp/stylevec"
 REMOTE_HOST="root@connect.westd.seetacloud.com"
@@ -35,6 +44,11 @@ rsync -avzP --delete --exclude-from="$EXCLUDE_FILE" \
 rm "$EXCLUDE_FILE"
 
 # ── Remote setup & train ──────────────────────────────────────────────────────
+if $SYNC_ONLY; then
+    echo "=== Sync-only mode: skipping remote setup & training ==="
+    exit 0
+fi
+
 ssh -p "$SSH_PORT" "$REMOTE_HOST" << 'ENDSSH'
   set -e
   cd /root/autodl-tmp/stylevec
@@ -50,7 +64,6 @@ ssh -p "$SSH_PORT" "$REMOTE_HOST" << 'ENDSSH'
   mkdir -p /root/tf-logs
   nohup uv run python paper_replication/train.py \
     --use-local-data \
-    --batch 64 \
     --epochs 10 \
     --log-dir /root/tf-logs \
     > paper_replication/train.log 2>&1 &

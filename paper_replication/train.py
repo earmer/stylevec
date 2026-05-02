@@ -199,9 +199,9 @@ def main():
     use_amp = device.type == "cuda"
     dtype = torch.bfloat16 if use_amp else torch.float32
 
-    # CUDA default: batch=512 (paper used 512 on 4x A6000)
+    # CUDA default: batch=128
     if args.batch is None and device.type == "cuda":
-        batch_size = 512
+        batch_size = 128
 
     print(f"device={device}  batch={batch_size}  grad_accum={grad_accum}  "
           f"effective={batch_size * grad_accum}  dtype={dtype}")
@@ -267,7 +267,10 @@ def main():
     model = StyleDistance(config.model_name).to(device)
     model.encoder.print_trainable_parameters()
 
-    criterion = nn.TripletMarginLoss(margin=config.triplet_margin, p=2)
+    criterion = nn.TripletMarginWithDistanceLoss(
+        distance_function=lambda x, y: (x - y).pow(2).sum(dim=1),
+        margin=config.triplet_margin,
+    )
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
         lr=lr, weight_decay=config.weight_decay, fused=(device.type == "cuda"),
@@ -294,6 +297,8 @@ def main():
     start_epoch = 1
     global_step = 0
     best_val_loss = float("inf")
+    # best_epoch_val_loss = float("inf")
+    # epochs_no_improve = 0
 
     # Resume
     if args.resume:
@@ -315,6 +320,7 @@ def main():
             start_epoch = state["epoch"]  # restart this epoch (reshuffled, at most save_every steps lost)
             torch.set_rng_state(state["rng_state"])
             best_val_loss = ckpt.top5_best()
+            # best_epoch_val_loss = best_val_loss
             print(f"Resumed step={global_step} epoch={start_epoch} best_val_loss={best_val_loss:.6f}")
 
     # Graceful shutdown: save latest on SIGINT
@@ -403,7 +409,9 @@ def main():
                 print(f"Saved at global_step={global_step}. Resume with --resume.")
                 sys.exit(0)
 
-        # End-of-epoch validation (if not already checkpointed this step)
+        # End-of-epoch: ensure we have a fresh val_loss for early stopping.
+        # If the last optimizer step landed on a checkpoint boundary we already
+        # evaluated; otherwise run an evaluation now.
         if global_step % args.save_every != 0:
             val_loss = evaluate_val_loss(model, val_loader, criterion, device)
             avg_train = epoch_loss / len(train_loader)
@@ -411,6 +419,19 @@ def main():
                       avg_train, val_loss, scheduler.get_last_lr()[0], device.type, use_amp)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
+
+        # # Early stopping: compare epoch-level val_loss (not mid-epoch snapshots)
+        # if val_loss < best_epoch_val_loss - config.early_stopping_threshold:
+        #     best_epoch_val_loss = val_loss
+        #     epochs_no_improve = 0
+        # else:
+        #     epochs_no_improve += 1
+        #     print(f"  val_loss={val_loss:.6f} no better than best_epoch={best_epoch_val_loss:.6f} "
+        #           f"(no-improve={epochs_no_improve}/{config.early_stopping_patience})")
+        # if epochs_no_improve >= config.early_stopping_patience:
+        #     print(f"Early stopping at epoch {epoch} (no improvement for "
+        #           f"{epochs_no_improve} epoch(s), best_epoch_val_loss={best_epoch_val_loss:.6f})")
+        #     break
 
         avg_train_loss = epoch_loss / len(train_loader)
         pbar.set_postfix({"loss": f"{avg_train_loss:.4f}", "best_val": f"{best_val_loss:.4f}",

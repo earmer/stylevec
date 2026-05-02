@@ -1,4 +1,4 @@
-"""LoRA 风格向量训练：20 epoch，每 epoch 评估 silhouette + ArcFace 准确率。"""
+"""LoRA 风格向量训练：支持快速测试和完整训练。"""
 
 import argparse
 import csv
@@ -7,34 +7,20 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
-from evaluate import silhouette, consistency  # noqa: E402
-
-from data import (
-    load_data, load_core_data, load_cached_data, load_cached_core_data,
-    make_collate_fn, cached_collate_fn, TextDataset,
-    CACHE_DIR, CORE_CACHE_DIR,
-)
-import preprocess
-from model import StyleModel, MODEL_PATH, LORA_R, LORA_ALPHA
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "shared"))
-from device import detect_device  # noqa: E402
-
-DEVICE = detect_device()
-EPOCHS = 20
-LR = 2e-4
-MAX_LEN = 128
+from shared import Config, DataLoader as SharedDataLoader, EvalData, evaluate_all
+from lora.model import StyleModel
+from lora.data import make_collate_fn, cached_collate_fn
 
 
 def save_checkpoint(model: StyleModel, run_ts: str, epoch: int, ckpt_dir: Path):
+    """保存模型检查点。"""
     name = f"{run_ts}-epoch-{epoch:02d}"
     ckpt_path = ckpt_dir / name
     ckpt_path.mkdir(parents=True, exist_ok=True)
@@ -48,24 +34,32 @@ def save_checkpoint(model: StyleModel, run_ts: str, epoch: int, ckpt_dir: Path):
     print(f"  => saved: {ckpt_path}")
 
 
-def collect_embeddings(model: StyleModel, loader: DataLoader):
+def collect_embeddings(model: StyleModel, loader: DataLoader, device: torch.device):
+    """收集所有样本的嵌入向量。"""
     model.eval()
     vecs, labels = [], []
     with torch.no_grad():
         for input_ids, attention_mask, lbl in loader:
-            v = model.encode(input_ids.to(DEVICE, non_blocking=True), attention_mask.to(DEVICE, non_blocking=True))
+            v = model.encode(
+                input_ids.to(device, non_blocking=True),
+                attention_mask.to(device, non_blocking=True),
+            )
             vecs.append(v.cpu().numpy())
             labels.append(lbl.numpy())
     return np.concatenate(vecs), np.concatenate(labels)
 
 
-def compute_acc(model: StyleModel, loader: DataLoader) -> float:
+def compute_acc(model: StyleModel, loader: DataLoader, device: torch.device) -> float:
+    """计算 ArcFace 准确率。"""
     model.eval()
     correct, total = 0, 0
     with torch.no_grad():
         for input_ids, attention_mask, lbl in loader:
-            lbl = lbl.to(DEVICE, non_blocking=True)
-            style_norm = model.encode(input_ids.to(DEVICE, non_blocking=True), attention_mask.to(DEVICE, non_blocking=True))
+            lbl = lbl.to(device, non_blocking=True)
+            style_norm = model.encode(
+                input_ids.to(device, non_blocking=True),
+                attention_mask.to(device, non_blocking=True),
+            )
             logits = model.arcface_head(style_norm, lbl)
             correct += (logits.argmax(dim=-1) == lbl).sum()
             total += len(lbl)
@@ -73,117 +67,158 @@ def compute_acc(model: StyleModel, loader: DataLoader) -> float:
 
 
 def main():
-    if DEVICE.type == "cuda":
-        torch.set_float32_matmul_precision("high")
-    use_amp = DEVICE.type == "cuda"
-
+    """主训练函数。"""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--rank", type=int, default=LORA_R)
-    parser.add_argument("--alpha", type=int, default=LORA_ALPHA)
-    parser.add_argument("--batch", type=int, default=None)
-    parser.add_argument("--grad", type=int, default=None)
+    parser.add_argument("--rank", type=int, default=16, help="LoRA rank")
+    parser.add_argument("--alpha", type=int, default=32, help="LoRA alpha")
+    parser.add_argument("--batch", type=int, default=None, help="Batch size")
+    parser.add_argument("--grad", type=int, default=None, help="Gradient accumulation steps")
     parser.add_argument("--workers", type=int, default=4, help="Number of data loading workers")
+    parser.add_argument("--epochs", type=int, default=None, help="Number of training epochs")
+    parser.add_argument("--dryrun", action="store_true", help="Quick test: 1 epoch, 1 update")
     parser.add_argument("--no-cache", action="store_true", help="Disable preprocessed cached data")
     parser.add_argument("--core", action="store_true", help="Train on 48-person core subset")
-    parser.add_argument("--pk", type=int, nargs=2, metavar=("P", "K"))
-    parser.add_argument("--fusion-layers", type=int, nargs="+")
-    parser.add_argument("--attn-pool", action="store_true")
+    parser.add_argument("--pk", type=int, nargs=2, metavar=("P", "K"), help="PK sampler (P speakers, K samples)")
+    parser.add_argument("--fusion-layers", type=int, nargs="+", help="Layer indices for fusion")
+    parser.add_argument("--attn-pool", action="store_true", help="Use attention pooling")
     args = parser.parse_args()
 
+    # 验证互斥参数
     if args.pk and args.batch is not None:
         parser.error("--pk and --batch are mutually exclusive")
-    rank = args.rank
-    alpha = args.alpha
-    num_workers = args.workers
 
-    if args.pk:
-        batch = args.pk[0] * args.pk[1]
-    elif args.batch is not None:
-        batch = args.batch
-    elif DEVICE.type == "cuda":
-        free_bytes, _ = torch.cuda.mem_get_info()
-        batch = max(1, int(free_bytes / 1e9))
-        batch = (batch // 8) * 8 or 1
-    else:
-        import psutil
-        batch = max(1, int(psutil.virtual_memory().available / 1e9))
-        batch = (batch // 8) * 8 or 1
+    # 从命令行参数创建配置
+    config = Config.from_args(args)
 
-    grad_accum = args.grad if args.grad is not None else 1
+    # 处理 dryrun 和 epochs
+    if args.dryrun:
+        config.train.epochs = 1
+        config.train.grad_accum = 1
+        print("DRY RUN MODE: 1 epoch, 1 update")
+    elif args.epochs is not None:
+        config.train.epochs = args.epochs
 
-    tag = f"r{rank}"
-    if args.pk:
-        tag += f"_pk{args.pk[0]}x{args.pk[1]}"
-    if args.fusion_layers:
-        tag += "_fuse"
-    if args.attn_pool:
-        tag += "_apool"
+    device = config.device.device
+    use_amp = config.device.use_amp
 
-    prefix = "core_" if args.core else ""
-    results_csv = Path(__file__).resolve().parent / f"results_{prefix}{tag}.csv"
-    ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_{prefix}{tag}"
-    cache_dir = CORE_CACHE_DIR if args.core else CACHE_DIR
+    # 自动计算批大小
+    batch_size = config.auto_batch_size()
 
     # 加载数据
-    if not args.no_cache:
-        if not (cache_dir / "train_cache.pkl").exists():
-            print("Cache not found, preprocessing...")
-            preprocess.main(core=args.core)
-        print("Loading from cache...")
-        if args.core:
-            train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_cached_core_data()
-        else:
-            train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_cached_data()
-        collate = cached_collate_fn
+    print("Loading data...")
+    data_loader = SharedDataLoader(config)
+    datasets = data_loader.load()
+
+    # 准备 tokenizer 和 collate 函数
+    if config.train.use_cache:
+        collate_fn = cached_collate_fn
+        tokenizer = None
     else:
-        tokenizer = AutoTokenizer.from_pretrained(str(MODEL_PATH), trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(str(config.model.model_path), trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        if args.core:
-            train_ds, val_acc_ds, val_ds, all_train_ds, num_train_speakers, info = load_core_data()
-        else:
-            train_ds, val_acc_ds, val_ds, num_train_speakers, info = load_data()
-            all_train_ds = TextDataset(
-                train_ds.texts + val_acc_ds.texts,
-                train_ds.labels + val_acc_ds.labels,
-            )
-        collate = make_collate_fn(tokenizer, MAX_LEN)
+        collate_fn = make_collate_fn(tokenizer, config.data.max_len)
 
-    print(f"num_train_speakers = {num_train_speakers}")
+    # 创建 DataLoader
+    from lora.data import PKSampler
 
-    _pw = num_workers > 0
-    if args.pk:
-        from data import PKSampler
-        pk_sampler = PKSampler(train_ds.labels, p=args.pk[0], k=args.pk[1])
-        train_loader = DataLoader(train_ds, batch_size=batch, shuffle=False, sampler=pk_sampler, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
+    if config.train.pk_p is not None:
+        pk_sampler = PKSampler(datasets.train.labels, p=config.train.pk_p, k=config.train.pk_k)
+        train_loader = DataLoader(
+            datasets.train,
+            batch_size=batch_size,
+            shuffle=False,
+            sampler=pk_sampler,
+            collate_fn=collate_fn,
+            num_workers=config.train.num_workers,
+            pin_memory=True,
+            persistent_workers=config.train.num_workers > 0,
+        )
     else:
-        train_loader = DataLoader(train_ds, batch_size=batch, shuffle=True, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
-    val_acc_loader   = DataLoader(val_acc_ds,   batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
-    val_loader       = DataLoader(val_ds,       batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
-    all_train_loader = DataLoader(all_train_ds, batch_size=batch, shuffle=False, collate_fn=collate, num_workers=num_workers, pin_memory=True, persistent_workers=_pw)
+        train_loader = DataLoader(
+            datasets.train,
+            batch_size=batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=config.train.num_workers,
+            pin_memory=True,
+            persistent_workers=config.train.num_workers > 0,
+        )
 
+    val_acc_loader = DataLoader(
+        datasets.val_acc,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=config.train.num_workers > 0,
+    )
+    val_loader = DataLoader(
+        datasets.val,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=config.train.num_workers > 0,
+    )
+    all_train_loader = DataLoader(
+        datasets.all_train,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+        num_workers=config.train.num_workers,
+        pin_memory=True,
+        persistent_workers=config.train.num_workers > 0,
+    )
+
+    # 创建模型
     model = StyleModel(
-        num_train_speakers, lora_r=rank, lora_alpha=alpha,
-        fusion_layers=args.fusion_layers, attn_pool=args.attn_pool,
-    ).to(DEVICE)
-    if args.grad is not None:
-        model.base.gradient_checkpointing_enable()
+        num_train_speakers=datasets.info.num_train_speakers,
+        model_path=config.model.model_path,
+        hidden_size=config.model.hidden_size,
+        style_dim=config.model.style_dim,
+        lora_r=config.model.lora_r,
+        lora_alpha=config.model.lora_alpha,
+        lora_dropout=config.model.lora_dropout,
+        fusion_layers=config.train.fusion_layers,
+        use_attn_pool=config.train.use_attn_pool,
+        use_grad_ckpt=config.train.use_grad_ckpt,
+    ).to(device)
+
     model.base.print_trainable_parameters()
-    compiled_model = torch.compile(model) if DEVICE.type == "cuda" else model
+    compiled_model = torch.compile(model) if device.type == "cuda" else model
 
+    # 计算训练步数
     steps_per_epoch = len(train_loader)
-    opt_steps_per_epoch = math.ceil(steps_per_epoch / grad_accum)
-    total_opt_steps = opt_steps_per_epoch * EPOCHS
-    warmup_steps = math.ceil(total_opt_steps * 0.05)
-    print(f"device={DEVICE}  batch={batch}  grad_accum={grad_accum}  effective={batch * grad_accum}")
-    print(f"num_workers={num_workers}  opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
+    opt_steps_per_epoch = math.ceil(steps_per_epoch / config.train.grad_accum)
+    total_opt_steps = opt_steps_per_epoch * config.train.epochs
+    warmup_steps = math.ceil(total_opt_steps * config.train.warmup_ratio)
 
+    print(f"device={device}  batch={batch_size}  grad_accum={config.train.grad_accum}  effective={batch_size * config.train.grad_accum}")
+    print(f"num_workers={config.train.num_workers}  opt_steps/epoch={opt_steps_per_epoch}  total={total_opt_steps}  warmup={warmup_steps}")
+
+    # 创建优化器和调度器
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
-        lr=LR,
-        fused=DEVICE.type == "cuda",
+        lr=config.train.lr,
+        fused=device.type == "cuda",
     )
     scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_opt_steps)
+
+    # 创建结果文件
+    tag = f"r{config.model.lora_r}"
+    if config.train.pk_p:
+        tag += f"_pk{config.train.pk_p}x{config.train.pk_k}"
+    if config.train.fusion_layers:
+        tag += "_fuse"
+    if config.train.use_attn_pool:
+        tag += "_apool"
+
+    prefix = "core_" if config.train.use_core else ""
+    results_csv = Path(__file__).resolve().parent / f"results_{prefix}{tag}.csv"
+    ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_{prefix}{tag}"
 
     with open(results_csv, "w", newline="") as f:
         csv.writer(f).writerow([
@@ -199,47 +234,61 @@ def main():
     print("Legend: sil=silhouette, cons=consistency, acc=ArcFace accuracy, tr=train, va=val")
     print()
 
-    for epoch in range(1, EPOCHS + 1):
+    # 训练循环
+    for epoch in range(1, config.train.epochs + 1):
         model.train()
         total_loss = 0.0
         optimizer.zero_grad()
+
         for step, (input_ids, attention_mask, lbl) in enumerate(train_loader):
-            input_ids = input_ids.to(DEVICE, non_blocking=True)
-            attention_mask = attention_mask.to(DEVICE, non_blocking=True)
-            lbl = lbl.to(DEVICE, non_blocking=True)
+            input_ids = input_ids.to(device, non_blocking=True)
+            attention_mask = attention_mask.to(device, non_blocking=True)
+            lbl = lbl.to(device, non_blocking=True)
+
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_amp):
                 _, _, loss = compiled_model(input_ids, attention_mask, lbl)
-            (loss / grad_accum).backward()
+
+            (loss / config.train.grad_accum).backward()
             total_loss += loss.item()
-            if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            if (step + 1) % config.train.grad_accum == 0 or (step + 1) == len(train_loader):
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.train.grad_clip)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
+
         avg_loss = total_loss / len(train_loader)
 
-        tr_vecs, tr_labels = collect_embeddings(model, all_train_loader)
-        va_vecs, va_labels = collect_embeddings(model, val_loader)
+        # 评估
+        tr_vecs, tr_labels = collect_embeddings(model, all_train_loader, device)
+        va_vecs, va_labels = collect_embeddings(model, val_loader, device)
 
-        tr_sil  = silhouette(tr_vecs, tr_labels)
-        va_sil  = silhouette(va_vecs, va_labels)
-        tr_cons = consistency(tr_vecs, tr_labels, num_train_speakers)
-        va_cons = consistency(va_vecs, va_labels, len(info["val"]))
+        train_eval = EvalData(
+            vecs=torch.from_numpy(tr_vecs),
+            labels=torch.from_numpy(tr_labels),
+            n_classes=datasets.info.num_train_speakers,
+        )
+        val_eval = EvalData(
+            vecs=torch.from_numpy(va_vecs),
+            labels=torch.from_numpy(va_labels),
+            n_classes=datasets.info.num_val_speakers,
+        )
+        metrics = evaluate_all(train_eval, val_eval)
 
-        tr_acc = compute_acc(model, train_loader)
-        va_acc = compute_acc(model, val_acc_loader)
+        tr_acc = compute_acc(model, train_loader, device)
+        va_acc = compute_acc(model, val_acc_loader, device)
 
         print(
             f"Epoch {epoch:02d} | loss={avg_loss:.4f} | "
-            f"sil  tr={tr_sil:+.4f}  va={va_sil:+.4f} | "
+            f"sil  tr={metrics.train_sil:+.4f}  va={metrics.val_sil:+.4f} | "
             f"acc  tr={tr_acc:.3f}  va={va_acc:.3f}"
         )
 
         with open(results_csv, "a", newline="") as f:
             csv.writer(f).writerow([
                 epoch, f"{avg_loss:.4f}",
-                f"{tr_sil:.4f}", f"{va_sil:.4f}",
-                f"{tr_cons:.4f}", f"{va_cons:.4f}",
+                f"{metrics.train_sil:.4f}", f"{metrics.val_sil:.4f}",
+                f"{metrics.train_cons:.4f}", f"{metrics.val_cons:.4f}",
                 f"{tr_acc:.4f}", f"{va_acc:.4f}",
             ])
 
