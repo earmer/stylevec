@@ -78,11 +78,10 @@ class BaselineEmbedder(Embedder):
 # ── Data loading ───────────────────────────────────────────────────────────
 
 def load_test_data(use_local: bool, config: Config) -> tuple[list[dict], dict[str, list[dict]]]:
-    """Load SynthSTEL test pairs and group by feature."""
+    """Load multilingual SynthSTEL test pairs and group by feature."""
     if use_local:
-        import pandas as pd
-        local = Path(__file__).resolve().parent.parent / "datasets" / "msynthstel" / "data"
-        test_pairs = pd.read_parquet(local / "test-00000-of-00001.parquet").to_dict("records")
+        from config import load_multilingual_pairs
+        test_pairs = load_multilingual_pairs(config, "test")
     else:
         from datasets import load_dataset
         test_pairs = [dict(row) for row in load_dataset(config.dataset_name)["test"]]

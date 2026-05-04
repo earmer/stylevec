@@ -161,9 +161,8 @@ def main():
     # Load test data
     print("Loading test data...")
     if args.use_local_data:
-        import pandas as pd
-        local = Path(__file__).resolve().parent.parent / "datasets" / "msynthstel" / "data"
-        test_pairs = pd.read_parquet(local / "test-00000-of-00001.parquet").to_dict("records")
+        from config import load_multilingual_pairs
+        test_pairs = load_multilingual_pairs(config, "test")
     else:
         from datasets import load_dataset
         test_pairs = [dict(row) for row in load_dataset(config.dataset_name)["test"]]

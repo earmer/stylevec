@@ -28,9 +28,9 @@ from transformers import AutoTokenizer
 
 import time
 
-from config import Config
+from config import Config, load_multilingual_pairs
 from model import StyleDistance
-from triplets import TripletDataset, collate_triplets
+from triplets import MultilingualTripletDataset, collate_triplets
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -207,29 +207,31 @@ def main():
           f"effective={batch_size * grad_accum}  dtype={dtype}")
 
     # ── Data ──────────────────────────────────────────────────────────────
+    import random as _random
     print("Loading dataset...")
     if args.use_local_data:
-        import pandas as pd
-        local = Path(__file__).resolve().parent.parent / "datasets" / "msynthstel" / "data"
-        train_pairs = pd.read_parquet(local / "train-00000-of-00001.parquet").to_dict("records")
+        all_pairs = load_multilingual_pairs(config, "train")
     else:
         from datasets import load_dataset
-        train_pairs = [dict(row) for row in load_dataset(config.dataset_name)["train"]]
+        all_pairs = [dict(row) for row in load_dataset(config.dataset_name)["train"]]
 
     by_feat = defaultdict(list)
-    for row in train_pairs:
+    for row in all_pairs:
         by_feat[row["feature"]].append(row)
+    _random.seed(42)
     train_split, val_split = [], []
     for feat, group in by_feat.items():
-        n_train = int(len(group) * config.train_val_split)
-        train_split.extend(group[:n_train])
-        val_split.extend(group[n_train:])
+        shuffled = list(group)
+        _random.shuffle(shuffled)
+        n_train = int(len(shuffled) * config.train_val_split)
+        train_split.extend(shuffled[:n_train])
+        val_split.extend(shuffled[n_train:])
     print(f"Train pairs: {len(train_split)}  Val pairs: {len(val_split)}")
 
     # Load test data for TensorBoard embedding visualization
     if not args.dryrun:
         if args.use_local_data:
-            test_pairs = pd.read_parquet(local / "test-00000-of-00001.parquet").to_dict("records")
+            test_pairs = load_multilingual_pairs(config, "test")
         else:
             from datasets import load_dataset
             test_pairs = [dict(row) for row in load_dataset(config.dataset_name)["test"]]
@@ -245,8 +247,8 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     config.cache_dir.mkdir(parents=True, exist_ok=True)
-    train_ds = TripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir)
-    val_ds = TripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir)
+    train_ds = MultilingualTripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir)
+    val_ds = MultilingualTripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir)
     print(f"Train triplets: {len(train_ds)}  Val triplets: {len(val_ds)}")
 
     if args.dryrun:
@@ -441,6 +443,7 @@ def main():
         if epoch == 1:
             cfg_text = json.dumps({
                 "model": config.model_name,
+                "languages": config.language_list,
                 "lora_r": config.lora_r, "lora_alpha": config.lora_alpha,
                 "batch_size": batch_size, "grad_accum": grad_accum,
                 "lr": lr, "weight_decay": config.weight_decay,
