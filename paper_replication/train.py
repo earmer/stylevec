@@ -107,6 +107,36 @@ def build_test_embedding_data(model, test_sentences: list[str], feature_labels: 
     return mat, feature_labels, test_sentences
 
 
+def replace_with_whitespace_triplets(dataset, rows: list[dict], percent: float, seed: int | None = None) -> int:
+    """Replace a percentage of existing triplets with whitespace robustness triplets."""
+    if percent <= 0 or not getattr(dataset, "triplets", None):
+        return 0
+    rng = __import__("random").Random(seed if seed is not None else time.time_ns())
+    replace_count = int(len(dataset.triplets) * percent / 100)
+    if replace_count <= 0:
+        return 0
+
+    candidates = [
+        row for row in rows
+        if isinstance(row.get("positive"), str) and isinstance(row.get("negative"), str)
+    ]
+    if not candidates:
+        return 0
+
+    replacements = []
+    while len(replacements) < replace_count:
+        row = rng.choice(candidates)
+        original = row["positive"]
+        pair = row["negative"]
+        positive = rng.choice((original + " ", " " + original))
+        negative = rng.choice((pair, " " + pair, pair + " "))
+        replacements.append((original, positive, negative))
+
+    for idx, triplet in zip(rng.sample(range(len(dataset.triplets)), replace_count), replacements):
+        dataset.triplets[idx] = triplet
+    return replace_count
+
+
 # ── Checkpoint manager ─────────────────────────────────────────────────────────
 
 class CheckpointManager:
@@ -230,15 +260,23 @@ def main():
     parser.add_argument("--save-every", type=int, default=1000)
     parser.add_argument("--val-every", type=int, default=250)
     parser.add_argument("--max-pairs-per-feature", type=int, default=0)
+    parser.add_argument("--white-percent", type=float, default=0.0,
+                        help="Percent of train triplets to replace with whitespace variants")
     parser.add_argument("--keep-top", type=int, default=5)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", type=str, default=None,
                         help="Checkpoint directory path or name under checkpoints/")
+    parser.add_argument("--resume-next-epoch", action="store_true",
+                        help="When resuming an end-of-epoch checkpoint, start at epoch+1")
     parser.add_argument("--dryrun", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--use-local-data", action="store_true")
     parser.add_argument("--log-dir", type=str, default=None, help="TensorBoard log directory")
+    parser.add_argument("--log-run-name", type=str, default=None,
+                        help="TensorBoard run directory name under --log-dir")
     args = parser.parse_args()
+    if not 0 <= args.white_percent <= 100:
+        raise ValueError("--white-percent must be between 0 and 100")
 
     batch_size = args.batch or config.batch_size
     grad_accum = args.grad or 1
@@ -304,6 +342,7 @@ def main():
     mpp = args.max_pairs_per_feature or config.max_pairs_per_feature
     train_ds = MultilingualTripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir, mpp)
     val_ds = MultilingualTripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir, mpp)
+    base_train_triplets = list(train_ds.triplets) if args.white_percent and mpp <= 0 else None
     print(f"Train triplets: {len(train_ds)}  Val triplets: {len(val_ds)}")
 
     collate_fn = partial(collate_triplets, tokenizer=tokenizer, max_len=config.max_seq_len)
@@ -351,7 +390,9 @@ def main():
     # ── TensorBoard ────────────────────────────────────────────────────────
     log_root = Path(args.log_dir) if args.log_dir else (
         Path("/root/tf-logs") if device.type == "cuda" else config.output_dir / "tf-logs")
-    if args.resume_from and re.fullmatch(r"\d{8}-\d{6}", args.resume_from):
+    if args.log_run_name:
+        log_dir = log_root / args.log_run_name
+    elif args.resume_from and re.fullmatch(r"\d{8}-\d{6}", args.resume_from):
         log_dir = log_root / args.resume_from
     else:
         log_dir = log_root / time.strftime("%Y%m%d-%H%M%S")
@@ -400,6 +441,8 @@ def main():
                 scaler.load_state_dict(state["scaler"])
             global_step = state["global_step"]
             start_epoch = state["epoch"]  # restart this epoch (reshuffled, at most save_every steps lost)
+            if args.resume_next_epoch:
+                start_epoch += 1
             torch.set_rng_state(state["rng_state"])
             # Rebuild scheduler, then restore the exact saved scheduler state.
             saved_total = state.get("total_steps", state.get("scheduler", {}).get("total_iters", total_steps))
@@ -430,6 +473,12 @@ def main():
     for epoch in range(start_epoch, max_epochs + 1):
         model.train()
         train_ds.resample()
+        if base_train_triplets is not None:
+            train_ds.triplets = list(base_train_triplets)
+        white_count = replace_with_whitespace_triplets(train_ds, train_split, args.white_percent)
+        if white_count:
+            print(f"Whitespace triplets: replaced {white_count}/{len(train_ds)} train triplets "
+                  f"({args.white_percent:.2f}%)")
         train_loader = _make_train_loader()
         pbar = tqdm(enumerate(train_loader), total=len(train_loader),
                      desc=f"Epoch {epoch}/{max_epochs}", unit="step",
