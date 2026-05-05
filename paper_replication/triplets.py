@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import pickle
 import random
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -97,22 +98,45 @@ class MultilingualTripletDataset(Dataset):
         max_len: int = 128,
         split: str = "train",
         cache_dir: Path | None = None,
+        max_pairs_per_feature: int = 0,
+        seed: int | None = None,
     ):
         self.max_len = max_len
         self.split = split
+        self.pairs = pairs
+        self.max_pairs_per_feature = max_pairs_per_feature
+        self.seed = seed if seed is not None else (42 if split != "train" else None)
+        self._cache_path = cache_dir / f"triplets_multilingual_{split}.pkl" if cache_dir else None
 
-        cache_path = cache_dir / f"triplets_multilingual_{split}.pkl" if cache_dir else None
-        if cache_path and cache_path.exists():
-            with open(cache_path, "rb") as f:
+        # Only cache when no per-epoch resampling (mpp == 0)
+        if max_pairs_per_feature == 0 and self._cache_path and self._cache_path.exists():
+            with open(self._cache_path, "rb") as f:
                 self.triplets = pickle.load(f)
-            print(f"Loaded {len(self.triplets)} cached triplets from {cache_path}")
+            print(f"Loaded {len(self.triplets)} cached triplets from {self._cache_path}")
             return
 
-        random.seed(42)
+        self._build_triplets()
+
+        if max_pairs_per_feature == 0 and self._cache_path:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._cache_path, "wb") as f:
+                pickle.dump(self.triplets, f)
+            print(f"Cached {len(self.triplets)} triplets to {self._cache_path}")
+
+    def resample(self):
+        """Re-sample pairs and rebuild all triplets (per-epoch rotation)."""
+        if self.max_pairs_per_feature <= 0:
+            return  # no-op when using all pairs
+        self._build_triplets()
+
+    def _build_triplets(self):
+        seed = time.time_ns() if self.seed is None else self.seed
+        self._last_seed = seed
+        rng = random.Random(seed)
 
         # --- Indexing ---
         feature_lang_groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
-        for row in pairs:
+        for row in self.pairs:
             key = (row["feature"], row["lang"])
             feature_lang_groups[key].append(row)
 
@@ -121,8 +145,15 @@ class MultilingualTripletDataset(Dataset):
             feature_langs[feat].add(lang)
 
         lang_groups: dict[str, list[dict]] = defaultdict(list)
-        for row in pairs:
+        for row in self.pairs:
             lang_groups[row["lang"]].append(row)
+
+        # --- Downsample per (feature, lang) group if requested ---
+        if self.max_pairs_per_feature > 0:
+            for key in list(feature_lang_groups.keys()):
+                group = feature_lang_groups[key]
+                if len(group) > self.max_pairs_per_feature:
+                    feature_lang_groups[key] = rng.sample(group, self.max_pairs_per_feature)
 
         # --- Types A+B: style-feature triplets ---
         self.triplets = []
@@ -131,7 +162,7 @@ class MultilingualTripletDataset(Dataset):
 
         for feat, langs in feature_langs.items():
             is_multilang = len(langs) >= 2
-            for lang in langs:
+            for lang in sorted(langs):
                 group = feature_lang_groups[(feat, lang)]
                 n = len(group)
                 other_langs = sorted(langs - {lang})
@@ -142,11 +173,11 @@ class MultilingualTripletDataset(Dataset):
                         a = group[i]["positive"]
                         p = group[j]["positive"]
 
-                        if is_multilang and random.random() < 0.5:
+                        if is_multilang and rng.random() < 0.5:
                             # Type B: cross-lingual negative
-                            target_lang = random.choice(other_langs)
+                            target_lang = rng.choice(other_langs)
                             target_group = feature_lang_groups[(feat, target_lang)]
-                            k = random.randrange(len(target_group))
+                            k = rng.randrange(len(target_group))
                             n_text = target_group[k]["negative"]
                             count_b += 1
                         else:
@@ -171,28 +202,22 @@ class MultilingualTripletDataset(Dataset):
             other_langs = [l for l in all_langs if l != lang]
             n_pairs = len(group)
             for _ in range(per_lang_target):
-                i = random.randrange(n_pairs)
-                j = random.randrange(n_pairs)
+                i = rng.randrange(n_pairs)
+                j = rng.randrange(n_pairs)
                 while j == i:
-                    j = random.randrange(n_pairs)
+                    j = rng.randrange(n_pairs)
                 a = group[i]["positive"]
                 p = group[j]["positive"]
-                target_lang = random.choice(other_langs)
+                target_lang = rng.choice(other_langs)
                 target_group = lang_groups[target_lang]
-                k = random.randrange(len(target_group))
+                k = rng.randrange(len(target_group))
                 neg_text = target_group[k]["positive"]
                 self.triplets.append((a, p, neg_text))
                 count_c += 1
 
         print(f"  Type C (language-as-feature): {count_c:>8}")
 
-        random.shuffle(self.triplets)
-
-        if cache_path:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(cache_path, "wb") as f:
-                pickle.dump(self.triplets, f)
-            print(f"Cached {len(self.triplets)} triplets to {cache_path}")
+        rng.shuffle(self.triplets)
 
     def __len__(self) -> int:
         return len(self.triplets)

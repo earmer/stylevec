@@ -9,9 +9,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import sys
@@ -70,6 +72,25 @@ def log_lora_histograms(writer: SummaryWriter, model, global_step: int):
             writer.add_histogram(f"lora/grads/{clean}", param.grad, global_step)
 
 
+def latest_tensorboard_step(log_dir: Path) -> int | None:
+    """Return the latest scalar step in a TensorBoard log directory."""
+    if not log_dir.exists():
+        return None
+    try:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+        accumulator = EventAccumulator(str(log_dir), size_guidance={"scalars": 0})
+        accumulator.Reload()
+        max_step = None
+        for tag in accumulator.Tags().get("scalars", []):
+            for event in accumulator.Scalars(tag):
+                max_step = event.step if max_step is None else max(max_step, event.step)
+        return max_step
+    except Exception as exc:
+        print(f"TensorBoard step detection skipped: {exc}")
+        return None
+
+
 def build_test_embedding_data(model, test_sentences: list[str], feature_labels: list[str],
                                tokenizer, device) -> tuple[torch.Tensor, list[str], list[str]]:
     """Encode test sentences and return (matrix, labels, hover_texts) for add_embedding."""
@@ -114,24 +135,28 @@ class CheckpointManager:
         (self.base_dir / "top5.json").write_text(json.dumps(self.rankings, indent=2))
 
     def save(self, model, optimizer, scheduler, scaler, global_step, epoch,
-             train_loss, val_loss, lr, device_type, use_amp):
+             train_loss, val_loss, lr, device_type, use_amp, total_steps=None):
         """Save checkpoint, manage top-5 rotation."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         step_dir = self._step_dir(global_step)
         step_dir.mkdir(parents=True, exist_ok=True)
 
-        # PEFT adapter
+        # PEFT adapter weights; resume opts back into trainability on load.
+        model.train()
         model.encoder.save_pretrained(str(step_dir))
 
         # Training state
-        torch.save({
+        training_state = {
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict() if scaler else None,
             "global_step": global_step,
             "epoch": epoch,
             "rng_state": torch.get_rng_state(),
-        }, step_dir / "training_state.pt")
+        }
+        if total_steps is not None:
+            training_state["total_steps"] = total_steps
+        torch.save(training_state, step_dir / "training_state.pt")
 
         # Latest (always overwrite, for resume)
         if self.latest_dir.exists():
@@ -158,7 +183,32 @@ class CheckpointManager:
 
     def load_latest(self) -> dict | None:
         """Return training state dict if latest checkpoint exists, else None."""
-        state_path = self.latest_dir / "training_state.pt"
+        return self.load_from_dir(self.latest_dir)
+
+    def resolve_dir(self, path_or_name: str) -> Path:
+        """Resolve a checkpoint path or a bare checkpoint directory name."""
+        path = Path(path_or_name).expanduser()
+        if path.is_absolute():
+            return path
+        under_base = self.base_dir / path
+        if under_base.exists():
+            return under_base
+        if path.exists():
+            return path
+        if re.fullmatch(r"\d{8}-\d{6}", path_or_name):
+            dt = _dt.datetime.strptime(path_or_name, "%Y%m%d-%H%M%S")
+            prefix = str(int(dt.timestamp()))
+            matches = sorted(
+                self.base_dir.glob(f"{prefix}-step-*"),
+                key=lambda p: int(p.name.rsplit("-step-", 1)[1]) if "-step-" in p.name else -1,
+            )
+            if matches:
+                return matches[-1]
+        return under_base
+
+    def load_from_dir(self, ckpt_dir: Path) -> dict | None:
+        """Return training state dict if the checkpoint dir is loadable."""
+        state_path = Path(ckpt_dir) / "training_state.pt"
         if not state_path.exists():
             return None
         return torch.load(state_path, map_location="cpu", weights_only=False)
@@ -177,9 +227,13 @@ def main():
     parser.add_argument("--grad", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
-    parser.add_argument("--save-every", type=int, default=500)
+    parser.add_argument("--save-every", type=int, default=1000)
+    parser.add_argument("--val-every", type=int, default=250)
+    parser.add_argument("--max-pairs-per-feature", type=int, default=0)
     parser.add_argument("--keep-top", type=int, default=5)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Checkpoint directory path or name under checkpoints/")
     parser.add_argument("--dryrun", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--use-local-data", action="store_true")
@@ -199,9 +253,9 @@ def main():
     use_amp = device.type == "cuda"
     dtype = torch.bfloat16 if use_amp else torch.float32
 
-    # CUDA default: batch=128
+    # CUDA default: batch=256
     if args.batch is None and device.type == "cuda":
-        batch_size = 128
+        batch_size = 256
 
     print(f"device={device}  batch={batch_size}  grad_accum={grad_accum}  "
           f"effective={batch_size * grad_accum}  dtype={dtype}")
@@ -247,26 +301,34 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     config.cache_dir.mkdir(parents=True, exist_ok=True)
-    train_ds = MultilingualTripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir)
-    val_ds = MultilingualTripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir)
+    mpp = args.max_pairs_per_feature or config.max_pairs_per_feature
+    train_ds = MultilingualTripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir, mpp)
+    val_ds = MultilingualTripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir, mpp)
     print(f"Train triplets: {len(train_ds)}  Val triplets: {len(val_ds)}")
-
-    if args.dryrun:
-        train_ds = Subset(train_ds, range(batch_size))
-        val_ds = Subset(val_ds, range(batch_size))
 
     collate_fn = partial(collate_triplets, tokenizer=tokenizer, max_len=config.max_seq_len)
     pin_memory = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              collate_fn=collate_fn, num_workers=config.num_workers,
-                              pin_memory=pin_memory, drop_last=True)
+
+    def _make_train_loader():
+        """Re-create train DataLoader with current dataset (call after resample)."""
+        ds = train_ds
+        if args.dryrun:
+            ds = Subset(train_ds, range(batch_size))
+        return DataLoader(ds, batch_size=batch_size, shuffle=True,
+                          collate_fn=collate_fn, num_workers=config.num_workers,
+                          pin_memory=pin_memory, drop_last=True)
+
+    if args.dryrun:
+        val_ds = Subset(val_ds, range(batch_size))
+
+    train_loader = _make_train_loader()
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                             collate_fn=collate_fn, num_workers=config.num_workers,
                             pin_memory=pin_memory)
 
     # ── Model, optimizer, scheduler ────────────────────────────────────────
     print("Building model...")
-    model = StyleDistance(config.model_name).to(device)
+    model = StyleDistance(config.model_name, lora_dropout=config.lora_dropout).to(device)
     model.encoder.print_trainable_parameters()
 
     criterion = nn.TripletMarginWithDistanceLoss(
@@ -287,9 +349,12 @@ def main():
     print(f"steps/epoch={steps_per_epoch}  total={total_steps}  save_every={args.save_every}")
 
     # ── TensorBoard ────────────────────────────────────────────────────────
-    log_dir = Path(args.log_dir) if args.log_dir else (
+    log_root = Path(args.log_dir) if args.log_dir else (
         Path("/root/tf-logs") if device.type == "cuda" else config.output_dir / "tf-logs")
-    log_dir = log_dir / time.strftime("%Y%m%d-%H%M%S")
+    if args.resume_from and re.fullmatch(r"\d{8}-\d{6}", args.resume_from):
+        log_dir = log_root / args.resume_from
+    else:
+        log_dir = log_root / time.strftime("%Y%m%d-%H%M%S")
     log_dir.mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(str(log_dir))
     print(f"TensorBoard: {log_dir}")
@@ -298,32 +363,60 @@ def main():
     ckpt = CheckpointManager(config.output_dir, save_every=args.save_every, keep_top=args.keep_top)
     start_epoch = 1
     global_step = 0
+    log_step_offset = 0
     best_val_loss = float("inf")
     # best_epoch_val_loss = float("inf")
     # epochs_no_improve = 0
 
     # Resume
-    if args.resume:
-        state = ckpt.load_latest()
+    if args.resume or args.resume_from:
+        resume_dir = ckpt.resolve_dir(args.resume_from) if args.resume_from else ckpt.latest_dir
+        state = ckpt.load_from_dir(resume_dir)
         if state is None:
+            if args.resume_from:
+                raise FileNotFoundError(f"No training_state.pt found in resume checkpoint: {resume_dir}")
             print("No checkpoint found to resume from. Starting fresh.")
         else:
             from peft import PeftModel
             from transformers import AutoModel
             base = AutoModel.from_pretrained(config.model_name)
-            model.encoder = PeftModel.from_pretrained(base, str(ckpt.latest_dir))
+            model.encoder = PeftModel.from_pretrained(base, str(resume_dir), is_trainable=True)
             model.encoder.enable_input_require_grads()
             model.to(device)
+            # Refresh optimizer against the loaded encoder params
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            if not trainable_params:
+                lora_count = sum(1 for n, _ in model.encoder.named_parameters() if "lora" in n.lower())
+                raise RuntimeError(
+                    "Resume checkpoint loaded no trainable parameters "
+                    f"({lora_count} LoRA tensors found)."
+                )
+            optimizer = torch.optim.AdamW(
+                trainable_params,
+                lr=lr, weight_decay=config.weight_decay, fused=(device.type == "cuda"),
+            )
             optimizer.load_state_dict(state["optimizer"])
-            scheduler.load_state_dict(state["scheduler"])
             if scaler and state.get("scaler"):
                 scaler.load_state_dict(state["scaler"])
             global_step = state["global_step"]
             start_epoch = state["epoch"]  # restart this epoch (reshuffled, at most save_every steps lost)
             torch.set_rng_state(state["rng_state"])
+            # Rebuild scheduler, then restore the exact saved scheduler state.
+            saved_total = state.get("total_steps", state.get("scheduler", {}).get("total_iters", total_steps))
+            scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=1.0, end_factor=0.0, total_iters=saved_total,
+            )
+            scheduler.load_state_dict(state["scheduler"])
             best_val_loss = ckpt.top5_best()
             # best_epoch_val_loss = best_val_loss
-            print(f"Resumed step={global_step} epoch={start_epoch} best_val_loss={best_val_loss:.6f}")
+            tb_step = latest_tensorboard_step(log_dir)
+            if tb_step is not None and tb_step > global_step:
+                log_step_offset = tb_step - global_step
+                print("TensorBoard log is ahead of checkpoint: "
+                      f"checkpoint_step={global_step} tb_step={tb_step}; "
+                      f"next_log_step={global_step + log_step_offset + 1}")
+            print(f"Resumed from {resume_dir} step={global_step} epoch={start_epoch} "
+                  f"best_val_loss={best_val_loss:.6f}")
 
     # Graceful shutdown: save latest on SIGINT
     interrupted = False
@@ -336,6 +429,8 @@ def main():
     # ── Training ───────────────────────────────────────────────────────────
     for epoch in range(start_epoch, max_epochs + 1):
         model.train()
+        train_ds.resample()
+        train_loader = _make_train_loader()
         pbar = tqdm(enumerate(train_loader), total=len(train_loader),
                      desc=f"Epoch {epoch}/{max_epochs}", unit="step",
                      dynamic_ncols=True, disable=args.dryrun)
@@ -360,16 +455,27 @@ def main():
 
             if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
                 if scaler:
+                    scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                if scaler:
                     scaler.step(optimizer); scaler.update()
                 else:
                     optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
+                log_step = global_step + log_step_offset
 
                 # TensorBoard: per-step scalars
-                writer.add_scalar("lr", scheduler.get_last_lr()[0], global_step)
-                writer.add_scalar("loss/train", loss.item() * grad_accum, global_step)
+                writer.add_scalar("lr", scheduler.get_last_lr()[0], log_step)
+                writer.add_scalar("loss/train", loss.item() * grad_accum, log_step)
+
+                # Validate every val_every optimizer steps
+                if global_step % args.val_every == 0:
+                    val_loss = evaluate_val_loss(model, val_loader, criterion, device)
+                    writer.add_scalar("loss/val", val_loss, log_step)
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
 
                 # Checkpoint every save_every optimizer steps
                 if global_step % args.save_every == 0:
@@ -377,19 +483,19 @@ def main():
                     avg_train = epoch_loss / (step + 1) if (step + 1) > 0 else 0.0
                     saved = ckpt.save(model, optimizer, scheduler, scaler,
                                       global_step, epoch, avg_train, val_loss,
-                                      scheduler.get_last_lr()[0], device.type, use_amp)
-                    was_best = val_loss < best_val_loss
-                    if was_best:
+                                      scheduler.get_last_lr()[0], device.type, use_amp,
+                                      total_steps)
+                    if val_loss < best_val_loss:
                         best_val_loss = val_loss
 
                     # TensorBoard: checkpoint-level logging
-                    writer.add_scalar("loss/val", val_loss, global_step)
-                    log_lora_histograms(writer, model, global_step)
+                    writer.add_scalar("loss/val", val_loss, log_step)
+                    log_lora_histograms(writer, model, log_step)
                     if not args.dryrun:
                         emb_mat, emb_labels, emb_texts = build_test_embedding_data(
                             model, test_sentences, test_labels, tokenizer, device)
                         writer.add_embedding(emb_mat, metadata=emb_labels,
-                                             tag="style/test", global_step=global_step)
+                                             tag="style/test", global_step=log_step)
 
             # Live postfix
             cur_lr = scheduler.get_last_lr()[0]
@@ -405,7 +511,7 @@ def main():
                     vl = evaluate_val_loss(model, val_loader, criterion, device)
                     ckpt.save(model, optimizer, scheduler, scaler, global_step, epoch,
                               epoch_loss / max(step + 1, 1), vl, scheduler.get_last_lr()[0],
-                              device.type, use_amp)
+                              device.type, use_amp, total_steps)
                 except Exception:
                     pass
                 print(f"Saved at global_step={global_step}. Resume with --resume.")
@@ -418,7 +524,8 @@ def main():
             val_loss = evaluate_val_loss(model, val_loader, criterion, device)
             avg_train = epoch_loss / len(train_loader)
             ckpt.save(model, optimizer, scheduler, scaler, global_step, epoch,
-                      avg_train, val_loss, scheduler.get_last_lr()[0], device.type, use_amp)
+                      avg_train, val_loss, scheduler.get_last_lr()[0], device.type, use_amp,
+                      total_steps)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
 
@@ -453,7 +560,7 @@ def main():
                 "train_triplets": len(train_ds), "val_triplets": len(val_ds),
                 "device": str(device), "dtype": str(dtype),
             }, indent=2, ensure_ascii=False)
-            writer.add_text("config", cfg_text, global_step)
+            writer.add_text("config", cfg_text, global_step + log_step_offset)
 
     # ── Training end ───────────────────────────────────────────────────────
     writer.add_hparams(

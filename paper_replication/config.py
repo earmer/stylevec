@@ -13,7 +13,7 @@ class Config:
     # --- LoRA (Section 4.2 + Appendix D) ---
     lora_r: int = 8
     lora_alpha: int = 8
-    lora_dropout: float = 0.0
+    lora_dropout: float = 0.1
     lora_target_modules: str = "all-linear"
 
     # --- Training (Appendix D) ---
@@ -22,6 +22,7 @@ class Config:
     weight_decay: float = 0.01
     warmup_steps: int = 0
     triplet_margin: float = 0.1
+    max_grad_norm: float = 1.0
     max_epochs: int = 20  # early stopping will cut this short
 
     # --- Early stopping ---
@@ -31,6 +32,7 @@ class Config:
     # --- Data ---
     dataset_name: str = "StyleDistance/synthstel"
     num_triplets_per_feature: int = 100 * 99  # 100 pairs → ~9900 triplets per feature
+    max_pairs_per_feature: int = 0  # 0 = no limit; set to e.g. 30 to reduce steps/epoch
     train_val_split: float = 0.9
 
     # --- Multilingual ---
