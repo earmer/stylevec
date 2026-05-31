@@ -29,4 +29,8 @@ dependencies = [
     "fake-useragent>=2.2.0",
     "sentence-transformers>=5.4.1",
     "tensorboard>=2.20.0",
+    "umap-learn>=0.5.12",
+    "opentsne>=1.0.4",
+    "ebooklib>=0.18",
+    "mobi>=0.3.3",
 ]
