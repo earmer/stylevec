@@ -1,7 +1,7 @@
 # stylevec
 
 > **Note 1:** This README reflects the canonical state of the project. READMEs on other branches are not maintained and should be disregarded — refer to this one regardless of which branch you are on.
-> **Note 2:** This is the development repository. The files here are unorganized and not currently in a usable state.
+> **Note 2:** This is the development repository. The files here are unorganized and not currently in a usable state. Please monitor the research branches if you wish to follow the latest progress (main branch is out-of-date).
 
 Research project exploring **style** (not content) embeddings for short texts — can a speaker's stylistic fingerprint be extracted as a separable vector, independent of topic?
 
