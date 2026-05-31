@@ -11,3 +11,12 @@ lora/checkpoints/
 base-models/
 CLAUDE.md
 lora/trained/*
+*.pkl
+.litellm_config.yaml
+litellm.conf
+command.txt
+ReSearchDiary.md
+words.csv
+run.log
+中期检查报告.md
+datasets/
