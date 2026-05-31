@@ -22,7 +22,6 @@ from functools import partial
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -54,11 +53,31 @@ def evaluate_val_loss(model, loader, criterion, device, max_batches=50):
                 batch["p_ids"].to(device), batch["p_mask"].to(device),
                 batch["n_ids"].to(device), batch["n_mask"].to(device),
             )
-            total += criterion(a_emb, p_emb, n_emb).item()
+            total += criterion(
+                a_emb,
+                p_emb,
+                n_emb,
+                batch["weights"].to(device),
+                batch["margins"].to(device),
+            ).item()
             count += 1
             if count >= max_batches:
                 break
     return total / max(count, 1)
+
+
+def weighted_triplet_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    weights: torch.Tensor,
+    margins: torch.Tensor,
+) -> torch.Tensor:
+    d_ap = (anchor - positive).pow(2).sum(dim=1)
+    d_an = (anchor - negative).pow(2).sum(dim=1)
+    per_triplet = torch.relu(d_ap - d_an + margins)
+    weights = weights.to(per_triplet.dtype)
+    return (per_triplet * weights).sum() / weights.sum().clamp_min(1e-8)
 
 
 def log_lora_histograms(writer: SummaryWriter, model, global_step: int):
@@ -130,7 +149,14 @@ def replace_with_whitespace_triplets(dataset, rows: list[dict], percent: float, 
         pair = row["negative"]
         positive = rng.choice((original + " ", " " + original))
         negative = rng.choice((pair, " " + pair, pair + " "))
-        replacements.append((original, positive, negative))
+        replacements.append({
+            "anchor": original,
+            "positive": positive,
+            "negative": negative,
+            "kind": "whitespace",
+            "weight": 0.3,
+            "margin": 0.05,
+        })
 
     for idx, triplet in zip(rng.sample(range(len(dataset.triplets)), replace_count), replacements):
         dataset.triplets[idx] = triplet
@@ -262,6 +288,12 @@ def main():
     parser.add_argument("--max-pairs-per-feature", type=int, default=0)
     parser.add_argument("--white-percent", type=float, default=0.0,
                         help="Percent of train triplets to replace with whitespace variants")
+    parser.add_argument("--type-c-ratio", type=float, default=0.2,
+                        help="Language-as-feature triplet count relative to trait triplets")
+    parser.add_argument("--cross-lang-trait-ratio", type=float, default=0.25,
+                        help="Cross-language same-trait pull count relative to trait triplets")
+    parser.add_argument("--same-lang-hard-ratio", type=float, default=0.25,
+                        help="Same-language different-trait hard negative count relative to trait triplets")
     parser.add_argument("--keep-top", type=int, default=5)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", type=str, default=None,
@@ -277,6 +309,8 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.white_percent <= 100:
         raise ValueError("--white-percent must be between 0 and 100")
+    if args.type_c_ratio < 0 or args.cross_lang_trait_ratio < 0 or args.same_lang_hard_ratio < 0:
+        raise ValueError("Curriculum ratios must be non-negative")
 
     batch_size = args.batch or config.batch_size
     grad_accum = args.grad or 1
@@ -285,6 +319,7 @@ def main():
 
     if args.dryrun:
         batch_size = 8; max_epochs = 1; grad_accum = 1
+        config.num_workers = 0
         print("DRY RUN: batch=8 epochs=1 grad_accum=1")
 
     device = torch.device("cpu") if args.cpu else get_device()
@@ -340,8 +375,19 @@ def main():
 
     config.cache_dir.mkdir(parents=True, exist_ok=True)
     mpp = args.max_pairs_per_feature or config.max_pairs_per_feature
-    train_ds = MultilingualTripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir, mpp)
-    val_ds = MultilingualTripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir, mpp)
+    dataset_kwargs = {
+        "type_c_ratio": args.type_c_ratio,
+        "cross_lang_trait_ratio": args.cross_lang_trait_ratio,
+        "same_lang_hard_ratio": args.same_lang_hard_ratio,
+    }
+    train_ds = MultilingualTripletDataset(
+        train_split, tokenizer, config.max_seq_len, "train", config.cache_dir, mpp,
+        **dataset_kwargs,
+    )
+    val_ds = MultilingualTripletDataset(
+        val_split, tokenizer, config.max_seq_len, "val", config.cache_dir, mpp,
+        **dataset_kwargs,
+    )
     base_train_triplets = list(train_ds.triplets) if args.white_percent and mpp <= 0 else None
     print(f"Train triplets: {len(train_ds)}  Val triplets: {len(val_ds)}")
 
@@ -370,10 +416,7 @@ def main():
     model = StyleDistance(config.model_name, lora_dropout=config.lora_dropout).to(device)
     model.encoder.print_trainable_parameters()
 
-    criterion = nn.TripletMarginWithDistanceLoss(
-        distance_function=lambda x, y: (x - y).pow(2).sum(dim=1),
-        margin=config.triplet_margin,
-    )
+    criterion = weighted_triplet_loss
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
         lr=lr, weight_decay=config.weight_decay, fused=(device.type == "cuda"),
@@ -493,7 +536,13 @@ def main():
                     batch["p_ids"].to(device), batch["p_mask"].to(device),
                     batch["n_ids"].to(device), batch["n_mask"].to(device),
                 )
-                loss = criterion(a_emb, p_emb, n_emb) / grad_accum
+                loss = criterion(
+                    a_emb,
+                    p_emb,
+                    n_emb,
+                    batch["weights"].to(device),
+                    batch["margins"].to(device),
+                ) / grad_accum
 
             if scaler:
                 scaler.scale(loss).backward()
@@ -604,6 +653,10 @@ def main():
                 "batch_size": batch_size, "grad_accum": grad_accum,
                 "lr": lr, "weight_decay": config.weight_decay,
                 "margin": config.triplet_margin, "max_epochs": max_epochs,
+                "type_c_ratio": args.type_c_ratio,
+                "cross_lang_trait_ratio": args.cross_lang_trait_ratio,
+                "same_lang_hard_ratio": args.same_lang_hard_ratio,
+                "white_percent": args.white_percent,
                 "train_pairs": len(train_split), "val_pairs": len(val_split),
                 "test_pairs": len(test_pairs),
                 "train_triplets": len(train_ds), "val_triplets": len(val_ds),
@@ -615,7 +668,9 @@ def main():
     writer.add_hparams(
         {"lr": lr, "batch_size": batch_size, "lora_r": config.lora_r,
          "lora_alpha": config.lora_alpha, "weight_decay": config.weight_decay,
-         "margin": config.triplet_margin},
+         "margin": config.triplet_margin, "type_c_ratio": args.type_c_ratio,
+         "cross_lang_trait_ratio": args.cross_lang_trait_ratio,
+         "same_lang_hard_ratio": args.same_lang_hard_ratio},
         {"hparam/best_val_loss": best_val_loss},
     )
     writer.close()
