@@ -1,0 +1,65 @@
+{
+  "All Lower Case / Proper Capitalization": {
+    "zh": { "action": "skip" },
+    "ja": { "action": "skip" }
+  },
+  "All Upper Case / Proper Capitalization": {
+    "zh": { "action": "skip" },
+    "ja": { "action": "skip" }
+  },
+  "With uppercase letters / Without uppercase letters": {
+    "zh": { "action": "skip" },
+    "ja": { "action": "skip" }
+  },
+  "Long average word length / Short average word length": {
+    "zh": { "action": "skip" },
+    "ja": { "action": "skip" }
+  },
+  "With prepositions / Less frequent prepositions": {
+    "ja": { "action": "skip" }
+  },
+  "With articles / Less frequent articles": {
+    "zh": { "action": "skip" },
+    "ja": { "action": "skip" },
+    "ru": { "action": "skip" }
+  },
+  "With number substitution / Without number substitution": {
+    "zh": {
+      "action": "note",
+      "text": "在中文里，数字替换是基于语音而非视觉的：用数字替代词语，是因为这些数字的普通话发音与目标词语相近。请用中文语境下的谐音数字替换手法体现这一对比，而非使用拉丁字母的leet写法。"
+    },
+    "ja": {
+      "action": "note",
+      "text": "日本語における数字置き換えは、視覚的なものではなく音声的なものです。数字はその日本語読みが対象の言葉に似ているために使われます。ラテン文字のleet表記ではなく、日本語の音声的な数字置き換えを用いてこの対比を表現してください。"
+    },
+    "ru": { "action": "skip" }
+  },
+  "With contractions / Without contractions": {
+    "zh": {
+      "action": "note",
+      "text": "在中文里，这一特征对应的是简略形式与完整展开形式之间的文体对比，是一种主动的风格选择而非语法要求。正例应使用缩略或者简称形式，反例应使用完整展开的形式。"
+    },
+    "ja": {
+      "action": "note",
+      "text": "日本語では、この特徴は縮約された口語形式とその完全な標準形との対比に対応します。正例は縮約された話し言葉のレジスターの形式を使い、負例は縮約されていない標準形を使ってください。"
+    },
+    "fr": {
+      "action": "note",
+      "text": "En français, cette caractéristique correspond au contraste entre l'écriture informelle avec des formes élidées ou tronquées et les équivalents formels entièrement développés. Concentrez-vous sur les élisions et formes abrégées relevant d'un choix stylistique délibéré, et non d'une règle grammaticale obligatoire."
+    },
+    "ru": {
+      "action": "note",
+      "text": "В русском языке данная характеристика соответствует контрасту между разговорными фонетическими усечениями слов и их полными стандартными формами. Вариант с сокращениями должен использовать сниженные разговорные усечения, вариант без сокращений — полные стандартные формы."
+    }
+  },
+  "Sentence With a Few Misspelled Words / Normal Sentence": {
+    "zh": {
+      "action": "note",
+      "text": "在中文里，错别字通常表现为因字音相近而产生的同音字或近音字替换，以及常见的近义虚词误用。正例应包含若干此类替换错误，反例应为书写正确的句子。"
+    },
+    "ja": {
+      "action": "note",
+      "text": "日本語では、誤字は主に音声的に類似した仮名や漢字の取り違え（送り仮名の誤りや同音異字の混同など）として現れます。正例にはそのような誤りをいくつか含め、負例は正しく書かれた文にしてください。"
+    }
+  }
+}

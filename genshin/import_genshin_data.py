@@ -12,8 +12,8 @@ from pathlib import Path
 import time
 
 # Configuration
-JSON_FILE = Path(__file__).parent / "genshin.json"
-DB_FILE = Path(__file__).parent / "genshin.db"
+JSON_FILE = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.json"
+DB_FILE = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
 BATCH_SIZE = 1000
 
 

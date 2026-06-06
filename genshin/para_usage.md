@@ -56,7 +56,7 @@ paraphrase_dialogues.py [-h] [-d] [-c CONFIG] database
 ### 干运行（预览格式，不进行 API 调用）
 
 ```bash
-python3 paraphrase_dialogues.py genshin.db --dry-run
+uv run python paraphrase_dialogues.py ../data/genshin/genshin.db --dry-run
 ```
 
 ```
@@ -73,7 +73,7 @@ Batch 1: 50 records, IDs 1..50
 ### 湿运行（测试 N 个批次，生成质量和成本报告，不写入数据库）
 
 ```bash
-python3 paraphrase_dialogues.py genshin.db --damp-run 10
+uv run python paraphrase_dialogues.py ../data/genshin/genshin.db --damp-run 10
 ```
 
 测试指定数量的批次（默认 30），生成成功率、相似度、长度变化、令牌估计和时间估计等指标。
@@ -81,7 +81,7 @@ python3 paraphrase_dialogues.py genshin.db --damp-run 10
 ### 正常处理
 
 ```bash
-python3 paraphrase_dialogues.py genshin.db
+uv run python paraphrase_dialogues.py ../data/genshin/genshin.db
 ```
 
 ```
@@ -110,10 +110,10 @@ PROCESSING SUMMARY
 
 ## 工作流程
 
-1. `python3 paraphrase_dialogues.py genshin.db --dry-run` — 验证格式
-2. `python3 paraphrase_dialogues.py genshin.db --damp-run 10` — 测试质量和成本
-3. `python3 paraphrase_dialogues.py genshin.db` — 正式运行
-4. `sqlite3 genshin.db "SELECT id, origin_text, para_text FROM dialogues WHERE para_text IS NOT NULL LIMIT 5"` — 抽查结果
+1. `uv run python paraphrase_dialogues.py ../data/genshin/genshin.db --dry-run` — 验证格式
+2. `uv run python paraphrase_dialogues.py ../data/genshin/genshin.db --damp-run 10` — 测试质量和成本
+3. `uv run python paraphrase_dialogues.py ../data/genshin/genshin.db` — 正式运行
+4. `sqlite3 ../data/genshin/genshin.db "SELECT id, origin_text, para_text FROM dialogues WHERE para_text IS NOT NULL LIMIT 5"` — 抽查结果
 
 ## 故障排除
 

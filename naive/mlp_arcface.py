@@ -10,8 +10,8 @@ import torch.nn.functional as F
 from pathlib import Path
 from sklearn.metrics import silhouette_score
 
-DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
-CACHE = Path(__file__).resolve().parent.parent / "cache"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+CACHE = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
 DEVICE = torch.device("mps")
 EPOCHS = 300
 LR = 1e-3

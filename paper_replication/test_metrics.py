@@ -8,7 +8,7 @@ Metrics:
 
 Usage:
   uv run python test_metrics.py                                   # interactive ckpt picker, local data
-  uv run python test_metrics.py --checkpoint checkpoints/latest
+  uv run python test_metrics.py --checkpoint ../artifacts/paper_replication/checkpoints/latest
   uv run python test_metrics.py --checkpoint ckpt --reference
   uv run python test_metrics.py --reference both              # both reference models
   uv run python test_metrics.py --use-remote-data                 # download from HuggingFace
@@ -290,7 +290,7 @@ def main():
                          BaselineEmbedder(config.model_name, device)))
 
     if args.reference:
-        base_models = Path(__file__).resolve().parent.parent / "base-models"
+        base_models = Path(__file__).resolve().parent.parent / "artifacts" / "base-models"
         ref_models = {
             "styledistance": ("StyleDistance/styledistance (reference)", "styledistance"),
             "synthetic": ("StyleDistance/synthetic_only (reference)", "styledistance_synthetic_only"),

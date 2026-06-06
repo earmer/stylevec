@@ -73,19 +73,17 @@ __pycache__/
 *.pyc
 .DS_Store
 .venv/
-checkpoints/
 *.pt
 *.pth
 *.log
 .cache/
-bookraw/
-ao3_zh_kudos_crawl/
-ao3_random_subset/
-datadelta/
-tf-logs/
-logs/
+artifacts/
+data/datasets/msynthstel/corpora/
+data/datasets/msynthstel/analysis/
+data/datasets/msynthstel/pipeline/
+data/datasets/msynthstel/.cache/
+data/datasets/msynthstel/.claude/
 target/
-genshin/embedding_analysis/
 EOF
 
 # ── Sync ──────────────────────────────────────────────────────────────────────
@@ -98,7 +96,7 @@ rm "$EXCLUDE_FILE"
 # ── Fetch logs from remote ──────────────────────────────────────────────────────
 if $FETCH_LOGS; then
     echo "=== Fetching logs from $REMOTE_HOST:/root/tf-logs/ ==="
-    LOCAL_LOG_DIR="$LOCAL_DIR/paper_replication/tf-logs"
+    LOCAL_LOG_DIR="$LOCAL_DIR/artifacts/paper_replication/checkpoints/tf-logs"
     mkdir -p "$LOCAL_LOG_DIR"
     rsync -avzP \
         -e "ssh -p $SSH_PORT" \
@@ -112,11 +110,11 @@ fi
 # ── Fetch Genshin embedding analysis outputs ───────────────────────────────────
 if $FETCH_GENSHIN_ANALYSIS; then
     echo "=== Fetching Genshin embedding analysis outputs ==="
-    LOCAL_ANALYSIS_DIR="$LOCAL_DIR/genshin/embedding_analysis"
+    LOCAL_ANALYSIS_DIR="$LOCAL_DIR/artifacts/genshin/embedding_analysis"
     mkdir -p "$LOCAL_ANALYSIS_DIR"
     rsync -avzP \
         -e "ssh -p $SSH_PORT" \
-        "$REMOTE_HOST:$REMOTE_DIR/genshin/embedding_analysis/" \
+        "$REMOTE_HOST:$REMOTE_DIR/artifacts/genshin/embedding_analysis/" \
         "$LOCAL_ANALYSIS_DIR/"
     echo "=== Analysis outputs fetched to $LOCAL_ANALYSIS_DIR ==="
     exit 0
@@ -135,7 +133,7 @@ ssh -p "$SSH_PORT" "$REMOTE_HOST" 'bash -s' << 'ENDSSH'
   export PATH="/root/.local/bin:$PATH"
   cd /root/autodl-tmp/stylevec
 
-  OUT_DIR="genshin/embedding_analysis/latest_20260505-005138"
+  OUT_DIR="artifacts/genshin/embedding_analysis/latest_20260505-005138"
   RUN_LOG="$OUT_DIR/run.log"
 
   echo "=== Installing dependencies from synced uv.lock ==="
@@ -148,8 +146,8 @@ ssh -p "$SSH_PORT" "$REMOTE_HOST" 'bash -s' << 'ENDSSH'
     exit 0
   fi
 
-  if [[ ! -f paper_replication/checkpoints/latest/training_state.pt ]]; then
-    echo "ERROR: Missing paper_replication/checkpoints/latest/training_state.pt"
+  if [[ ! -f artifacts/paper_replication/checkpoints/latest/training_state.pt ]]; then
+    echo "ERROR: Missing artifacts/paper_replication/checkpoints/latest/training_state.pt"
     exit 1
   fi
 
@@ -159,7 +157,7 @@ ssh -p "$SSH_PORT" "$REMOTE_HOST" 'bash -s' << 'ENDSSH'
 from pathlib import Path
 import torch
 
-state = torch.load("paper_replication/checkpoints/latest/training_state.pt", map_location="cpu", weights_only=False)
+state = torch.load("artifacts/paper_replication/checkpoints/latest/training_state.pt", map_location="cpu", weights_only=False)
 print(f"global_step={state.get('global_step')}")
 print(f"epoch={state.get('epoch')}")
 PY
@@ -172,9 +170,9 @@ PY
     OPENBLAS_NUM_THREADS="$JOBS" \
     NUMEXPR_NUM_THREADS="$JOBS" \
     .venv/bin/python genshin/analyze_latest_embeddings.py \
-      --db genshin/genshin.db \
-      --checkpoint paper_replication/checkpoints/latest \
-      --model-name base-models/xlm-roberta-base \
+      --db data/genshin/genshin.db \
+      --checkpoint artifacts/paper_replication/checkpoints/latest \
+      --model-name artifacts/base-models/xlm-roberta-base \
       --out-dir "$OUT_DIR" \
       --batch-size 1024 \
       --jobs "$JOBS" \
@@ -213,12 +211,12 @@ ssh -p "$SSH_PORT" "$REMOTE_HOST" \
 
   if [[ "$CONTINUE_LATEST" == "true" ]]; then
     # Derive RESUME_RUN by matching latest/ to the actual step directory it was copied from
-    LATEST_STEP=$(cd paper_replication/checkpoints && uv run python -c "
+    LATEST_STEP=$(cd artifacts/paper_replication/checkpoints && uv run python -c "
 import torch
 state = torch.load('latest/training_state.pt', map_location='cpu', weights_only=False)
 print(state['global_step'])
 ")
-    LATEST_DIR=$(find paper_replication/checkpoints -maxdepth 1 -type d -name "*-step-$(printf '%06d' $LATEST_STEP)" \
+    LATEST_DIR=$(find artifacts/paper_replication/checkpoints -maxdepth 1 -type d -name "*-step-$(printf '%06d' $LATEST_STEP)" \
       | grep -v '/latest$' \
       | head -1)
     if [[ -z "$LATEST_DIR" ]]; then
@@ -229,10 +227,10 @@ print(state['global_step'])
     RESUME_RUN=$(date -d "@$TS" +%Y%m%d-%H%M%S)
     echo "=== Derived RESUME_RUN=$RESUME_RUN from $LATEST_DIR (step=$LATEST_STEP) ==="
     RESUME_PREFIX="latest"
-    RESUME_DIR="paper_replication/checkpoints/latest"
+    RESUME_DIR="artifacts/paper_replication/checkpoints/latest"
   elif [[ "$RESUME_RUN_REQUESTED" == "true" ]]; then
     RESUME_PREFIX=$(date -d "${RESUME_RUN:0:8} ${RESUME_RUN:9:2}:${RESUME_RUN:11:2}:${RESUME_RUN:13:2}" +%s)
-    RESUME_DIR=$(find paper_replication/checkpoints -maxdepth 1 -type d -name "${RESUME_PREFIX}-step-*" \
+    RESUME_DIR=$(find artifacts/paper_replication/checkpoints -maxdepth 1 -type d -name "${RESUME_PREFIX}-step-*" \
       | sort -t- -k3,3n \
       | tail -1)
   fi
@@ -302,8 +300,9 @@ PY
   fi
   if [[ "$CONTINUE_LATEST" == "true" ]]; then
     TRAIN_ARGS=(--resume --resume-next-epoch --log-run-name "$RESUME_RUN" --epochs 35)
-    echo "=== Continuing checkpoints/latest for 5 more epochs ==="
+    echo "=== Continuing artifacts/paper_replication/checkpoints/latest for 5 more epochs ==="
   fi
+  mkdir -p artifacts/paper_replication
   nohup uv run python paper_replication/train.py \
     --use-local-data \
     "${TRAIN_ARGS[@]}" \
@@ -313,19 +312,19 @@ PY
     "${WHITE_ARGS[@]}" \
     "${CURRICULUM_ARGS[@]}" \
     --log-dir /root/tf-logs \
-    > paper_replication/train.log 2>&1 &
+    > artifacts/paper_replication/train.log 2>&1 &
 
   echo "=== Waiting for training to start (up to 30s) ==="
   for i in $(seq 1 30); do
-    if grep -Eq "Resumed from|Epoch" paper_replication/train.log 2>/dev/null; then
+    if grep -Eq "Resumed from|Epoch" artifacts/paper_replication/train.log 2>/dev/null; then
       echo "Training started successfully."
-      echo "Monitor: tail -f /root/autodl-tmp/stylevec/paper_replication/train.log"
+      echo "Monitor: tail -f /root/autodl-tmp/stylevec/artifacts/paper_replication/train.log"
       exit 0
     fi
     sleep 1
   done
 
   echo "ERROR: Training did not start within 30 seconds. Last log lines:"
-  tail -20 paper_replication/train.log
+  tail -20 artifacts/paper_replication/train.log
   exit 1
 ENDSSH

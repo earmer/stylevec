@@ -11,8 +11,8 @@ import requests
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 
-DB_PATH = Path(__file__).parent / "genshin" / "genshin.db"
-CACHE_DIR = Path(__file__).parent / "cache"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
 SPEAKERS = ["派蒙", "旅行者", "娜维娅", "纳西妲", "温迪",
             "阿贝多", "茜特菈莉", "八重神子", "玛拉妮", "芙宁娜"]
 MODELS = [("qwen3-embedding:0.6b", 1024), ("embeddinggemma:latest", 768)]

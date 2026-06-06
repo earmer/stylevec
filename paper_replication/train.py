@@ -2,7 +2,7 @@
 
 Usage:
     uv run python train.py --use-local-data --batch 64 --epochs 5
-    uv run python train.py --resume                     # resume from checkpoints/latest/
+    uv run python train.py --resume                     # resume from ../artifacts/paper_replication/checkpoints/latest/
     uv run python train.py --dryrun --use-local-data    # single batch test
 """
 
@@ -297,7 +297,7 @@ def main():
     parser.add_argument("--keep-top", type=int, default=5)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", type=str, default=None,
-                        help="Checkpoint directory path or name under checkpoints/")
+                        help="Checkpoint directory path or name under the configured output directory")
     parser.add_argument("--resume-next-epoch", action="store_true",
                         help="When resuming an end-of-epoch checkpoint, start at epoch+1")
     parser.add_argument("--dryrun", action="store_true")

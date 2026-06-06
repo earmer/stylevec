@@ -8,7 +8,7 @@ STEL-or-Content: Given 1 anchor (A) and 2 test sentences, pick which one shares 
       requiring content-independent style representations to succeed.
 
 Usage:
-    uv run python evaluate.py --checkpoint checkpoints/best_model --use-local-data
+    uv run python evaluate.py --checkpoint ../artifacts/paper_replication/checkpoints/best_model --use-local-data
     uv run python evaluate.py --compare-reference --use-local-data
 """
 

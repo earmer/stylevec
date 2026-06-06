@@ -7,7 +7,7 @@ from pathlib import Path
 @dataclass
 class Config:
     # --- Model ---
-    model_name: str = str(Path(__file__).resolve().parent.parent / "base-models" / "xlm-roberta-base")
+    model_name: str = str(Path(__file__).resolve().parent.parent / "artifacts" / "base-models" / "xlm-roberta-base")
     max_seq_len: int = 512
 
     # --- LoRA (Section 4.2 + Appendix D) ---
@@ -38,7 +38,7 @@ class Config:
     # --- Multilingual ---
     language_list: list[str] = field(default_factory=lambda: ["en", "zh", "ja", "fr", "ru"])
     translated_data_path: Path = field(default_factory=lambda:
-        Path(__file__).resolve().parent.parent / "datasets" / "msynthstel" / "data" / "translated"
+        Path(__file__).resolve().parent.parent / "data" / "datasets" / "msynthstel" / "data" / "translated"
     )
 
     # --- Hardware ---
@@ -46,8 +46,8 @@ class Config:
     num_workers: int = 4
 
     # --- Output ---
-    output_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent / "checkpoints")
-    cache_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent / ".cache")
+    output_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent / "artifacts" / "paper_replication" / "checkpoints")
+    cache_dir: Path = field(default_factory=lambda: Path(__file__).resolve().parent.parent / "artifacts" / "paper_replication" / ".cache")
 
 
 def load_multilingual_pairs(config: Config, split: str) -> list[dict]:

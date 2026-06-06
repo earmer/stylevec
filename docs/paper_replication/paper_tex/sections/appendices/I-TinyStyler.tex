@@ -1,0 +1,34 @@
+\newpage
+\section{Style Transfer Performance}
+\label{sec:appendix:tinystyler}
+
+\noindent TinyStyler is a style transfer system that reconstructs texts by conditioning on style embeddings \citet{tinystyler}. The original system is trained on the Reddit Million User Dataset (MUD) \cite{khan2021deepmetriclearningapproach} with a \textbf{four step} procedure:
+\begin{enumerate}
+    \item A modified T5 model \cite{t5andc4} is trained to reconstruct texts from paraphrases and style embeddings (Wegmann).
+    \item This unsupervised model is then used to generate style transfer outputs between multiple authors from the original corpus.
+    \item The resulting synthetic data is then filtered using style embedding (Wegmann) distance and meaning preservation metrics.
+    \item Finally, a model is then fine-tuned on the resulting filtered dataset.
+\end{enumerate}
+\noindent We reproduce the TinyStyler procedure with the exact dataset and hyperparameters in the original paper. We make only one modification: replacing Wegmann embeddings with \textsc{StyleDistance} in the generation and filtering steps. We include the formality transfer evaluation results in Table \ref{table:tstyler-formal}. In these automatic evaluations, the  \textsc{StyleDistance} conditioned model performs comparably. We additionally include examples comparing model output in Table \ref{table:tinystyler-outputs}.
+
+\begin{table}[H]
+\fontsize{8}{10}\selectfont
+\centering
+
+\begin{tabular}{lcccccc}
+\toprule
+Method & Acc ($\rightarrow \textit{F}$,$\rightarrow \textit{I}$) &  Sim ($\rightarrow \textit{F}$,$\rightarrow \textit{I}$) & Fluency ($\rightarrow \textit{F}$,$\rightarrow \textit{I}$) & Joint ($\rightarrow \textit{F}$,$\rightarrow \textit{I}$) & GPT-2  \\
+\midrule
+$\textsc{TStyler}_{\textsc{Wegmann}}$ & 0.94 (0.90, 0.98) & 0.82 (0.81, 0.82) & 0.77 (0.83, 0.72) & 0.78 (0.77, 0.80) & 112.5  \\
+$\textsc{TStyler}_{\textsc{StyleDistance}}$ &  0.96 (0.94, 0.98) & 0.80 (0.80, 0.81) & 0.77 (0.82, 0.73) & 0.80 (0.79, 0.80) & 112.4 \\
+\bottomrule
+\end{tabular}
+
+\caption{We reproduce the automatic formality transfer evaluation procedure from TinyStyler \cite{tinystyler} on the GYAFC dataset \cite{gyafc}. $\rightarrow F$ corresponds to formal transfer, and $\rightarrow I$ corresponds to informal transfer.
+}
+\label{table:tstyler-formal}
+\end{table}
+
+
+\tinystyleroutputs
+

@@ -10,8 +10,8 @@ import requests
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 
-DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
-CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
 OLLAMA_URL = "http://localhost:11434/api/embed"
 MODEL = "qwen3-embedding:0.6b"
 SPEAKERS = ["派蒙", "旅行者", "娜维娅", "纳西妲", "温迪",

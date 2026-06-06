@@ -25,7 +25,7 @@ class DeviceConfig:
 class ModelConfig:
     """模型配置。"""
     model_path: Path = field(default_factory=lambda:
-        Path(__file__).resolve().parent.parent / "base-models" / "qwen-3-0.6b"
+        Path(__file__).resolve().parent.parent / "artifacts" / "base-models" / "qwen-3-0.6b"
     )
     hidden_size: int = 1024
     style_dim: int = 128
@@ -38,13 +38,13 @@ class ModelConfig:
 class DataConfig:
     """数据配置。"""
     db_path: Path = field(default_factory=lambda:
-        Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
+        Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
     )
     cache_dir: Path = field(default_factory=lambda:
-        Path(__file__).resolve().parent.parent / "lora" / "cache"
+        Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "cache"
     )
     core_cache_dir: Path = field(default_factory=lambda:
-        Path(__file__).resolve().parent.parent / "lora" / "cache_core"
+        Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "cache_core"
     )
     seed: int = 42
     max_per_speaker: int = 200

@@ -1,0 +1,11 @@
+\newpage
+\section{Human Annotation Details}
+\label{sec:appendix:humanannotation}
+
+We provide an example of a task instance in our annotation interface. Human annotators were asked to rate whether the style feature was present or not in the sentence, with the option to also select "Possibly" if the annotator was unsure (instructed to use sparingly). We provide annotators with a definition of each style feature as well.
+
+\mturkinterfacefig
+
+\noindent We used a population of graduate students taking a class on natural language processing as the annotators. Each task instance was annotated by 10 distinct human annotators. We assign a score of 0 to ``No'', 0.5 to ``Possibly'', and 1 to ``Yes''. We average the scores from all  10 annotators assigned to each task instance. We consider to have  agreement for a positive example if the average score is >=0.5, and   for a negative example if the average score is < 0.5.
+
+We measure inter-annotator agreement using Krippendorf's Alpha \citep{krippendorffalpha} which indicates moderate agreement of 0.55.  As a more easily interpretable measure of agreement between annotators, for each task instance, we also find, on average, around 8 out of the 10 annotators annotated in agreement on whether a style feature was present or not in the text.

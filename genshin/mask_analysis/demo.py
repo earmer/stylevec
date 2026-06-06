@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """从数据库中提取句子并展示 mask 效果（使用正确的保护-mask-恢复流程）"""
-import sqlite3
 import json
+import sqlite3
+from pathlib import Path
+
+DB_PATH = Path(__file__).resolve().parents[2] / "data" / "genshin" / "genshin.db"
 
 def apply_mask_correctly(text, word_to_mask, common_words):
     """
@@ -55,7 +58,7 @@ with open('cn_word_to_mask.json', 'r', encoding='utf-8') as f:
     cn_word_to_mask = json.load(f)
 
 # 连接数据库
-conn = sqlite3.connect('../../genshin/genshin.db')
+conn = sqlite3.connect(str(DB_PATH))
 cursor = conn.cursor()
 
 # 随机提取30条对话

@@ -1,0 +1,56 @@
+\newcommand{\smalltinystyleroutputs}{
+    \begin{table}[!h]
+    \setlength\dashlinedash{0.5pt} % Length of the dash
+    \setlength\dashlinegap{1pt}    % Gap between dashes
+    \small
+    \fontsize{8}{9}\selectfont
+    \centering
+    \begin{tabular}{m{.35\columnwidth} >{\raggedright\arraybackslash}p{.45\columnwidth}}
+    \toprule[\heavyrulewidth]
+    \textbf{Source Text (Informal)} & \textit{"its keeping me up at nite, i have to know what it is"} \\ \cdashline{1-2} \rule{0pt}{10pt}
+    \citet{styleemb} \textbf{\newline \textcolor{white}{--} ($\rightarrow$ Formal)} & \textit{"Have to know what this is, keeping me up at night."} \\ 
+    \textbf{\textsc{StyleDistance} \newline \textcolor{white}{--} 
+ ($\rightarrow$ Formal)} & \textit{"What is it? It is keeping me up at night."} \\
+    \bottomrule[\heavyrulewidth]
+    \end{tabular}
+    \caption{A demonstration of TinyStyler conditioned on \textsc{StyleDistance} embeddings.}
+    \label{table:smalltinystyleroutputs}
+    \end{table}
+}
+
+\newcommand{\tinystyleroutputs}{
+    {
+    \small
+
+    \renewcommand{\arraystretch}{2} % Adds space between rows
+\begin{longtable}{p{4.5cm} p{4.5cm} p{4.5cm}}
+    \toprule
+    \textbf{Source Text (Informal)} & \textbf{\textsc{Wegmann} ($\rightarrow$ Formal)} & \textbf{\textsc{StyleDistance} ($\rightarrow$ Formal)} \\
+    \midrule
+    \endfirsthead
+    \bottomrule
+    \endfoot
+    
+    \bottomrule
+    \addlinespace
+    \caption{Outputs from TinyStyler, conditioned on Wegmann embeddings and \textsc{StyleDistance} embeddings.}
+    \label{table:tinystyler-outputs} \\
+    \endlastfoot
+    \textit{"its keeping me up at nite, i have to know what it is"} & \textit{"Have to know what this is, keeping me up at night."} & \textit{"What is it? It is keeping me up at night."} \\
+    \textit{"i like journey's open arms... but i like mariah carey's version of that song better."} & \textit{"I prefer mariah carey's version of Journey, Open Arms."} & \textit{"I think mariah carey's version of that song is better."} \\
+    \textit{"And you can't rely on rumors."} & \textit{"You can never trust rumors about it."} & \textit{"I would say that you can't rely on rumors."} \\
+    \midrule
+ \textbf{Source Text (Formal)} & \textbf{\textsc{Wegmann} ($\rightarrow$ Informal)} & \textbf{\textsc{StyleDistance} ($\rightarrow$ Informal)} \\
+    \midrule
+
+    
+    
+    \textit{"I favor the man as he is humorous and grounded."} & \textit{"i love tahm as he is humorous and grounded..."} & \textit{"i'm gonna go with the man...hes humorous and grounded."} \\
+    \textit{"I am sure you will both enjoy it."} & \textit{"ok i am sure you both will enjoy it!"} & \textit{"oh yea...you'll both enjoy it"} \\
+    \textit{"I very much enjoy this song."} & \textit{"i love this song so much, i'm a fan of it."} & \textit{"i like this song so much man..."} \\
+
+\end{longtable}
+
+
+    }
+}

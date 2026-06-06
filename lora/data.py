@@ -9,9 +9,9 @@ from pathlib import Path
 from torch.utils.data import Dataset
 import torch
 
-DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
-CACHE_DIR = Path(__file__).resolve().parent / "cache"
-CORE_CACHE_DIR = Path(__file__).resolve().parent / "cache_core"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "cache"
+CORE_CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "cache_core"
 SEED = 42
 MAX_PER_SPEAKER = 200
 MIN_SENTENCES = 100

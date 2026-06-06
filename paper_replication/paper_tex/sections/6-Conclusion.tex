@@ -1,6 +1,0 @@
-\section{Conclusion}
-\label{sec:conclusion}
-
-We introduced \textsc{StyleDistance}, a novel method for training content-independent style embeddings using synthetic parallel examples. By employing a large language model to generate a dataset of near-exact paraphrases with controlled style variations, we overcome limitations associated with content leakage and imperfect parallel examples in existing style embedding methods. Evaluations using the STEL and STEL-or-Content tasks demonstrate that embeddings trained solely on synthetic examples can capture style extremely well. Additionally, the technique's ability to generalize to unseen style features indicates its potential to represent a broader range of style attributes beyond those addressed in synthetic data generation. Notably, our results highlight the efficiency of large language models in creating task-specific representations. This approach circumvents the need for manual dataset collection and the reliance on weak implicit assumptions over data, offering a more direct and accurate method for training on the precise task-specific features of interest.
-
-\paragraph{Model, Data, and Code} We release the \textsc{StyleDistance} models, the  \textsc{SynthStel} dataset, and our code for other researchers to use at: {\small\url{https://huggingface.co/StyleDistance/}}.

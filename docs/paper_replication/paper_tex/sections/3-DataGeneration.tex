@@ -1,0 +1,64 @@
+\section{Data Generation}
+\label{sec:datageneration}
+
+A core component of our proposed {\sc StyleDistance} approach is a LLM that generates a synthetic dataset with controlled content and style. The dataset is composed of pairs of sentences which are paraphrases of each other (i.e. their content is similar) but differ in style. Each pair includes a positive example that showcases a specific stylistic feature (e.g., usage of active voice or emojis) and a corresponding negative example that lacks this feature. In this section, we outline the selected style features and provide implementation details for our synthetic data generation procedure. Additionally, we present evaluations conducted to assess the quality of the synthetic dataset prior to its use in training our style embeddings.
+
+\paragraph{Style Feature Selection} There is no predefined set of style features, and what features are considered to describe style vs. content can vary across different studies \citep{tstsurvey}. For this work, we select 40 style features across 7 broad categories (visualized in Figure \ref{fig:stylefeaturecategories}) which have been addressed in different  works on text style \citep{liwc,hovy,stel,tstsurvey,lisa}. Specifically, we select features for which it is possible to generate both positive and negative examples (e.g., formal/informal, passive/active voice). Since some  features can blur the line between style and content (e.g., usage of sarcasm), it might be difficult to generate perfectly parallel positive and negative pairs, with the same content. For these features, we control the  generation as much as possible with the aim to obtain near-exact paraphrases. Furthermore, some style features may be impossible to fully remove from a sentence in order to generate a negative example (e.g., usage of articles). For these, we aim for the positive example to contain the feature with higher frequency than the negative example. For more details on all the selected style features, see Appendix \ref{sec:appendix:stylefeatures}. While these 40 features may not cover the infinite number of styles that may exist, we believe they can serve to learn more primitive features (e.g., use of contractions, use of long words, use of formal style) which may help generalize to more complex styles  involving these features (e.g., ``professorial style''). We discuss and test this generalization assumption in Section \ref{sec:steleval}.
+
+\stylefeaturecategoriesfig
+
+\paragraph{Generation} % For the synthetic dataset,
+For each of the selected  features, we generate 100 pairs of positive and negative examples  by prompting GPT-4 \citep{gpt4} with the DataDreamer library \citep{datadreamer}. %to generate 
+Each generated pair contains a sentence where the feature is present (positive example), and a paraphrase where the feature is absent or less present (negative example). 
+%``a pair of \{\texttt{positive\_feature}\} and \{\texttt{negative\_feature}\} sentences''.
+
+\attributedprompttable
+
+\citet{attrprompt} found that LLMs struggle with diversity when prompted to generate text examples.  We use their proposed attributed prompt (AttrPrompt) method to ensure generations are sufficiently diverse and varied across basic attributes, such as ``Sentence Length'' and ``Type of Sentence''. The method randomly selects values from a defined set of attributes to be included in the prompt, which serve as conditioning for the text generation. In Table \ref{table:attributedprompttable}, we showcase the attributes we sample from in our attributed prompt in order to vary our generations. See Appendix \ref{sec:genposandneg} for details on our full attributed prompt and inference parameters.
+
+For the ``Topic'' attribute, we sample fine-grained distinct topics for each generation %, we extract fine-grained topics 
+from the C4 corpus \citep{t5andc4}. We do this by extracting a random sentence from a random document in C4, and we then use a zero-shot prompt (given in Appendix \ref{sec:extracttopic}) with GPT-4 to identify the fine-grained topic of that sentence. We employ several heuristics to select sentences from C4 that have desired characteristics: written in English, sufficiently long (greater than 32 words), and consist of natural text rather than formatting text found in some C4 documents. We provide an implementation of these heuristics in our supplementary materials.
+
+We call our final synthetically generated dataset \textsc{SynthStel},  and create train and test splits using a 90\%/10\% split stratified by style feature.
+
+\paragraph{Dataset Evaluation}
+
+%We evaluate 
+We conduct a human and an automatic evaluation of the quality of our synthetic dataset for a number of different properties using the test split. % with human and automatic evaluation on the test split.
+
+First, we measured the extent to which humans judge our positive examples do contain the desired style feature  and our negative examples do not. Note that the appreciation of some style features  (such as ``Incorporation of Humor'') can be subjective, and some other features (e.g., ``Usage of Articles'') %can only be increased or decreased in frequency but 
+are not fully removed in negative examples but might appear less frequently therein than in positive examples. In spite of these intricacies which made the annotators' task more difficult, our human evaluation results were strong: 92\% of the time, annotators judged the positive and negative labels correct (random chance is 50\%).
+%with the generated positive and negative examples. 
+Each % task 
+instance was annotated by 10 different annotators from a pool of 73  % distinct human annoators drawn from a population of  
+graduate students in a NLP class. %taking a class on natural language processing. 
+We also assessed inter-annotator agreement with Krippendorf's Alpha \citep{krippendorffalpha} and achieved a reliability score of 0.55. For more details about the human annotation, see Appendix \ref{sec:appendix:humanannotation}. 
+
+We also run automatic evaluations to assess other properties of the dataset: 
+\begin{itemize}
+    \setlength\itemsep{1pt}
+    \item \textbf{Content Similarity} measures the average semantic similarity between the positive and negative parallel examples \citep{sentencetransformers}.\footnote{For % any 
+    evaluations using semantic similarity, we use the \texttt{all-mpnet-base-v2} model.}
+\item \textbf{Fluency} measures the average fluency of our examples\footnote{We exclude generations for style features that specifically address disfluency.} %are intentionally meant to be disfluent.} 
+using a classifier trained on CoLA \citep{cola}. 
+\item \textbf{Diversity} uses the % diversity measurement score in 
+score proposed by \citet{diversityscore} to measure %which measures 
+how different each generated text % we generate 
+is from every other in terms of content/topic using semantic similarity.%, as shown. in equation \eqref{eq:diversity}% text using semantic similarity to measure diversity in content / topic:
+
+% \vspace{-5mm}
+% \begin{equation}
+%     \label{eq:diversity} 
+% \scalebox{0.75}{
+% $
+% \operatorname{div}(T)=\frac{1}{|T|^2-|T|} \sum_{t_i \in T} \sum_{t_j \in T}^{i \neq j}\left(1-\operatorname{sim}\left(t_i, t_j\right)\right)
+% $
+% }
+% \end{equation}
+
+\end{itemize}
+
+ We compute a baseline for these scores with natural data from the dataset of sentence pairs in \citet{stel}. The results of these evaluations can be found in Table \ref{table:dataseteval}. Our generated examples fare well in all these aspects: they are topically diverse and fluent, and the similarity inside each pair of positive/negative examples is high. An additional (less direct) evaluation of the quality of our synthetic dataset is proposed in Section \ref{sec:evaluation}, where we evaluate the \textsc{StyleDistance} embeddings that we train on this dataset.
+
+
+\datasetevaltable

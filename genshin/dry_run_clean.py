@@ -8,8 +8,8 @@ import re
 from pathlib import Path
 from collections import defaultdict
 
-DB_FILE = Path(__file__).parent / "genshin.db"
-OUTPUT_FILE = Path(__file__).parent / "candidate.txt"
+DB_FILE = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+OUTPUT_FILE = Path(__file__).resolve().parent.parent / "artifacts" / "genshin" / "candidate.txt"
 
 
 class DryRunCleaner:

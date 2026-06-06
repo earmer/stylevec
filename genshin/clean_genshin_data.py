@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from collections import defaultdict
 
-DB_FILE = Path(__file__).parent / "genshin.db"
+DB_FILE = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
 
 
 class DataCleaner:

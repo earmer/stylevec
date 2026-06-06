@@ -26,11 +26,11 @@ from model import StyleModel, MODEL_PATH
 from device import detect_device  # noqa: E402
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-TRAINED_DIR  = Path(__file__).resolve().parent / "trained"
-DB_PATH      = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
-EMB_CACHE    = Path(__file__).resolve().parent / "analysis_embeddings.pkl"
-RESULTS_CSV  = Path(__file__).resolve().parent / "style_analysis.csv"
-PLOTS_DIR    = Path(__file__).resolve().parent / "plots"
+TRAINED_DIR  = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "trained"
+DB_PATH      = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+EMB_CACHE    = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "analysis_embeddings.pkl"
+RESULTS_CSV  = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "style_analysis.csv"
+PLOTS_DIR    = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "plots"
 
 MAX_PER_SPEAKER = 100
 MIN_SENTENCES   = 100

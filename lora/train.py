@@ -217,8 +217,10 @@ def main():
         tag += "_apool"
 
     prefix = "core_" if config.train.use_core else ""
-    results_csv = Path(__file__).resolve().parent / f"results_{prefix}{tag}.csv"
-    ckpt_dir = Path(__file__).resolve().parent / f"checkpoints_{prefix}{tag}"
+    artifacts_dir = Path(__file__).resolve().parent.parent / "artifacts" / "lora"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    results_csv = artifacts_dir / f"results_{prefix}{tag}.csv"
+    ckpt_dir = artifacts_dir / f"checkpoints_{prefix}{tag}"
 
     with open(results_csv, "w", newline="") as f:
         csv.writer(f).writerow([

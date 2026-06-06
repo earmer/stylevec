@@ -14,10 +14,10 @@ try:
     import simlar
 except ImportError:
     print("ERROR: simlar library not found. Please install it first.")
-    print("  cd ../simlar && maturin develop")
+    print("  cd tools/simlar && maturin develop")
     sys.exit(1)
 
-DB_FILE = Path(__file__).parent / "genshin.db"
+DB_FILE = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
 BATCH_SIZE = 10000
 NGRAM_SIZE = 3
 

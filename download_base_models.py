@@ -1,6 +1,6 @@
 import argparse
 
-DEST = "base-models/qwen-3-0.6b"
+DEST = "artifacts/base-models/qwen-3-0.6b"
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--modelscope", action="store_true", help="Use ModelScope mirror (for China)")

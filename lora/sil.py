@@ -7,7 +7,7 @@ from pathlib import Path
 from sklearn.metrics import silhouette_samples
 from data import CORE_SPEAKERS
 
-EMB_CACHE = Path(__file__).resolve().parent / "analysis_embeddings.pkl"
+EMB_CACHE = Path(__file__).resolve().parent.parent / "artifacts" / "lora" / "analysis_embeddings.pkl"
 
 
 def main():

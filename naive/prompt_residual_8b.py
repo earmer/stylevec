@@ -10,8 +10,8 @@ import requests
 from sklearn.decomposition import PCA
 from sklearn.metrics import silhouette_score
 
-DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
-CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
+CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
 API_KEY = "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"
 API_URL = "https://openrouter.ai/api/v1/embeddings"
 MODEL = "qwen/qwen3-embedding-8b"

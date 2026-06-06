@@ -18,13 +18,15 @@ from peft import PeftModel
 from sklearn.decomposition import PCA
 from transformers import AutoModel, AutoTokenizer
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--db", default="genshin/genshin.db")
-    parser.add_argument("--checkpoint", default="paper_replication/checkpoints/latest")
-    parser.add_argument("--model-name", default="base-models/xlm-roberta-base")
-    parser.add_argument("--out-dir", default="genshin/embedding_analysis/latest_20260505-005138")
+    parser.add_argument("--db", default=str(REPO_ROOT / "data" / "genshin" / "genshin.db"))
+    parser.add_argument("--checkpoint", default=str(REPO_ROOT / "artifacts" / "paper_replication" / "checkpoints" / "latest"))
+    parser.add_argument("--model-name", default=str(REPO_ROOT / "artifacts" / "base-models" / "xlm-roberta-base"))
+    parser.add_argument("--out-dir", default=str(REPO_ROOT / "artifacts" / "genshin" / "embedding_analysis" / "latest_20260505-005138"))
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--max-len", type=int, default=128)
     parser.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 4))

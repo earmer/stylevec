@@ -12,14 +12,14 @@ Disclaimer: Datasets used in this repository may be subject to copyrights held b
 
 ```bash
 uv sync
-python download_base_models.py          # downloads Qwen3-0.6B locally
-python download_base_models.py --modelscope  # use ModelScope mirror (China)
+uv run python download_base_models.py          # downloads Qwen3-0.6B into artifacts/base-models
+uv run python download_base_models.py --modelscope  # use ModelScope mirror (China)
 ```
 
 Build the Rust similarity utility when needed:
 ```bash
 pip install maturin
-cd simlar/ && maturin develop
+cd tools/simlar && maturin develop
 ```
 
 ## Repository Structure
@@ -32,11 +32,10 @@ cd simlar/ && maturin develop
 | `lora/` | LoRA fine-tuning approach (active research) |
 | `paper_replication/` | StyleDistance (Patel et al., 2024) replication — roberta-base + LoRA + Triplet Loss |
 | `shared/` | Shared training infrastructure: config, data loader, classifiers, evaluation |
-| `simlar/` | Rust/PyO3 utility for batched char n-gram Jaccard + normalized Levenshtein similarity |
-| `verifier/` | Algorithm notes and verification |
-| `datasets/` | Datasets (not included in public available version) |
-| `cache/` | Pre-computed `.npz` embeddings (not tracked) |
-| `base-models/` | Local model weights (not tracked) |
+| `tools/simlar/` | Rust/PyO3 utility for batched char n-gram Jaccard + normalized Levenshtein similarity |
+| `docs/verifier/` | Algorithm notes and verification |
+| `data/` | Local datasets and corpora |
+| `artifacts/` | Pre-computed embeddings, checkpoints, plots, logs, and local model weights |
 
 ## Data Pipeline
 
@@ -48,9 +47,9 @@ cd simlar/ && maturin develop
 
 To isolate style from content independently of the paraphrase approach, 5,021 Chinese words from the Genshin game lexicon (6,050 terms, 82.9% coverage) are mapped to 12 semantic category masks (person, location, quest, enemy, item, food, loot, weapon, artifact, animal, domain, group). This substitutes domain-specific content words while preserving syntactic structure and stylistic markers.
 
-### Multilingual Text Pipeline (datadelta)
+### Multilingual Text Pipeline (data/datasets/msynthstel/pipeline/datadelta)
 
-A 75-language text quality pipeline, separate from this repo: document collection (CulturaY/SkyPile, 20k docs for major languages, 1k for others) → sentence segmentation (Intl.Segmenter) → length filtering (15–512 tokens) → heuristic filtering (terminal punctuation, special-char ratio, repeated-word ratio, URL residuals) → MinHash near-dedup (5-gram character shingles, Jaccard threshold 0.75) → quality scoring (Qwen3-0.6B perplexity / LiteLLM API, pending). Currently ~2.3M deduplicated sentences across the top 6 languages (zh/en/ru/ja/fr/de); quality scoring not yet run.
+A 75-language text quality pipeline used by the msynthstel data program: document collection (CulturaY/SkyPile, 20k docs for major languages, 1k for others) → sentence segmentation (Intl.Segmenter) → length filtering (15–512 tokens) → heuristic filtering (terminal punctuation, special-char ratio, repeated-word ratio, URL residuals) → MinHash near-dedup (5-gram character shingles, Jaccard threshold 0.75) → quality scoring (Qwen3-0.6B perplexity / LiteLLM API, pending). Currently ~2.3M deduplicated sentences across the top 6 languages (zh/en/ru/ja/fr/de); quality scoring not yet run.
 
 ### Literary Book Collection
 
@@ -171,7 +170,7 @@ Reproduced StyleDistance (Patel et al., 2024) to establish a quantitative baseli
 
 ## Engineering Infrastructure
 
-Shared training infrastructure in `shared/`: unified Config system (Device/Model/Data/Train/Eval), standardized DataLoader (raw/cached/full/core modes), PKSampler for balanced mini-batches, ArcFaceHead/LDA/MLP classifier interfaces, and silhouette + consistency evaluation functions. LoRA training pipeline supports bf16 mixed precision, `torch.compile` acceleration, fused AdamW, gradient clipping, checkpoint persistence, and TensorBoard logging. `simlar/` provides a Rust/PyO3 library for high-performance batched character n-gram Jaccard and normalized Levenshtein similarity.
+Shared training infrastructure in `shared/`: unified Config system (Device/Model/Data/Train/Eval), standardized DataLoader (raw/cached/full/core modes), PKSampler for balanced mini-batches, ArcFaceHead/LDA/MLP classifier interfaces, and silhouette + consistency evaluation functions. LoRA training pipeline supports bf16 mixed precision, `torch.compile` acceleration, fused AdamW, gradient clipping, checkpoint persistence, and TensorBoard logging. `tools/simlar/` provides a Rust/PyO3 library for high-performance batched character n-gram Jaccard and normalized Levenshtein similarity. Cached embeddings live under `artifacts/cache/`.
 
 ## License
 

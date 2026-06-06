@@ -6,8 +6,8 @@ from pathlib import Path
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from tqdm import tqdm
 
-MODEL_PATH = Path(__file__).resolve().parent.parent / "base-models" / "qwen-3-0.6b"
-CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
+MODEL_PATH = Path(__file__).resolve().parent.parent / "artifacts" / "base-models" / "qwen-3-0.6b"
+CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
 DEVICE = torch.device("mps")
 
 N_LAYERS = None  # 动态检测：首次前向传播后设置

@@ -4,7 +4,7 @@ import sqlite3
 import numpy as np
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent / "genshin" / "genshin.db"
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
 SEED = 42
 
 # 训练组（ranks 1,3,4,5,6,7,10,12）
