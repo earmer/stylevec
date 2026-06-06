@@ -9,7 +9,6 @@ lora/checkpoints/
 *.egg-info/
 .DS_Store
 base-models/
-CLAUDE.md
 lora/trained/*
 *.pkl
 .litellm_config.yaml
