@@ -9,9 +9,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import sys
@@ -20,7 +22,6 @@ from functools import partial
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -28,9 +29,9 @@ from transformers import AutoTokenizer
 
 import time
 
-from config import Config
+from config import Config, load_multilingual_pairs
 from model import StyleDistance
-from triplets import TripletDataset, collate_triplets
+from triplets import MultilingualTripletDataset, collate_triplets
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -52,11 +53,31 @@ def evaluate_val_loss(model, loader, criterion, device, max_batches=50):
                 batch["p_ids"].to(device), batch["p_mask"].to(device),
                 batch["n_ids"].to(device), batch["n_mask"].to(device),
             )
-            total += criterion(a_emb, p_emb, n_emb).item()
+            total += criterion(
+                a_emb,
+                p_emb,
+                n_emb,
+                batch["weights"].to(device),
+                batch["margins"].to(device),
+            ).item()
             count += 1
             if count >= max_batches:
                 break
     return total / max(count, 1)
+
+
+def weighted_triplet_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    weights: torch.Tensor,
+    margins: torch.Tensor,
+) -> torch.Tensor:
+    d_ap = (anchor - positive).pow(2).sum(dim=1)
+    d_an = (anchor - negative).pow(2).sum(dim=1)
+    per_triplet = torch.relu(d_ap - d_an + margins)
+    weights = weights.to(per_triplet.dtype)
+    return (per_triplet * weights).sum() / weights.sum().clamp_min(1e-8)
 
 
 def log_lora_histograms(writer: SummaryWriter, model, global_step: int):
@@ -68,6 +89,25 @@ def log_lora_histograms(writer: SummaryWriter, model, global_step: int):
         writer.add_histogram(f"lora/weights/{clean}", param.data, global_step)
         if param.grad is not None:
             writer.add_histogram(f"lora/grads/{clean}", param.grad, global_step)
+
+
+def latest_tensorboard_step(log_dir: Path) -> int | None:
+    """Return the latest scalar step in a TensorBoard log directory."""
+    if not log_dir.exists():
+        return None
+    try:
+        from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
+        accumulator = EventAccumulator(str(log_dir), size_guidance={"scalars": 0})
+        accumulator.Reload()
+        max_step = None
+        for tag in accumulator.Tags().get("scalars", []):
+            for event in accumulator.Scalars(tag):
+                max_step = event.step if max_step is None else max(max_step, event.step)
+        return max_step
+    except Exception as exc:
+        print(f"TensorBoard step detection skipped: {exc}")
+        return None
 
 
 def build_test_embedding_data(model, test_sentences: list[str], feature_labels: list[str],
@@ -84,6 +124,43 @@ def build_test_embedding_data(model, test_sentences: list[str], feature_labels: 
             embs.append(emb.cpu())
     mat = torch.cat(embs)  # (N, 768)
     return mat, feature_labels, test_sentences
+
+
+def replace_with_whitespace_triplets(dataset, rows: list[dict], percent: float, seed: int | None = None) -> int:
+    """Replace a percentage of existing triplets with whitespace robustness triplets."""
+    if percent <= 0 or not getattr(dataset, "triplets", None):
+        return 0
+    rng = __import__("random").Random(seed if seed is not None else time.time_ns())
+    replace_count = int(len(dataset.triplets) * percent / 100)
+    if replace_count <= 0:
+        return 0
+
+    candidates = [
+        row for row in rows
+        if isinstance(row.get("positive"), str) and isinstance(row.get("negative"), str)
+    ]
+    if not candidates:
+        return 0
+
+    replacements = []
+    while len(replacements) < replace_count:
+        row = rng.choice(candidates)
+        original = row["positive"]
+        pair = row["negative"]
+        positive = rng.choice((original + " ", " " + original))
+        negative = rng.choice((pair, " " + pair, pair + " "))
+        replacements.append({
+            "anchor": original,
+            "positive": positive,
+            "negative": negative,
+            "kind": "whitespace",
+            "weight": 0.3,
+            "margin": 0.05,
+        })
+
+    for idx, triplet in zip(rng.sample(range(len(dataset.triplets)), replace_count), replacements):
+        dataset.triplets[idx] = triplet
+    return replace_count
 
 
 # ── Checkpoint manager ─────────────────────────────────────────────────────────
@@ -114,24 +191,28 @@ class CheckpointManager:
         (self.base_dir / "top5.json").write_text(json.dumps(self.rankings, indent=2))
 
     def save(self, model, optimizer, scheduler, scaler, global_step, epoch,
-             train_loss, val_loss, lr, device_type, use_amp):
+             train_loss, val_loss, lr, device_type, use_amp, total_steps=None):
         """Save checkpoint, manage top-5 rotation."""
         self.base_dir.mkdir(parents=True, exist_ok=True)
         step_dir = self._step_dir(global_step)
         step_dir.mkdir(parents=True, exist_ok=True)
 
-        # PEFT adapter
+        # PEFT adapter weights; resume opts back into trainability on load.
+        model.train()
         model.encoder.save_pretrained(str(step_dir))
 
         # Training state
-        torch.save({
+        training_state = {
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
             "scaler": scaler.state_dict() if scaler else None,
             "global_step": global_step,
             "epoch": epoch,
             "rng_state": torch.get_rng_state(),
-        }, step_dir / "training_state.pt")
+        }
+        if total_steps is not None:
+            training_state["total_steps"] = total_steps
+        torch.save(training_state, step_dir / "training_state.pt")
 
         # Latest (always overwrite, for resume)
         if self.latest_dir.exists():
@@ -158,7 +239,32 @@ class CheckpointManager:
 
     def load_latest(self) -> dict | None:
         """Return training state dict if latest checkpoint exists, else None."""
-        state_path = self.latest_dir / "training_state.pt"
+        return self.load_from_dir(self.latest_dir)
+
+    def resolve_dir(self, path_or_name: str) -> Path:
+        """Resolve a checkpoint path or a bare checkpoint directory name."""
+        path = Path(path_or_name).expanduser()
+        if path.is_absolute():
+            return path
+        under_base = self.base_dir / path
+        if under_base.exists():
+            return under_base
+        if path.exists():
+            return path
+        if re.fullmatch(r"\d{8}-\d{6}", path_or_name):
+            dt = _dt.datetime.strptime(path_or_name, "%Y%m%d-%H%M%S")
+            prefix = str(int(dt.timestamp()))
+            matches = sorted(
+                self.base_dir.glob(f"{prefix}-step-*"),
+                key=lambda p: int(p.name.rsplit("-step-", 1)[1]) if "-step-" in p.name else -1,
+            )
+            if matches:
+                return matches[-1]
+        return under_base
+
+    def load_from_dir(self, ckpt_dir: Path) -> dict | None:
+        """Return training state dict if the checkpoint dir is loadable."""
+        state_path = Path(ckpt_dir) / "training_state.pt"
         if not state_path.exists():
             return None
         return torch.load(state_path, map_location="cpu", weights_only=False)
@@ -177,14 +283,34 @@ def main():
     parser.add_argument("--grad", type=int, default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--lr", type=float, default=None)
-    parser.add_argument("--save-every", type=int, default=500)
+    parser.add_argument("--save-every", type=int, default=1000)
+    parser.add_argument("--val-every", type=int, default=250)
+    parser.add_argument("--max-pairs-per-feature", type=int, default=0)
+    parser.add_argument("--white-percent", type=float, default=0.0,
+                        help="Percent of train triplets to replace with whitespace variants")
+    parser.add_argument("--type-c-ratio", type=float, default=0.2,
+                        help="Language-as-feature triplet count relative to trait triplets")
+    parser.add_argument("--cross-lang-trait-ratio", type=float, default=0.25,
+                        help="Cross-language same-trait pull count relative to trait triplets")
+    parser.add_argument("--same-lang-hard-ratio", type=float, default=0.25,
+                        help="Same-language different-trait hard negative count relative to trait triplets")
     parser.add_argument("--keep-top", type=int, default=5)
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Checkpoint directory path or name under checkpoints/")
+    parser.add_argument("--resume-next-epoch", action="store_true",
+                        help="When resuming an end-of-epoch checkpoint, start at epoch+1")
     parser.add_argument("--dryrun", action="store_true")
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--use-local-data", action="store_true")
     parser.add_argument("--log-dir", type=str, default=None, help="TensorBoard log directory")
+    parser.add_argument("--log-run-name", type=str, default=None,
+                        help="TensorBoard run directory name under --log-dir")
     args = parser.parse_args()
+    if not 0 <= args.white_percent <= 100:
+        raise ValueError("--white-percent must be between 0 and 100")
+    if args.type_c_ratio < 0 or args.cross_lang_trait_ratio < 0 or args.same_lang_hard_ratio < 0:
+        raise ValueError("Curriculum ratios must be non-negative")
 
     batch_size = args.batch or config.batch_size
     grad_accum = args.grad or 1
@@ -193,43 +319,46 @@ def main():
 
     if args.dryrun:
         batch_size = 8; max_epochs = 1; grad_accum = 1
+        config.num_workers = 0
         print("DRY RUN: batch=8 epochs=1 grad_accum=1")
 
     device = torch.device("cpu") if args.cpu else get_device()
     use_amp = device.type == "cuda"
     dtype = torch.bfloat16 if use_amp else torch.float32
 
-    # CUDA default: batch=128
+    # CUDA default: batch=256
     if args.batch is None and device.type == "cuda":
-        batch_size = 128
+        batch_size = 256
 
     print(f"device={device}  batch={batch_size}  grad_accum={grad_accum}  "
           f"effective={batch_size * grad_accum}  dtype={dtype}")
 
     # ── Data ──────────────────────────────────────────────────────────────
+    import random as _random
     print("Loading dataset...")
     if args.use_local_data:
-        import pandas as pd
-        local = Path(__file__).resolve().parent.parent / "datasets" / "msynthstel" / "data"
-        train_pairs = pd.read_parquet(local / "train-00000-of-00001.parquet").to_dict("records")
+        all_pairs = load_multilingual_pairs(config, "train")
     else:
         from datasets import load_dataset
-        train_pairs = [dict(row) for row in load_dataset(config.dataset_name)["train"]]
+        all_pairs = [dict(row) for row in load_dataset(config.dataset_name)["train"]]
 
     by_feat = defaultdict(list)
-    for row in train_pairs:
+    for row in all_pairs:
         by_feat[row["feature"]].append(row)
+    _random.seed(42)
     train_split, val_split = [], []
     for feat, group in by_feat.items():
-        n_train = int(len(group) * config.train_val_split)
-        train_split.extend(group[:n_train])
-        val_split.extend(group[n_train:])
+        shuffled = list(group)
+        _random.shuffle(shuffled)
+        n_train = int(len(shuffled) * config.train_val_split)
+        train_split.extend(shuffled[:n_train])
+        val_split.extend(shuffled[n_train:])
     print(f"Train pairs: {len(train_split)}  Val pairs: {len(val_split)}")
 
     # Load test data for TensorBoard embedding visualization
     if not args.dryrun:
         if args.use_local_data:
-            test_pairs = pd.read_parquet(local / "test-00000-of-00001.parquet").to_dict("records")
+            test_pairs = load_multilingual_pairs(config, "test")
         else:
             from datasets import load_dataset
             test_pairs = [dict(row) for row in load_dataset(config.dataset_name)["test"]]
@@ -245,32 +374,49 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     config.cache_dir.mkdir(parents=True, exist_ok=True)
-    train_ds = TripletDataset(train_split, tokenizer, config.max_seq_len, "train", config.cache_dir)
-    val_ds = TripletDataset(val_split, tokenizer, config.max_seq_len, "val", config.cache_dir)
+    mpp = args.max_pairs_per_feature or config.max_pairs_per_feature
+    dataset_kwargs = {
+        "type_c_ratio": args.type_c_ratio,
+        "cross_lang_trait_ratio": args.cross_lang_trait_ratio,
+        "same_lang_hard_ratio": args.same_lang_hard_ratio,
+    }
+    train_ds = MultilingualTripletDataset(
+        train_split, tokenizer, config.max_seq_len, "train", config.cache_dir, mpp,
+        **dataset_kwargs,
+    )
+    val_ds = MultilingualTripletDataset(
+        val_split, tokenizer, config.max_seq_len, "val", config.cache_dir, mpp,
+        **dataset_kwargs,
+    )
+    base_train_triplets = list(train_ds.triplets) if args.white_percent and mpp <= 0 else None
     print(f"Train triplets: {len(train_ds)}  Val triplets: {len(val_ds)}")
-
-    if args.dryrun:
-        train_ds = Subset(train_ds, range(batch_size))
-        val_ds = Subset(val_ds, range(batch_size))
 
     collate_fn = partial(collate_triplets, tokenizer=tokenizer, max_len=config.max_seq_len)
     pin_memory = device.type == "cuda"
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True,
-                              collate_fn=collate_fn, num_workers=config.num_workers,
-                              pin_memory=pin_memory, drop_last=True)
+
+    def _make_train_loader():
+        """Re-create train DataLoader with current dataset (call after resample)."""
+        ds = train_ds
+        if args.dryrun:
+            ds = Subset(train_ds, range(batch_size))
+        return DataLoader(ds, batch_size=batch_size, shuffle=True,
+                          collate_fn=collate_fn, num_workers=config.num_workers,
+                          pin_memory=pin_memory, drop_last=True)
+
+    if args.dryrun:
+        val_ds = Subset(val_ds, range(batch_size))
+
+    train_loader = _make_train_loader()
     val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False,
                             collate_fn=collate_fn, num_workers=config.num_workers,
                             pin_memory=pin_memory)
 
     # ── Model, optimizer, scheduler ────────────────────────────────────────
     print("Building model...")
-    model = StyleDistance(config.model_name).to(device)
+    model = StyleDistance(config.model_name, lora_dropout=config.lora_dropout).to(device)
     model.encoder.print_trainable_parameters()
 
-    criterion = nn.TripletMarginWithDistanceLoss(
-        distance_function=lambda x, y: (x - y).pow(2).sum(dim=1),
-        margin=config.triplet_margin,
-    )
+    criterion = weighted_triplet_loss
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
         lr=lr, weight_decay=config.weight_decay, fused=(device.type == "cuda"),
@@ -285,9 +431,14 @@ def main():
     print(f"steps/epoch={steps_per_epoch}  total={total_steps}  save_every={args.save_every}")
 
     # ── TensorBoard ────────────────────────────────────────────────────────
-    log_dir = Path(args.log_dir) if args.log_dir else (
+    log_root = Path(args.log_dir) if args.log_dir else (
         Path("/root/tf-logs") if device.type == "cuda" else config.output_dir / "tf-logs")
-    log_dir = log_dir / time.strftime("%Y%m%d-%H%M%S")
+    if args.log_run_name:
+        log_dir = log_root / args.log_run_name
+    elif args.resume_from and re.fullmatch(r"\d{8}-\d{6}", args.resume_from):
+        log_dir = log_root / args.resume_from
+    else:
+        log_dir = log_root / time.strftime("%Y%m%d-%H%M%S")
     log_dir.mkdir(parents=True, exist_ok=True)
     writer = SummaryWriter(str(log_dir))
     print(f"TensorBoard: {log_dir}")
@@ -296,32 +447,62 @@ def main():
     ckpt = CheckpointManager(config.output_dir, save_every=args.save_every, keep_top=args.keep_top)
     start_epoch = 1
     global_step = 0
+    log_step_offset = 0
     best_val_loss = float("inf")
     # best_epoch_val_loss = float("inf")
     # epochs_no_improve = 0
 
     # Resume
-    if args.resume:
-        state = ckpt.load_latest()
+    if args.resume or args.resume_from:
+        resume_dir = ckpt.resolve_dir(args.resume_from) if args.resume_from else ckpt.latest_dir
+        state = ckpt.load_from_dir(resume_dir)
         if state is None:
+            if args.resume_from:
+                raise FileNotFoundError(f"No training_state.pt found in resume checkpoint: {resume_dir}")
             print("No checkpoint found to resume from. Starting fresh.")
         else:
             from peft import PeftModel
             from transformers import AutoModel
             base = AutoModel.from_pretrained(config.model_name)
-            model.encoder = PeftModel.from_pretrained(base, str(ckpt.latest_dir))
+            model.encoder = PeftModel.from_pretrained(base, str(resume_dir), is_trainable=True)
             model.encoder.enable_input_require_grads()
             model.to(device)
+            # Refresh optimizer against the loaded encoder params
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            if not trainable_params:
+                lora_count = sum(1 for n, _ in model.encoder.named_parameters() if "lora" in n.lower())
+                raise RuntimeError(
+                    "Resume checkpoint loaded no trainable parameters "
+                    f"({lora_count} LoRA tensors found)."
+                )
+            optimizer = torch.optim.AdamW(
+                trainable_params,
+                lr=lr, weight_decay=config.weight_decay, fused=(device.type == "cuda"),
+            )
             optimizer.load_state_dict(state["optimizer"])
-            scheduler.load_state_dict(state["scheduler"])
             if scaler and state.get("scaler"):
                 scaler.load_state_dict(state["scaler"])
             global_step = state["global_step"]
             start_epoch = state["epoch"]  # restart this epoch (reshuffled, at most save_every steps lost)
+            if args.resume_next_epoch:
+                start_epoch += 1
             torch.set_rng_state(state["rng_state"])
+            # Rebuild scheduler, then restore the exact saved scheduler state.
+            saved_total = state.get("total_steps", state.get("scheduler", {}).get("total_iters", total_steps))
+            scheduler = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=1.0, end_factor=0.0, total_iters=saved_total,
+            )
+            scheduler.load_state_dict(state["scheduler"])
             best_val_loss = ckpt.top5_best()
             # best_epoch_val_loss = best_val_loss
-            print(f"Resumed step={global_step} epoch={start_epoch} best_val_loss={best_val_loss:.6f}")
+            tb_step = latest_tensorboard_step(log_dir)
+            if tb_step is not None and tb_step > global_step:
+                log_step_offset = tb_step - global_step
+                print("TensorBoard log is ahead of checkpoint: "
+                      f"checkpoint_step={global_step} tb_step={tb_step}; "
+                      f"next_log_step={global_step + log_step_offset + 1}")
+            print(f"Resumed from {resume_dir} step={global_step} epoch={start_epoch} "
+                  f"best_val_loss={best_val_loss:.6f}")
 
     # Graceful shutdown: save latest on SIGINT
     interrupted = False
@@ -334,6 +515,14 @@ def main():
     # ── Training ───────────────────────────────────────────────────────────
     for epoch in range(start_epoch, max_epochs + 1):
         model.train()
+        train_ds.resample()
+        if base_train_triplets is not None:
+            train_ds.triplets = list(base_train_triplets)
+        white_count = replace_with_whitespace_triplets(train_ds, train_split, args.white_percent)
+        if white_count:
+            print(f"Whitespace triplets: replaced {white_count}/{len(train_ds)} train triplets "
+                  f"({args.white_percent:.2f}%)")
+        train_loader = _make_train_loader()
         pbar = tqdm(enumerate(train_loader), total=len(train_loader),
                      desc=f"Epoch {epoch}/{max_epochs}", unit="step",
                      dynamic_ncols=True, disable=args.dryrun)
@@ -347,7 +536,13 @@ def main():
                     batch["p_ids"].to(device), batch["p_mask"].to(device),
                     batch["n_ids"].to(device), batch["n_mask"].to(device),
                 )
-                loss = criterion(a_emb, p_emb, n_emb) / grad_accum
+                loss = criterion(
+                    a_emb,
+                    p_emb,
+                    n_emb,
+                    batch["weights"].to(device),
+                    batch["margins"].to(device),
+                ) / grad_accum
 
             if scaler:
                 scaler.scale(loss).backward()
@@ -358,16 +553,27 @@ def main():
 
             if (step + 1) % grad_accum == 0 or (step + 1) == len(train_loader):
                 if scaler:
+                    scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                if scaler:
                     scaler.step(optimizer); scaler.update()
                 else:
                     optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad()
                 global_step += 1
+                log_step = global_step + log_step_offset
 
                 # TensorBoard: per-step scalars
-                writer.add_scalar("lr", scheduler.get_last_lr()[0], global_step)
-                writer.add_scalar("loss/train", loss.item() * grad_accum, global_step)
+                writer.add_scalar("lr", scheduler.get_last_lr()[0], log_step)
+                writer.add_scalar("loss/train", loss.item() * grad_accum, log_step)
+
+                # Validate every val_every optimizer steps
+                if global_step % args.val_every == 0:
+                    val_loss = evaluate_val_loss(model, val_loader, criterion, device)
+                    writer.add_scalar("loss/val", val_loss, log_step)
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
 
                 # Checkpoint every save_every optimizer steps
                 if global_step % args.save_every == 0:
@@ -375,19 +581,19 @@ def main():
                     avg_train = epoch_loss / (step + 1) if (step + 1) > 0 else 0.0
                     saved = ckpt.save(model, optimizer, scheduler, scaler,
                                       global_step, epoch, avg_train, val_loss,
-                                      scheduler.get_last_lr()[0], device.type, use_amp)
-                    was_best = val_loss < best_val_loss
-                    if was_best:
+                                      scheduler.get_last_lr()[0], device.type, use_amp,
+                                      total_steps)
+                    if val_loss < best_val_loss:
                         best_val_loss = val_loss
 
                     # TensorBoard: checkpoint-level logging
-                    writer.add_scalar("loss/val", val_loss, global_step)
-                    log_lora_histograms(writer, model, global_step)
+                    writer.add_scalar("loss/val", val_loss, log_step)
+                    log_lora_histograms(writer, model, log_step)
                     if not args.dryrun:
                         emb_mat, emb_labels, emb_texts = build_test_embedding_data(
                             model, test_sentences, test_labels, tokenizer, device)
                         writer.add_embedding(emb_mat, metadata=emb_labels,
-                                             tag="style/test", global_step=global_step)
+                                             tag="style/test", global_step=log_step)
 
             # Live postfix
             cur_lr = scheduler.get_last_lr()[0]
@@ -403,7 +609,7 @@ def main():
                     vl = evaluate_val_loss(model, val_loader, criterion, device)
                     ckpt.save(model, optimizer, scheduler, scaler, global_step, epoch,
                               epoch_loss / max(step + 1, 1), vl, scheduler.get_last_lr()[0],
-                              device.type, use_amp)
+                              device.type, use_amp, total_steps)
                 except Exception:
                     pass
                 print(f"Saved at global_step={global_step}. Resume with --resume.")
@@ -416,7 +622,8 @@ def main():
             val_loss = evaluate_val_loss(model, val_loader, criterion, device)
             avg_train = epoch_loss / len(train_loader)
             ckpt.save(model, optimizer, scheduler, scaler, global_step, epoch,
-                      avg_train, val_loss, scheduler.get_last_lr()[0], device.type, use_amp)
+                      avg_train, val_loss, scheduler.get_last_lr()[0], device.type, use_amp,
+                      total_steps)
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
 
@@ -441,22 +648,29 @@ def main():
         if epoch == 1:
             cfg_text = json.dumps({
                 "model": config.model_name,
+                "languages": config.language_list,
                 "lora_r": config.lora_r, "lora_alpha": config.lora_alpha,
                 "batch_size": batch_size, "grad_accum": grad_accum,
                 "lr": lr, "weight_decay": config.weight_decay,
                 "margin": config.triplet_margin, "max_epochs": max_epochs,
+                "type_c_ratio": args.type_c_ratio,
+                "cross_lang_trait_ratio": args.cross_lang_trait_ratio,
+                "same_lang_hard_ratio": args.same_lang_hard_ratio,
+                "white_percent": args.white_percent,
                 "train_pairs": len(train_split), "val_pairs": len(val_split),
                 "test_pairs": len(test_pairs),
                 "train_triplets": len(train_ds), "val_triplets": len(val_ds),
                 "device": str(device), "dtype": str(dtype),
             }, indent=2, ensure_ascii=False)
-            writer.add_text("config", cfg_text, global_step)
+            writer.add_text("config", cfg_text, global_step + log_step_offset)
 
     # ── Training end ───────────────────────────────────────────────────────
     writer.add_hparams(
         {"lr": lr, "batch_size": batch_size, "lora_r": config.lora_r,
          "lora_alpha": config.lora_alpha, "weight_decay": config.weight_decay,
-         "margin": config.triplet_margin},
+         "margin": config.triplet_margin, "type_c_ratio": args.type_c_ratio,
+         "cross_lang_trait_ratio": args.cross_lang_trait_ratio,
+         "same_lang_hard_ratio": args.same_lang_hard_ratio},
         {"hparam/best_val_loss": best_val_loss},
     )
     writer.close()

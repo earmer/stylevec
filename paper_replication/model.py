@@ -27,7 +27,7 @@ def _get_all_linear_targets(model: nn.Module) -> list[str]:
 
 
 class StyleDistance(nn.Module):
-    def __init__(self, model_name: str = "FacebookAI/roberta-base"):
+    def __init__(self, model_name: str = "FacebookAI/xlm-roberta-base", lora_dropout: float = 0.1):
         super().__init__()
 
         base = AutoModel.from_pretrained(model_name)
@@ -37,7 +37,7 @@ class StyleDistance(nn.Module):
         lora_cfg = LoraConfig(
             r=8,
             lora_alpha=8,
-            lora_dropout=0.0,
+            lora_dropout=lora_dropout,
             target_modules="all-linear",
             bias="none",
         )
@@ -73,7 +73,7 @@ class StyleDistance(nn.Module):
         self.encoder.save_pretrained(str(path))
 
     @classmethod
-    def load(cls, path: str | Path, model_name: str = "FacebookAI/roberta-base") -> "StyleDistance":
+    def load(cls, path: str | Path, model_name: str = "FacebookAI/xlm-roberta-base") -> "StyleDistance":
         import json
         from peft import PeftModel
 
