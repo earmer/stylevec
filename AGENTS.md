@@ -4,12 +4,15 @@ This file is the working guide for future Codex sessions in `stylevec`.
 
 ## Project Snapshot
 
-`stylevec` is a research repository for style embeddings and style separation experiments on short text. The codebase is intentionally mixed and experimental: Python drives most data preparation, modeling, and evaluation, while `simlar/` provides a small Rust/PyO3 helper for similarity scoring.
+`stylevec` is a research repository for style embeddings and style separation experiments on short text. The codebase is intentionally mixed and experimental: Python drives most data preparation, modeling, and evaluation, while `tools/simlar/` provides a small Rust/PyO3 helper for similarity scoring.
 
 The repository includes active research code, reproducibility artifacts, generated outputs, and large local assets. Treat the tree as a lab notebook plus toolchain, not as a polished product repository.
 
 ## Core Principles
 
+- High priority: keep experiment folders self-contained. Preserve each folder's local assumptions, entrypoints, paths, and outputs instead of forcing a unified repo-wide architecture.
+- High priority: change scripts function-as-used. Keep single-purpose runners and research utilities shaped around their actual workflow; do not generalize them into full frameworks or shared orchestration unless the User explicitly asks.
+- High priority: hardcoded paths, constants, and one-off choices are acceptable in experiment code when they match the active workflow. When cleanup or relocation changes one of them, update every affected reference or rewrite the local script so it remains coherent.
 - Prefer the existing repository style and local patterns over introducing a new framework.
 - Keep changes narrow and aligned with the directory that owns the behavior.
 - Preserve data pipeline resumability, checkpointing, and idempotency whenever touching scripts that process corpora or model outputs.
@@ -25,10 +28,10 @@ The repository includes active research code, reproducibility artifacts, generat
 - `lora/`: LoRA fine-tuning experiments, plots, evaluation code, and training utilities.
 - `paper_replication/`: StyleDistance replication code, evaluation scripts, configuration, logs, and paper sources.
 - `shared/`: reusable configuration, device, dataset, classifier, and evaluation utilities.
-- `simlar/`: Rust/PyO3 batch similarity library.
+- `tools/simlar/`: Rust/PyO3 batch similarity library.
 - `verifier/`: algorithm notes and verification material.
-- `datasets/`: local datasets and corpora that are not meant to be treated like source code.
-- `cache/`, `base-models/`, `paper_replication/checkpoints/`, and similar folders: large local assets and derived artifacts.
+- `data/`: local datasets and corpora that are not meant to be treated like source code.
+- `artifacts/`, `artifacts/base-models/`, `artifacts/paper_replication/checkpoints/`, and similar folders: large local assets and derived artifacts.
 
 ## Typical Working Areas
 
@@ -47,12 +50,12 @@ NOTE: Should use `uv run...` `uv add ...` instead of raw `pip ...` `python ...`.
 
 ### Rust extension
 
-`simlar/` is a small experimental Rust/PyO3 aid. This repo is mainly Python.
+`tools/simlar/` is a small experimental Rust/PyO3 aid. This repo is mainly Python.
 
 Typical workflow:
 
 ```bash
-cd simlar
+cd tools/simlar
 maturin develop
 ```
 
@@ -64,14 +67,14 @@ Use the project README as the first source of truth for setup, but the usual flo
 
 ```bash
 uv sync
-python download_base_models.py
+uv run python download_base_models.py
 ```
 
 If the Rust helper is needed:
 
 ```bash
 pip install maturin
-cd simlar
+cd tools/simlar
 maturin develop
 ```
 
@@ -108,7 +111,7 @@ Choose validation that matches the size of the change.
 
 ### For Rust changes
 
-- Run `cargo test` in `simlar/` when the build or logic changes.
+- Run `cargo test` in `tools/simlar/` when the build or logic changes.
 - If the Python extension boundary changed, verify that `maturin develop` still succeeds.
 
 ### For documentation-only changes

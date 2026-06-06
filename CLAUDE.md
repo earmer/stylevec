@@ -6,12 +6,15 @@ Never mention Claude, Sonnet, Opus, Haiku, Anthropic, "Co-authored-by", "assiste
 
 ## Project Overview
 
-`stylevec` is a research repository for style embeddings and style separation experiments on short text. Python drives most data preparation, modeling, and evaluation. `simlar/` is a small experimental Rust/PyO3 aid, not a separate major surface. This repo is mainly Python.
+`stylevec` is a research repository for style embeddings and style separation experiments on short text. Python drives most data preparation, modeling, and evaluation. `tools/simlar/` is a small experimental Rust/PyO3 aid, not a separate major surface. This repo is mainly Python.
 
 The tree includes active research code, reproducibility artifacts, generated outputs, and large local assets. Treat it like a lab notebook plus toolchain, not a polished product repository.
 
 ## Core Rules
 
+- High priority: keep experiment folders self-contained. Preserve each folder's local assumptions, entrypoints, paths, and outputs instead of forcing a unified repo-wide architecture.
+- High priority: change scripts function-as-used. Keep single-purpose runners and research utilities shaped around their actual workflow; do not generalize them into full frameworks or shared orchestration unless the User explicitly asks.
+- High priority: hardcoded paths, constants, and one-off choices are acceptable in experiment code when they match the active workflow. When cleanup or relocation changes one of them, update every affected reference or rewrite the local script so it remains coherent.
 - Prefer the existing repository style and local patterns over introducing a new framework.
 - Keep changes narrow and aligned with the directory that owns the behavior.
 - Prefer `uv run` for project commands and `uv add` for project dependencies when practical.
@@ -36,10 +39,10 @@ The tree includes active research code, reproducibility artifacts, generated out
 - `lora/`: LoRA fine-tuning experiments, plots, evaluation code, and training utilities.
 - `paper_replication/`: StyleDistance replication code, evaluation scripts, configuration, logs, and paper sources.
 - `shared/`: reusable configuration, device, dataset, classifier, and evaluation utilities.
-- `simlar/`: Rust/PyO3 batch similarity library.
-- `verifier/`: algorithm notes and verification material.
-- `datasets/`: local datasets and corpora that are not meant to be treated like source code.
-- `cache/`, `base-models/`, `paper_replication/checkpoints/`, and similar folders: large local assets and derived artifacts.
+- `tools/simlar/`: Rust/PyO3 batch similarity library.
+- `docs/verifier/`: algorithm notes and verification material.
+- `data/`: local datasets and corpora that are not meant to be treated like source code.
+- `artifacts/`, `artifacts/base-models/`, `artifacts/paper_replication/checkpoints/`, and similar folders: large local assets and derived artifacts.
 
 ## Setup
 
@@ -53,7 +56,7 @@ Build the Rust helper only when needed:
 
 ```bash
 pip install maturin
-cd simlar
+cd tools/simlar
 maturin develop
 ```
 
@@ -87,14 +90,14 @@ There are no automated tests or linting configured.
 - `lora/` - current focus. `model.py` defines the LoRA-backed style model; `train.py` runs training and evaluation; `data.py` handles cached loading.
 - `paper_replication/` - StyleDistance replication and evaluation pipeline.
 - `shared/` - shared config, data loading, classifiers, and evaluation helpers.
-- `simlar/` - small Rust/PyO3 helper for batched similarity scoring.
+- `tools/simlar/` - small Rust/PyO3 helper for batched similarity scoring.
 
 ### Models
 
 - **Qwen3-0.6B** (CausalLM, local) - 28 transformer layers, hidden_size=1024
 - **Qwen3-embedding-0.6b / 8b** - via Ollama (naive experiments)
-- Local weights stored in `base-models/` (not git-tracked)
-- Pre-computed embeddings cached in `cache/*.npz` (not git-tracked)
+- Local weights stored in `artifacts/base-models/` (not git-tracked)
+- Pre-computed embeddings cached in `artifacts/cache/*.npz` (not git-tracked)
 
 ### Key Metrics
 
@@ -106,7 +109,7 @@ There are no automated tests or linting configured.
 
 - If the change is local, run the relevant script or a focused smoke test.
 - If the change affects shared utilities, run the smallest realistic end-to-end path that exercises them.
-- For Rust changes in `simlar/`, run `cargo test` when practical and verify `maturin develop` still works if the Python boundary changed.
+- For Rust changes in `tools/simlar/`, run `cargo test` when practical and verify `maturin develop` still works if the Python boundary changed.
 
 ### lora/train.py CLI Flags
 
