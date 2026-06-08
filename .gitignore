@@ -36,6 +36,7 @@ data/datasets/msynthstel/corpora/
 data/datasets/corpora/
 data/genshin/*.db
 data/genshin/*.json
+data/paratarget/
 data/datasets/msynthstel/data/*.parquet
 data/datasets/msynthstel/data/translated/
 data/datasets/msynthstel/analysis/
