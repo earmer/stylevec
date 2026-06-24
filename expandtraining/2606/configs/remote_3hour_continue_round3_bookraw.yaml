@@ -1,0 +1,94 @@
+runtime:
+  mode: train
+  device: cuda
+  distributed: accelerate
+  precision: bf16
+  seed: 43
+
+paths:
+  genshin_db: data/genshin/genshin.db
+  top_speakers: data/paratarget/speakers_top100.json
+  paratarget_jsonl: data/paratarget/generations_pairwise_validation_2p5cny.jsonl
+  msynthstel_train: data/datasets/msynthstel/data/train-00000-of-00001.parquet
+  msynthstel_test: data/datasets/msynthstel/data/test-00000-of-00001.parquet
+  bookraw_cleaned: data/datasets/corpora/bookraw/books_cleaned.parquet
+  base_model: artifacts/base-models/qwen-3-0.6b
+
+data:
+  speakers: 100
+  genshin_lines_per_speaker: 0
+  paratarget_jobs: 0
+  paratarget_per_target_cap: 0
+  paratarget_min_length_ratio: 0.5
+  paratarget_max_length_ratio: 1.8
+  msynthstel_features: 0
+  msynthstel_rows_per_feature: 0
+  bookraw_enabled: true
+  bookraw_authors: 0
+  bookraw_segments_per_author: 0
+  bookraw_segments_per_work: 0
+  bookraw_min_chars: 160
+  bookraw_max_chars: 3000
+  bookraw_min_segments_per_author: 16
+  bookraw_min_segments_per_work: 4
+  bookraw_triplets_per_rule: 24000
+  min_chars: 2
+  max_chars: 220
+  max_triplets: 220000
+
+model:
+  base_model_path: artifacts/base-models/qwen-3-0.6b
+  max_length: 192
+  projection_dim: 256
+  dropout: 0.05
+  gradient_checkpointing: true
+  layer_fusion:
+    mode: last
+    layers: []
+  lora:
+    enabled: true
+    rank: 64
+    alpha: 128
+    dropout: 0.05
+    targets: [q_proj, k_proj, v_proj, o_proj]
+
+weights:
+  genshin_real: 1.0
+  paratarget: 0.75
+  msynthstel: 0.16
+  bookraw_same_work: 0.35
+  bookraw_cross_work: 0.45
+  bookraw_author_negative: 0.40
+
+margins:
+  easy: 0.08
+  medium: 0.12
+  hard: 0.18
+  adversarial: 0.22
+
+train:
+  batch_size: 16
+  grad_accum: 10
+  max_steps: 12000
+  max_seconds: 10800
+  epochs: 6
+  lr: 1.2e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.03
+  max_grad_norm: 1.0
+  num_workers: 8
+  pin_memory: true
+  rule_balanced_batches: true
+  allow_manifest_mismatch_on_resume: true
+
+regularization:
+  variance_weight: 0.012
+  covariance_weight: 0.006
+  min_dim_std: 0.035
+
+validation:
+  batch_size: 16
+  max_samples: 1024
+  max_triplets: 4096
+  max_batches: 32
+  bookraw_triplets_per_rule: 200

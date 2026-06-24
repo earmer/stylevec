@@ -1,0 +1,94 @@
+runtime:
+  mode: dryrun
+  device: auto
+  distributed: none
+  precision: fp32
+  seed: 42
+
+paths:
+  genshin_db: data/genshin/genshin.db
+  top_speakers: data/paratarget/speakers_top100.json
+  paratarget_jsonl: data/paratarget/generations_pairwise_validation_2p5cny.jsonl
+  msynthstel_train: data/datasets/msynthstel/data/train-00000-of-00001.parquet
+  msynthstel_test: data/datasets/msynthstel/data/test-00000-of-00001.parquet
+  bookraw_cleaned: data/datasets/corpora/bookraw/books_cleaned.parquet
+  base_model: artifacts/base-models/qwen-3-0.6b
+
+data:
+  speakers: 4
+  genshin_lines_per_speaker: 4
+  paratarget_jobs: 4
+  paratarget_per_target_cap: 8
+  paratarget_min_length_ratio: 0.5
+  paratarget_max_length_ratio: 1.8
+  msynthstel_features: 3
+  msynthstel_rows_per_feature: 3
+  bookraw_enabled: true
+  bookraw_authors: 4
+  bookraw_segments_per_author: 8
+  bookraw_segments_per_work: 4
+  bookraw_min_chars: 160
+  bookraw_max_chars: 1800
+  bookraw_min_segments_per_author: 4
+  bookraw_min_segments_per_work: 2
+  bookraw_triplets_per_rule: 2
+  min_chars: 2
+  max_chars: 180
+  max_triplets: 16
+
+model:
+  base_model_path: artifacts/base-models/qwen-3-0.6b
+  max_length: 96
+  projection_dim: 128
+  dropout: 0.0
+  layer_fusion:
+    mode: last
+    layers: []
+  lora:
+    enabled: true
+    rank: 4
+    alpha: 8
+    dropout: 0.0
+    targets: [q_proj, k_proj, v_proj, o_proj]
+
+weights:
+  genshin_real: 1.0
+  paratarget: 0.75
+  msynthstel: 0.14
+  bookraw_same_work: 0.35
+  bookraw_cross_work: 0.45
+  bookraw_author_negative: 0.40
+
+margins:
+  easy: 0.08
+  medium: 0.12
+  hard: 0.18
+  adversarial: 0.22
+
+train:
+  batch_size: 2
+  grad_accum: 1
+  max_steps: 1
+  epochs: 1
+  lr: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.0
+  max_grad_norm: 1.0
+  num_workers: 0
+  pin_memory: false
+  rule_balanced_batches: true
+
+regularization:
+  variance_weight: 0.01
+  covariance_weight: 0.005
+  min_dim_std: 0.03
+
+validation:
+  batch_size: 2
+  max_samples: 16
+  max_triplets: 8
+  max_batches: 2
+  bookraw_triplets_per_rule: 1
+
+logging:
+  tensorboard_dir: expandtraining/2606/tf-logs

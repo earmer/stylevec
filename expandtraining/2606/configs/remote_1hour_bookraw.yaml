@@ -1,0 +1,92 @@
+runtime:
+  mode: train
+  device: cuda
+  distributed: accelerate
+  precision: bf16
+  seed: 42
+
+paths:
+  genshin_db: data/genshin/genshin.db
+  top_speakers: data/paratarget/speakers_top100.json
+  paratarget_jsonl: data/paratarget/generations_pairwise_validation_2p5cny.jsonl
+  msynthstel_train: data/datasets/msynthstel/data/train-00000-of-00001.parquet
+  msynthstel_test: data/datasets/msynthstel/data/test-00000-of-00001.parquet
+  bookraw_cleaned: data/datasets/corpora/bookraw/books_cleaned.parquet
+  base_model: artifacts/base-models/qwen-3-0.6b
+
+data:
+  speakers: 100
+  genshin_lines_per_speaker: 80
+  paratarget_jobs: 20000
+  paratarget_per_target_cap: 500
+  paratarget_min_length_ratio: 0.5
+  paratarget_max_length_ratio: 1.8
+  msynthstel_features: 48
+  msynthstel_rows_per_feature: 48
+  bookraw_enabled: true
+  bookraw_authors: 48
+  bookraw_segments_per_author: 384
+  bookraw_segments_per_work: 128
+  bookraw_min_chars: 160
+  bookraw_max_chars: 3000
+  bookraw_min_segments_per_author: 16
+  bookraw_min_segments_per_work: 4
+  bookraw_triplets_per_rule: 4500
+  min_chars: 2
+  max_chars: 220
+  max_triplets: 60000
+
+model:
+  base_model_path: artifacts/base-models/qwen-3-0.6b
+  max_length: 192
+  projection_dim: 256
+  dropout: 0.05
+  layer_fusion:
+    mode: last
+    layers: []
+  lora:
+    enabled: true
+    rank: 64
+    alpha: 128
+    dropout: 0.05
+    targets: [q_proj, k_proj, v_proj, o_proj]
+
+weights:
+  genshin_real: 1.0
+  paratarget: 0.75
+  msynthstel: 0.14
+  bookraw_same_work: 0.35
+  bookraw_cross_work: 0.45
+  bookraw_author_negative: 0.40
+
+margins:
+  easy: 0.08
+  medium: 0.12
+  hard: 0.18
+  adversarial: 0.22
+
+train:
+  batch_size: 48
+  grad_accum: 3
+  max_steps: 3000
+  max_seconds: 3600
+  epochs: 3
+  lr: 2.0e-4
+  weight_decay: 0.01
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  num_workers: 4
+  pin_memory: true
+  rule_balanced_batches: true
+
+regularization:
+  variance_weight: 0.01
+  covariance_weight: 0.005
+  min_dim_std: 0.03
+
+validation:
+  batch_size: 48
+  max_samples: 512
+  max_triplets: 2048
+  max_batches: 32
+  bookraw_triplets_per_rule: 100
