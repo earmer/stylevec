@@ -91,3 +91,9 @@ def config_hash(config: dict[str, Any]) -> str:
 def config_snapshot(config: dict[str, Any]) -> str:
     clean = {key: value for key, value in config.items() if not key.startswith("_")}
     return yaml.safe_dump(clean, allow_unicode=True, sort_keys=True)
+
+
+def configured_matryoshka_dims(config: dict[str, Any]) -> list[int]:
+    projection_dim = int(config["model"]["projection_dim"])
+    configured = config.get("regularization", {}).get("matryoshka_dims", [])
+    return sorted({int(value) for value in configured if 0 < int(value) < projection_dim})

@@ -17,9 +17,9 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from build_triplets import build_training_triplets
-from config import config_hash, config_snapshot, load_config, workspace_dir
+from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
-from losses import embedding_spread_loss, weighted_triplet_margin_loss
+from losses import embedding_spread_loss, matryoshka_triplet_margin_loss, weighted_triplet_margin_loss
 from model import (
     build_qwen_style_encoder,
     encode_triplet,
@@ -150,15 +150,19 @@ def load_resume_state(
     return int(state["global_step"]), int(state["epoch"])
 
 
-def balanced_triplet_order(triplets: list[Any], seed: int) -> list[Any]:
+def balanced_triplet_order(
+    triplets: list[Any],
+    seed: int,
+    epoch: int = 0,
+) -> list[Any]:
     buckets: dict[str, list[Any]] = {}
-    generator = random.Random(seed)
+    generator = random.Random(seed + epoch)
     for row in triplets:
         buckets.setdefault(row.rule, []).append(row)
     for rows in buckets.values():
         generator.shuffle(rows)
     ordered: list[Any] = []
-    rules = sorted(buckets)
+    rules = _rotated(sorted(buckets), epoch)
     while rules:
         next_rules: list[str] = []
         for rule in rules:
@@ -171,23 +175,45 @@ def balanced_triplet_order(triplets: list[Any], seed: int) -> list[Any]:
     return ordered
 
 
-def build_loaders(config: dict[str, Any], tokenizer: Any, triplets: list[Any]) -> tuple[DataLoader, DataLoader]:
+def _rotated(values: list[str], offset: int) -> list[str]:
+    if not values:
+        return []
+    offset = offset % len(values)
+    return values[offset:] + values[:offset]
+
+
+def order_train_triplets(config: dict[str, Any], train_triplets: list[Any], epoch: int) -> list[Any]:
+    if not bool(config["train"].get("rule_balanced_batches", False)):
+        rows = list(train_triplets)
+        generator = random.Random(int(config["runtime"]["seed"]) + epoch)
+        generator.shuffle(rows)
+        return rows
+    return balanced_triplet_order(
+        train_triplets,
+        int(config["runtime"]["seed"]),
+        epoch=epoch if bool(config["train"].get("rule_balance_rotate_each_epoch", True)) else 0,
+    )
+
+
+def build_loaders(
+    config: dict[str, Any],
+    tokenizer: Any,
+    triplets: list[Any],
+) -> tuple[TripletTextDataset, DataLoader, DataLoader]:
     collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]))
     train_triplets = [row for row in triplets if row.split == "train"]
-    if bool(config["train"].get("rule_balanced_batches", False)):
-        train_triplets = balanced_triplet_order(train_triplets, int(config["runtime"]["seed"]))
-    train_dataset = TripletTextDataset(train_triplets, "train")
+    train_dataset = TripletTextDataset(order_train_triplets(config, train_triplets, epoch=0), "train")
     val_dataset = TripletTextDataset(triplets, "val")
     generator = torch.Generator()
     generator.manual_seed(int(config["runtime"]["seed"]))
+    train_loader_kwargs = dataloader_worker_kwargs(config["train"])
     train_loader = DataLoader(
         train_dataset,
         batch_size=int(config["train"]["batch_size"]),
         shuffle=not bool(config["train"].get("rule_balanced_batches", False)),
         generator=generator,
-        num_workers=int(config["train"].get("num_workers", 0)),
         collate_fn=collate,
-        pin_memory=bool(config["train"].get("pin_memory", False)),
+        **train_loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -196,7 +222,38 @@ def build_loaders(config: dict[str, Any], tokenizer: Any, triplets: list[Any]) -
         num_workers=0,
         collate_fn=collate,
     )
-    return train_loader, val_loader
+    return train_dataset, train_loader, val_loader
+
+
+def dataloader_worker_kwargs(section: dict[str, Any]) -> dict[str, Any]:
+    worker_count = int(section.get("num_workers", 0))
+    kwargs: dict[str, Any] = {
+        "num_workers": worker_count,
+        "pin_memory": bool(section.get("pin_memory", False)),
+    }
+    if worker_count > 0:
+        kwargs["persistent_workers"] = bool(section.get("persistent_workers", False)) and not bool(
+            section.get("rule_balance_rotate_each_epoch", False)
+        )
+        kwargs["prefetch_factor"] = int(section.get("prefetch_factor", 2))
+    return kwargs
+
+
+def build_optimizer(
+    parameters: list[torch.nn.Parameter],
+    config: dict[str, Any],
+) -> torch.optim.Optimizer:
+    kwargs: dict[str, Any] = {
+        "lr": float(config["train"]["lr"]),
+        "weight_decay": float(config["train"]["weight_decay"]),
+    }
+    if bool(config["train"].get("fused_adamw", False)) and torch.cuda.is_available():
+        kwargs["fused"] = True
+    try:
+        return torch.optim.AdamW(parameters, **kwargs)
+    except TypeError:
+        kwargs.pop("fused", None)
+        return torch.optim.AdamW(parameters, **kwargs)
 
 
 def train_from_config(config_path: str, run_name: str, resume: str | None = None) -> Path:
@@ -218,8 +275,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
         if tokenizer.eos_token is None:
             raise ValueError("tokenizer has neither pad_token nor eos_token")
         tokenizer.pad_token = tokenizer.eos_token
-    train_loader, val_loader = build_loaders(config, tokenizer, triplets)
+    train_dataset, train_loader, val_loader = build_loaders(config, tokenizer, triplets)
     eval_val_loader = val_loader
+    raw_train_triplets = [row for row in triplets if row.split == "train"]
 
     requested_device = str(config["runtime"]["device"])
     use_accelerate = str(config["runtime"].get("distributed", "none")) == "accelerate" or int(os.environ.get("WORLD_SIZE", "1")) > 1
@@ -245,11 +303,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if not trainable:
         raise ValueError("model has no trainable parameters")
-    optimizer = torch.optim.AdamW(
-        trainable,
-        lr=float(config["train"]["lr"]),
-        weight_decay=float(config["train"]["weight_decay"]),
-    )
+    optimizer = build_optimizer(trainable, config)
     total_steps = int(config["train"]["max_steps"])
     scheduler = make_scheduler(optimizer, float(config["train"].get("warmup_ratio", 0.0)), total_steps)
 
@@ -273,6 +327,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             val_loader,
             scheduler,
         )
+        eval_val_loader = val_loader
         is_main = accelerator.is_main_process
     else:
         is_main = True
@@ -294,25 +349,40 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     spread_variance_weight = float(regularization.get("variance_weight", 0.0))
     spread_covariance_weight = float(regularization.get("covariance_weight", 0.0))
     spread_min_dim_std = float(regularization.get("min_dim_std", 0.0))
+    matryoshka_weight = float(regularization.get("matryoshka_weight", 0.0))
+    matryoshka_dims = configured_matryoshka_dims(config)
+    combine_forward = bool(config["train"].get("combine_triplet_forward", False))
+    non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
+    log_every_steps = max(1, int(config.get("logging", {}).get("train_every_steps", 1)))
     stop_time = time.monotonic() + max_seconds if max_seconds > 0.0 else 0.0
     optimizer.zero_grad(set_to_none=True)
     model.train()
     last_epoch = start_epoch
     for epoch in range(start_epoch, int(config["train"]["epochs"])):
         last_epoch = epoch
+        train_dataset.set_triplets(order_train_triplets(config, raw_train_triplets, epoch))
         for batch_index, batch in enumerate(train_loader):
             if should_stop(global_step, total_steps, stop_time):
                 break
-            batch = move_batch_to_device(batch, device)
+            batch = move_batch_to_device(batch, device, non_blocking=non_blocking)
             if use_accelerate:
                 with accelerator.accumulate(model):
-                    anchor, positive, negative, norms = encode_triplet(model, batch)
+                    anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
                     loss, stats = weighted_triplet_margin_loss(
                         anchor,
                         positive,
                         negative,
                         batch["margin"],
                         batch["weight"],
+                    )
+                    matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
+                        anchor,
+                        positive,
+                        negative,
+                        batch["margin"],
+                        batch["weight"],
+                        matryoshka_dims,
+                        matryoshka_weight,
                     )
                     embeddings = torch.cat([anchor, positive, negative], dim=0)
                     spread_loss, spread_stats = embedding_spread_loss(
@@ -321,7 +391,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         spread_variance_weight,
                         spread_covariance_weight,
                     )
-                    loss = loss + spread_loss
+                    loss = loss + spread_loss + matryoshka_loss
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
                         grad_norm = accelerator.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -329,17 +399,37 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         scheduler.step()
                         optimizer.zero_grad(set_to_none=True)
                         global_step += 1
-                        if is_main and writer is not None:
-                            log_train_step(writer, loss, stats, spread_stats, norms, optimizer, grad_norm, global_step)
+                        if is_main and writer is not None and global_step % log_every_steps == 0:
+                            log_train_step(
+                                writer,
+                                loss,
+                                stats,
+                                spread_stats,
+                                matryoshka_stats,
+                                norms,
+                                optimizer,
+                                grad_norm,
+                                global_step,
+                                batch,
+                            )
             else:
                 with autocast_context(device, precision):
-                    anchor, positive, negative, norms = encode_triplet(model, batch)
+                    anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
                     loss, stats = weighted_triplet_margin_loss(
                         anchor,
                         positive,
                         negative,
                         batch["margin"],
                         batch["weight"],
+                    )
+                    matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
+                        anchor,
+                        positive,
+                        negative,
+                        batch["margin"],
+                        batch["weight"],
+                        matryoshka_dims,
+                        matryoshka_weight,
                     )
                     embeddings = torch.cat([anchor, positive, negative], dim=0)
                     spread_loss, spread_stats = embedding_spread_loss(
@@ -348,7 +438,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         spread_variance_weight,
                         spread_covariance_weight,
                     )
-                    loss = loss + spread_loss
+                    loss = loss + spread_loss + matryoshka_loss
                     scaled_loss = loss / grad_accum
                 scaled_loss.backward()
                 if (batch_index + 1) % grad_accum == 0:
@@ -357,8 +447,19 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
                     global_step += 1
-                    if writer is not None:
-                        log_train_step(writer, loss, stats, spread_stats, norms, optimizer, grad_norm, global_step)
+                    if writer is not None and global_step % log_every_steps == 0:
+                        log_train_step(
+                            writer,
+                            loss,
+                            stats,
+                            spread_stats,
+                            matryoshka_stats,
+                            norms,
+                            optimizer,
+                            grad_norm,
+                            global_step,
+                            batch,
+                        )
 
             if should_stop(global_step, total_steps, stop_time):
                 break
@@ -376,6 +477,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             eval_val_loader,
             device,
             max_batches=int(config["validation"].get("max_batches", 4)),
+            prefix_dims=matryoshka_dims,
+            combine_forward=combine_forward,
+            non_blocking=non_blocking,
         )
         if writer is not None:
             for key, value in val_metrics.items():
@@ -405,15 +509,42 @@ def should_stop(global_step: int, total_steps: int, stop_time: float) -> bool:
     return stop_time > 0.0 and time.monotonic() >= stop_time
 
 
+def matryoshka_step_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    margins: torch.Tensor,
+    weights: torch.Tensor,
+    prefix_dims: list[int],
+    loss_weight: float,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if loss_weight <= 0.0 or not prefix_dims:
+        zero = anchor.new_tensor(0.0)
+        return zero, {"loss": zero.detach()}
+    loss, stats = matryoshka_triplet_margin_loss(
+        anchor,
+        positive,
+        negative,
+        margins,
+        weights,
+        prefix_dims,
+    )
+    weighted = loss * float(loss_weight)
+    stats["weighted_loss"] = weighted.detach()
+    return weighted, stats
+
+
 def log_train_step(
     writer: SummaryWriter,
     loss: torch.Tensor,
     stats: dict[str, torch.Tensor],
     spread_stats: dict[str, torch.Tensor],
+    matryoshka_stats: dict[str, torch.Tensor],
     norms: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     grad_norm: torch.Tensor | float,
     global_step: int,
+    batch: dict[str, Any],
 ) -> None:
     writer.add_scalar("loss/train", float(loss.detach().float().cpu().item()), global_step)
     writer.add_scalar("cosine/positive_mean", float(stats["pos_cos"].mean().cpu().item()), global_step)
@@ -424,11 +555,34 @@ def log_train_step(
     writer.add_scalar("spread/covariance_loss", float(spread_stats["covariance_loss"].float().cpu().item()), global_step)
     writer.add_scalar("spread/top_eigen_ratio", float(spread_stats["top_eigen_ratio"].float().cpu().item()), global_step)
     writer.add_scalar("spread/effective_rank", float(spread_stats["effective_rank"].float().cpu().item()), global_step)
+    for key, value in matryoshka_stats.items():
+        writer.add_scalar(f"matryoshka/{key}", float(value.float().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_mean", float(norms.detach().float().mean().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_std", float(norms.detach().float().std(unbiased=False).cpu().item()), global_step)
     writer.add_scalar("optim/lr", float(optimizer.param_groups[0]["lr"]), global_step)
     grad_value = grad_norm.detach().float().cpu().item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
     writer.add_scalar("optim/grad_norm", grad_value, global_step)
+    log_rule_batch_stats(writer, stats, batch, global_step)
+
+
+def log_rule_batch_stats(
+    writer: SummaryWriter,
+    stats: dict[str, torch.Tensor],
+    batch: dict[str, Any],
+    global_step: int,
+) -> None:
+    rules = list(batch["rule"])
+    weighted_loss = (stats["raw_loss"].detach() * batch["weight"].detach()).float().cpu()
+    violations = stats["violations"].detach().float().cpu()
+    pos_cos = stats["pos_cos"].detach().float().cpu()
+    neg_cos = stats["neg_cos"].detach().float().cpu()
+    for rule in sorted(set(rules)):
+        mask = torch.tensor([value == rule for value in rules], dtype=torch.bool)
+        writer.add_scalar(f"loss_by_rule/{rule}", float(weighted_loss[mask].mean().item()), global_step)
+        writer.add_scalar(f"triplet_by_rule/{rule}_violation_ratio", float(violations[mask].mean().item()), global_step)
+        writer.add_scalar(f"cosine_by_rule/{rule}_positive_mean", float(pos_cos[mask].mean().item()), global_step)
+        writer.add_scalar(f"cosine_by_rule/{rule}_negative_mean", float(neg_cos[mask].mean().item()), global_step)
+        writer.add_scalar(f"rule_mix/{rule}", float(mask.float().mean().item()), global_step)
 
 
 def main() -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import Counter, defaultdict
 from typing import Any
 
@@ -8,7 +9,7 @@ from import_bookraw import load_bookraw_samples
 from import_genshin import load_genshin_samples, load_top_speakers
 from import_msynthstel import load_msynthstel_samples
 from import_paratarget import load_paratarget_samples
-from records import SampleRecord, TripletRecord, stable_id
+from records import SampleRecord, TripletRecord, normalize_text, stable_id
 
 
 def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord], dict[str, Any]]:
@@ -27,6 +28,9 @@ def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord]
     triplets.extend(build_msynthstel_triplets(config, msynthstel_samples, "val"))
     triplets.extend(build_bookraw_triplets(config, bookraw_samples, "train"))
     triplets.extend(build_bookraw_triplets(config, bookraw_samples, "val"))
+    samples = genshin_samples + paratarget_samples + msynthstel_samples + bookraw_samples
+    triplets.extend(build_length_course_triplets(config, samples, "train"))
+    triplets.extend(build_length_course_triplets(config, samples, "val"))
 
     triplets = cap_triplets(config, triplets)
     require_rule_coverage(config, triplets)
@@ -36,7 +40,7 @@ def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord]
         raise ValueError("triplet builder produced no val triplets")
 
     counts = Counter()
-    for sample in genshin_samples + paratarget_samples + msynthstel_samples + bookraw_samples:
+    for sample in samples:
         counts[f"samples/{sample.domain}/{sample.split}"] += 1
     for triplet in triplets:
         counts[f"triplets/{triplet.rule}/{triplet.split}"] += 1
@@ -178,6 +182,7 @@ def build_paratarget_triplets(
             continue
         positive = target_refs[index % len(target_refs)]
         negative_source = source_refs[index % len(source_refs)]
+        source_text = str(generated.meta["source_text"])
         add_triplet(
             triplets,
             generated.text,
@@ -189,7 +194,23 @@ def build_paratarget_triplets(
             float(margins["hard"]),
             {"target_speaker": target, "source_speaker": source},
         )
-        source_text = str(generated.meta["source_text"])
+        if bool(config["data"].get("paratarget_original_push_enabled", False)):
+            add_triplet(
+                triplets,
+                generated.text,
+                positive.text,
+                source_text,
+                "paratarget_original_push",
+                split,
+                float(weights.get("paratarget_original_push", float(weights["paratarget"]) * 0.12)),
+                float(margins["easy"]),
+                {
+                    "target_speaker": target,
+                    "source_speaker": source,
+                    "source_length": len(source_text),
+                    "generated_length": len(generated.text),
+                },
+            )
         source_positive = source_refs[(index + 1) % len(source_refs)]
         add_triplet(
             triplets,
@@ -272,6 +293,151 @@ def build_msynthstel_triplets(
                     {"feature": feature, "negative_feature": other_feature},
                 )
     return triplets
+
+
+def build_length_course_triplets(
+    config: dict[str, Any],
+    samples: list[SampleRecord],
+    split: str,
+) -> list[TripletRecord]:
+    if not bool(config["data"].get("length_course_enabled", False)):
+        return []
+    weights = config["weights"]
+    margins = config["margins"]
+    max_parts = int(config["data"].get("length_course_parts", 2))
+    max_chars = int(config["data"].get("length_course_max_chars", 6000))
+    limit = length_course_domain_limit(config, split)
+
+    grouped: defaultdict[tuple[str, str], list[SampleRecord]] = defaultdict(list)
+    domain_rows: defaultdict[str, list[SampleRecord]] = defaultdict(list)
+    for sample in samples:
+        key = length_course_key(sample, split)
+        if key is None:
+            continue
+        grouped[key].append(sample)
+        domain_rows[sample.domain].append(sample)
+
+    negative_index = {
+        domain: build_length_negative_index(rows)
+        for domain, rows in domain_rows.items()
+        if len({row.style_id for row in rows}) >= 2
+    }
+    counts: defaultdict[str, int] = defaultdict(int)
+    triplets: list[TripletRecord] = []
+    for domain, source in sorted(grouped):
+        rows = grouped[(domain, source)]
+        if len(rows) < 2 or domain not in negative_index:
+            continue
+        rows = sorted(rows, key=lambda row: (sample_length(row), row.sample_id))
+        for index, anchor in enumerate(rows):
+            if counts[domain] >= limit:
+                break
+            positive_text = combine_same_source_texts(rows, index, max_parts, max_chars)
+            if positive_text is None:
+                continue
+            negative = pick_similar_length_negative(
+                negative_index[domain],
+                source,
+                len(positive_text),
+            )
+            if negative is None:
+                continue
+            add_triplet(
+                triplets,
+                anchor.text,
+                positive_text,
+                negative.text,
+                f"length_course_{domain}",
+                split,
+                float(weights.get("length_course", 0.08)),
+                float(margins["easy"]),
+                {
+                    "domain": domain,
+                    "source": source,
+                    "negative_source": negative.style_id,
+                    "anchor_length": len(anchor.text),
+                    "positive_length": len(positive_text),
+                    "negative_length": len(negative.text),
+                },
+            )
+            counts[domain] += 1
+    return triplets
+
+
+def length_course_key(sample: SampleRecord, split: str) -> tuple[str, str] | None:
+    if sample.split != split:
+        return None
+    if sample.domain == "genshin":
+        return sample.domain, sample.style_id
+    if sample.domain == "msynthstel" and sample.meta.get("polarity") == "positive":
+        return sample.domain, sample.style_id
+    if sample.domain == "bookraw":
+        return sample.domain, sample.style_id
+    return None
+
+
+def length_course_domain_limit(config: dict[str, Any], split: str) -> int:
+    key = "length_course_triplets_per_domain"
+    if split == "train":
+        default = max(1, int(int(config["data"]["max_triplets"]) * 0.02))
+        return int(config["data"].get(key, default))
+    default = max(1, int(int(config["validation"].get("max_triplets", 100)) * 0.02))
+    return int(config["validation"].get(key, default))
+
+
+def combine_same_source_texts(
+    rows: list[SampleRecord],
+    index: int,
+    max_parts: int,
+    max_chars: int,
+) -> str | None:
+    parts: list[str] = []
+    for offset in range(min(max_parts, len(rows))):
+        candidate = rows[(index + offset) % len(rows)].text
+        combined = normalize_text(" ".join(parts + [candidate]))
+        if parts and len(combined) > max_chars:
+            break
+        parts.append(candidate)
+    if len(parts) < 2:
+        return None
+    combined = normalize_text(" ".join(parts))
+    if len(combined) <= len(rows[index].text):
+        return None
+    return combined
+
+
+def build_length_negative_index(rows: list[SampleRecord]) -> dict[str, Any]:
+    sorted_rows = sorted(rows, key=lambda row: (sample_length(row), row.style_id, row.sample_id))
+    return {
+        "rows": sorted_rows,
+        "lengths": [sample_length(row) for row in sorted_rows],
+    }
+
+
+def pick_similar_length_negative(
+    index: dict[str, Any],
+    source: str,
+    target_length: int,
+) -> SampleRecord | None:
+    rows: list[SampleRecord] = index["rows"]
+    lengths: list[int] = index["lengths"]
+    center = bisect_left(lengths, target_length)
+    for radius in range(len(rows) + 1):
+        probes = (center,) if radius == 0 else (center - radius, center + radius)
+        for probe in probes:
+            if not 0 <= probe < len(rows):
+                continue
+            candidate = rows[probe]
+            if candidate.style_id != source:
+                return candidate
+    return None
+
+
+def sample_length(sample: SampleRecord) -> int:
+    value = sample.meta.get("length")
+    if isinstance(value, int):
+        return value
+    return len(sample.text)
 
 
 def build_bookraw_triplets(

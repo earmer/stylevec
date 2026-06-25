@@ -11,7 +11,7 @@ import torch.nn as nn
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from model import EncoderSettings, LayerFusion, MeanPool, QwenStyleEncoder, parameter_summary
+from model import EncoderSettings, LayerFusion, MeanPool, QwenStyleEncoder, encode_triplet, parameter_summary
 
 
 class FakeBackbone(nn.Module):
@@ -66,3 +66,24 @@ def test_qwen_style_encoder_fake_backbone_shape() -> None:
     assert torch.allclose(out["embeddings"].norm(dim=-1), torch.ones(2), atol=1e-6)
     assert parameter_summary(model)["trainable"] > 0
 
+
+def test_encode_triplet_combined_matches_separate_for_padded_roles() -> None:
+    model = QwenStyleEncoder(FakeBackbone(hidden_size=4), hidden_size=4, settings=settings("last", ()))
+    batch = {
+        "anchor": {
+            "input_ids": torch.tensor([[1, 2, 0], [3, 0, 0]]),
+            "attention_mask": torch.tensor([[1, 1, 0], [1, 0, 0]]),
+        },
+        "positive": {
+            "input_ids": torch.tensor([[4, 5], [6, 7]]),
+            "attention_mask": torch.tensor([[1, 1], [1, 1]]),
+        },
+        "negative": {
+            "input_ids": torch.tensor([[8, 9, 10, 0], [11, 12, 13, 14]]),
+            "attention_mask": torch.tensor([[1, 1, 1, 0], [1, 1, 1, 1]]),
+        },
+    }
+    separate = encode_triplet(model, batch)
+    combined = encode_triplet(model, batch, combine_forward=True)
+    for left, right in zip(separate, combined, strict=True):
+        assert torch.allclose(left, right, atol=1e-6)

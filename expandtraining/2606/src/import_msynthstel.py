@@ -58,6 +58,8 @@ def load_msynthstel_samples(config: dict[str, Any]) -> tuple[list[SampleRecord],
                             "feature": feature,
                             "raw_feature": raw_feature,
                             "polarity": polarity,
+                            "length": len(text),
+                            "length_bucket": len(text) // 40,
                         },
                     )
                 )

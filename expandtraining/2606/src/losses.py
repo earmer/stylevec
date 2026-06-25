@@ -36,6 +36,48 @@ def weighted_triplet_margin_loss(
     return loss, stats
 
 
+def matryoshka_triplet_margin_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    margins: torch.Tensor,
+    weights: torch.Tensor,
+    prefix_dims: list[int] | tuple[int, ...],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if anchor.shape != positive.shape or anchor.shape != negative.shape:
+        raise ValueError(
+            f"embedding shape mismatch: anchor={anchor.shape}, "
+            f"positive={positive.shape}, negative={negative.shape}"
+        )
+    full_dim = anchor.shape[-1]
+    dims = sorted({int(value) for value in prefix_dims if 0 < int(value) < full_dim})
+    if not dims:
+        zero = anchor.new_tensor(0.0)
+        return zero, {"loss": zero.detach()}
+
+    losses: list[torch.Tensor] = []
+    stats: dict[str, torch.Tensor] = {}
+    for dim in dims:
+        prefix_anchor = F.normalize(anchor[..., :dim], p=2, dim=-1, eps=1e-8)
+        prefix_positive = F.normalize(positive[..., :dim], p=2, dim=-1, eps=1e-8)
+        prefix_negative = F.normalize(negative[..., :dim], p=2, dim=-1, eps=1e-8)
+        dim_loss, dim_stats = weighted_triplet_margin_loss(
+            prefix_anchor,
+            prefix_positive,
+            prefix_negative,
+            margins,
+            weights,
+        )
+        losses.append(dim_loss)
+        stats[f"loss_dim_{dim}"] = dim_loss.detach()
+        stats[f"violation_dim_{dim}"] = dim_stats["violations"].mean().detach()
+        stats[f"pos_cos_dim_{dim}"] = dim_stats["pos_cos"].mean().detach()
+        stats[f"neg_cos_dim_{dim}"] = dim_stats["neg_cos"].mean().detach()
+    loss = torch.stack(losses).mean()
+    stats["loss"] = loss.detach()
+    return loss, stats
+
+
 def scalar_stats(values: torch.Tensor, prefix: str) -> dict[str, float]:
     if values.numel() == 0:
         raise ValueError(f"cannot summarize empty tensor for {prefix}")

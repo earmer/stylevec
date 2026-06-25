@@ -154,12 +154,60 @@ def build_qwen_style_encoder(config: dict[str, Any]) -> QwenStyleEncoder:
     return QwenStyleEncoder(backbone=backbone, hidden_size=hidden_size, settings=settings)
 
 
-def encode_triplet(model: QwenStyleEncoder, batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+def encode_triplet(
+    model: QwenStyleEncoder,
+    batch: dict[str, Any],
+    combine_forward: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    if combine_forward:
+        return encode_triplet_combined(model, batch)
     anchor = model(**batch["anchor"])
     positive = model(**batch["positive"])
     negative = model(**batch["negative"])
     pre_norms = torch.cat([anchor["pre_norm"], positive["pre_norm"], negative["pre_norm"]])
     return anchor["embeddings"], positive["embeddings"], negative["embeddings"], pre_norms
+
+
+def encode_triplet_combined(
+    model: QwenStyleEncoder,
+    batch: dict[str, Any],
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    anchor_batch = batch["anchor"]
+    positive_batch = batch["positive"]
+    negative_batch = batch["negative"]
+    max_length = max(
+        anchor_batch["input_ids"].shape[1],
+        positive_batch["input_ids"].shape[1],
+        negative_batch["input_ids"].shape[1],
+    )
+    input_ids = torch.cat(
+        [
+            _pad_tokens(anchor_batch["input_ids"], max_length, pad_value=0),
+            _pad_tokens(positive_batch["input_ids"], max_length, pad_value=0),
+            _pad_tokens(negative_batch["input_ids"], max_length, pad_value=0),
+        ],
+        dim=0,
+    )
+    attention_mask = torch.cat(
+        [
+            _pad_tokens(anchor_batch["attention_mask"], max_length, pad_value=0),
+            _pad_tokens(positive_batch["attention_mask"], max_length, pad_value=0),
+            _pad_tokens(negative_batch["attention_mask"], max_length, pad_value=0),
+        ],
+        dim=0,
+    )
+    output = model(input_ids=input_ids, attention_mask=attention_mask)
+    batch_size = anchor_batch["input_ids"].shape[0]
+    anchor, positive, negative = output["embeddings"].split(batch_size, dim=0)
+    pre_norms = output["pre_norm"]
+    return anchor, positive, negative, pre_norms
+
+
+def _pad_tokens(values: torch.Tensor, length: int, pad_value: int) -> torch.Tensor:
+    missing = length - values.shape[1]
+    if missing <= 0:
+        return values
+    return F.pad(values, (0, missing), value=pad_value)
 
 
 def parameter_summary(module: nn.Module) -> dict[str, float]:

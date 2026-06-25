@@ -78,6 +78,9 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
                             "source_speaker": str(source_speaker),
                             "target_speaker": str(target_speaker),
                             "source_text": source_text,
+                            "source_length": len(source_text),
+                            "length": len(generated_text),
+                            "length_bucket": len(generated_text) // 20,
                             "job_id": job_id,
                         },
                     )

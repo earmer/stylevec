@@ -13,18 +13,23 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from build_triplets import build_training_triplets
-from config import load_config, workspace_dir
+from config import configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from losses import embedding_spread_diagnostics, scalar_stats, weighted_triplet_margin_loss
 from model import build_qwen_style_encoder, encode_triplet, load_trainable_state_dict
+from probes import length_leakage_metrics, vector_probe_metrics
 
 
-def move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
+def move_batch_to_device(
+    batch: dict[str, Any],
+    device: torch.device,
+    non_blocking: bool = False,
+) -> dict[str, Any]:
     moved = dict(batch)
     for key in ("anchor", "positive", "negative"):
-        moved[key] = {name: value.to(device) for name, value in batch[key].items()}
-    moved["margin"] = batch["margin"].to(device)
-    moved["weight"] = batch["weight"].to(device)
+        moved[key] = {name: value.to(device, non_blocking=non_blocking) for name, value in batch[key].items()}
+    moved["margin"] = batch["margin"].to(device, non_blocking=non_blocking)
+    moved["weight"] = batch["weight"].to(device, non_blocking=non_blocking)
     return moved
 
 
@@ -34,6 +39,9 @@ def evaluate_triplet_loader(
     loader: DataLoader,
     device: torch.device,
     max_batches: int | None = None,
+    prefix_dims: list[int] | None = None,
+    combine_forward: bool = False,
+    non_blocking: bool = False,
 ) -> dict[str, float]:
     model.eval()
     losses: list[torch.Tensor] = []
@@ -42,11 +50,13 @@ def evaluate_triplet_loader(
     violations: list[torch.Tensor] = []
     pre_norms: list[torch.Tensor] = []
     embeddings: list[torch.Tensor] = []
+    lengths: list[int] = []
+    length_buckets: list[int] = []
     for batch_index, batch in enumerate(loader):
         if max_batches is not None and batch_index >= max_batches:
             break
-        batch = move_batch_to_device(batch, device)
-        anchor, positive, negative, norms = encode_triplet(model, batch)
+        batch = move_batch_to_device(batch, device, non_blocking=non_blocking)
+        anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
         loss, stats = weighted_triplet_margin_loss(
             anchor,
             positive,
@@ -60,6 +70,11 @@ def evaluate_triplet_loader(
         violations.append(stats["violations"].cpu())
         pre_norms.append(norms.detach().float().cpu())
         embeddings.extend([anchor.cpu(), positive.cpu(), negative.cpu()])
+        for role in ("anchor", "positive", "negative"):
+            for text in batch[f"{role}_text"]:
+                length = len(text)
+                lengths.append(length)
+                length_buckets.append(length // 40)
     if not losses:
         raise ValueError("validation loader produced no batches")
     loss_tensor = torch.cat(losses)
@@ -77,6 +92,9 @@ def evaluate_triplet_loader(
     spread = embedding_spread_diagnostics(embedding_tensor)
     metrics["top_eigen_ratio"] = float(spread["top_eigen_ratio"].item())
     metrics["effective_rank"] = float(spread["effective_rank"].item())
+    embedding_matrix = embedding_tensor.numpy()
+    metrics.update(vector_probe_metrics(embedding_matrix, prefix_dims or ()))
+    metrics.update(length_leakage_metrics(embedding_matrix, lengths, length_buckets))
     return metrics
 
 
@@ -86,6 +104,9 @@ def collect_validation_embeddings(
     loader: DataLoader,
     device: torch.device,
     max_samples: int,
+    prefix_dims: list[int] | None = None,
+    combine_forward: bool = False,
+    non_blocking: bool = False,
 ) -> tuple[pd.DataFrame, np.ndarray, dict[str, float]]:
     model.eval()
     rows: list[dict[str, Any]] = []
@@ -93,34 +114,50 @@ def collect_validation_embeddings(
     all_pos: list[torch.Tensor] = []
     all_neg: list[torch.Tensor] = []
     for batch in loader:
-        batch = move_batch_to_device(batch, device)
-        anchor, positive, negative, _norms = encode_triplet(model, batch)
+        batch = move_batch_to_device(batch, device, non_blocking=non_blocking)
+        anchor, positive, negative, _norms = encode_triplet(model, batch, combine_forward=combine_forward)
         all_pos.append(F.cosine_similarity(anchor, positive, dim=-1).cpu())
         all_neg.append(F.cosine_similarity(anchor, negative, dim=-1).cpu())
         for role, embeddings in (("anchor", anchor), ("positive", positive), ("negative", negative)):
             texts = batch[f"{role}_text"]
             for index, embedding in enumerate(embeddings.detach().cpu()):
+                text = texts[index]
                 rows.append(
                     {
                         "triplet_id": batch["triplet_id"][index],
                         "role": role,
                         "rule": batch["rule"][index],
-                        "text_preview": texts[index][:120],
+                        "char_length": len(text),
+                        "length_bucket": len(text) // 40,
+                        "text_preview": text[:120],
                     }
                 )
                 vectors.append(embedding.numpy())
                 if len(rows) >= max_samples:
                     matrix = np.stack(vectors, axis=0)
-                    summary = cosine_summary(torch.cat(all_pos), torch.cat(all_neg), matrix)
+                    summary = cosine_summary(
+                        torch.cat(all_pos),
+                        torch.cat(all_neg),
+                        matrix,
+                        pd.DataFrame(rows),
+                        prefix_dims or (),
+                    )
                     return pd.DataFrame(rows), matrix, summary
     if not rows:
         raise ValueError("no validation embeddings collected")
     matrix = np.stack(vectors, axis=0)
-    summary = cosine_summary(torch.cat(all_pos), torch.cat(all_neg), matrix)
-    return pd.DataFrame(rows), matrix, summary
+    frame = pd.DataFrame(rows)
+    summary = cosine_summary(torch.cat(all_pos), torch.cat(all_neg), matrix, frame, prefix_dims or ())
+    return frame, matrix, summary
 
 
-def cosine_summary(pos_cos: torch.Tensor, neg_cos: torch.Tensor, matrix: np.ndarray) -> dict[str, float]:
+def cosine_summary(
+    pos_cos: torch.Tensor,
+    neg_cos: torch.Tensor,
+    matrix: np.ndarray,
+    rows: pd.DataFrame,
+    prefix_dims: list[int] | tuple[int, ...] = (),
+) -> dict[str, float]:
     metrics = {}
     metrics.update(scalar_stats(pos_cos, "pos_cos"))
     metrics.update(scalar_stats(neg_cos, "neg_cos"))
@@ -134,6 +171,8 @@ def cosine_summary(pos_cos: torch.Tensor, neg_cos: torch.Tensor, matrix: np.ndar
         metrics["pca_top_component_ratio"] = float(variance[0] / max(float(variance.sum()), 1e-12))
     else:
         metrics["pca_top_component_ratio"] = 1.0
+    metrics.update(vector_probe_metrics(matrix, prefix_dims))
+    metrics.update(length_leakage_metrics(matrix, rows["char_length"], rows["length_bucket"]))
     return metrics
 
 
@@ -231,6 +270,9 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
         val_loader,
         device,
         max_samples=int(config["validation"]["max_samples"]),
+        prefix_dims=configured_matryoshka_dims(config),
+        combine_forward=bool(config["train"].get("combine_triplet_forward", False)),
+        non_blocking=False,
     )
     rows.to_parquet(out_dir / "rows.parquet", index=False)
     np.save(out_dir / "embeddings.npy", embeddings)
@@ -246,6 +288,9 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
         f"- negative cosine mean: `{summary['neg_cos_mean']:.4f}`",
         f"- violation proxy ratio: `{summary['violation_proxy_ratio']:.4f}`",
         f"- PCA top component ratio: `{summary['pca_top_component_ratio']:.4f}`",
+        f"- length linear R2: `{summary['length_linear_r2']:.4f}`",
+        f"- length/cosine delta corr: `{summary['length_cosine_delta_corr']:.4f}`",
+        f"- same-bucket cosine lift: `{summary['length_same_minus_diff_cos']:.4f}`",
     ]
     (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     return out_dir

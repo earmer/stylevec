@@ -10,9 +10,16 @@ from records import TripletRecord, normalize_text
 
 class TripletTextDataset(Dataset[TripletRecord]):
     def __init__(self, triplets: list[TripletRecord], split: str) -> None:
+        self.split = split
         self.triplets = [row for row in triplets if row.split == split]
         if not self.triplets:
             raise ValueError(f"no triplets for split={split}")
+
+    def set_triplets(self, triplets: list[TripletRecord]) -> None:
+        rows = [row for row in triplets if row.split == self.split]
+        if not rows:
+            raise ValueError(f"no triplets for split={self.split}")
+        self.triplets = rows
 
     def __len__(self) -> int:
         return len(self.triplets)
