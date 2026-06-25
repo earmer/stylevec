@@ -25,6 +25,10 @@ for path in "${required_files[@]}"; do
 done
 
 rsync -a --human-readable --info=progress2 \
+  --exclude outputs/ \
+  --exclude tf-logs/ \
+  --exclude __pycache__/ \
+  --exclude '*.py[cod]' \
   expandtraining/2606/ "${REMOTE%/}/expandtraining/2606/"
 
 rsync -aR --human-readable --info=progress2 \

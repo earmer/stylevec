@@ -274,9 +274,12 @@ Start with weighted triplet margin loss:
 loss = relu(d(anchor, positive) - d(anchor, negative) + margin) * weight
 ```
 
-Do not add batch-hard, supervised contrastive, or covariance penalties until the
-simple loss has a baseline. These belong in later experiment configs, not the
-first implementation.
+Current experiment configs keep that full-dimension triplet loss as the main
+objective, then add narrow auxiliary pressure:
+
+- spread regularization for collapse checks
+- Matryoshka prefix triplet loss for smaller usable vector prefixes
+- low-weight length/paratarget course rules for length-invariance probes
 
 ## Logging
 
@@ -292,6 +295,9 @@ TensorBoard must log:
 - trainable parameter count
 - sample counts and triplet counts
 - config snapshot
+- per-rule loss/violation/mix for diagnosing in-epoch rule shifts
+- Matryoshka prefix loss
+- validation vector probes and length leakage metrics
 
 TensorBoard should log to:
 - ./expandtraining/2606/tf-logs when MPS available

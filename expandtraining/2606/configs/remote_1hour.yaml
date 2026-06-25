@@ -20,11 +20,16 @@ data:
   paratarget_per_target_cap: 500
   paratarget_min_length_ratio: 0.5
   paratarget_max_length_ratio: 1.8
+  paratarget_original_push_enabled: true
   msynthstel_features: 32
   msynthstel_rows_per_feature: 32
   min_chars: 2
   max_chars: 220
   max_triplets: 50000
+  length_course_enabled: true
+  length_course_triplets_per_domain: 1000
+  length_course_parts: 2
+  length_course_max_chars: 4000
 
 model:
   base_model_path: artifacts/base-models/qwen-3-0.6b
@@ -44,7 +49,9 @@ model:
 weights:
   genshin_real: 1.0
   paratarget: 0.75
+  paratarget_original_push: 0.08
   msynthstel: 0.10
+  length_course: 0.08
 
 margins:
   easy: 0.08
@@ -65,14 +72,18 @@ train:
   num_workers: 4
   pin_memory: true
   rule_balanced_batches: true
+  rule_balance_rotate_each_epoch: true
 
 regularization:
   variance_weight: 0.01
   covariance_weight: 0.005
   min_dim_std: 0.03
+  matryoshka_weight: 0.20
+  matryoshka_dims: [32, 64, 128]
 
 validation:
   batch_size: 48
   max_samples: 512
   max_triplets: 2048
   max_batches: 32
+  length_course_triplets_per_domain: 40
