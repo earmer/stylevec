@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../../.."
 
+export OMP_NUM_THREADS=8
+
 RUN_NAME="${1:?usage: remote_train.sh <run_name> [--resume checkpoint_dir]}"
 shift
 

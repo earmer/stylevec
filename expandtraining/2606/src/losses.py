@@ -115,11 +115,16 @@ def embedding_spread_loss(
 
     covariance = centered.T @ centered / float(max(1, embeddings.shape[0] - 1))
     diagonal = torch.diagonal(covariance)
-    covariance = covariance - torch.diag(diagonal)
-    covariance_loss = covariance.square().sum() / float(embeddings.shape[1] * max(1, embeddings.shape[1] - 1))
+    covariance_loss = (covariance - torch.diag(diagonal)).square().sum() / float(
+        embeddings.shape[1] * max(1, embeddings.shape[1] - 1)
+    )
 
     total = variance_loss * float(variance_weight) + covariance_loss * float(covariance_weight)
-    diagnostics = embedding_spread_diagnostics(embeddings)
+    if embeddings.shape[0] < 3:
+        zero = embeddings.new_tensor(0.0)
+        diagnostics = {"top_eigen_ratio": zero.detach(), "effective_rank": zero.detach()}
+    else:
+        diagnostics = _eigen_diagnostics(covariance.detach())
     diagnostics.update(
         {
             "dim_std_mean": dim_std.detach().mean(),
@@ -130,16 +135,11 @@ def embedding_spread_loss(
     return total, diagnostics
 
 
-def embedding_spread_diagnostics(embeddings: torch.Tensor) -> dict[str, torch.Tensor]:
-    if embeddings.ndim != 2:
-        raise ValueError(f"embeddings must be [batch, dim], got {embeddings.shape}")
-    if embeddings.shape[0] < 3:
-        zero = embeddings.new_tensor(0.0)
-        return {"top_eigen_ratio": zero.detach(), "effective_rank": zero.detach()}
-
-    centered = embeddings.detach().float() - embeddings.detach().float().mean(dim=0, keepdim=True)
-    covariance = centered.T @ centered / float(max(1, centered.shape[0] - 1))
-    eigenvalues = torch.linalg.eigvalsh(covariance).clamp_min(0.0)
+def _eigen_diagnostics(covariance: torch.Tensor) -> dict[str, torch.Tensor]:
+    try:
+        eigenvalues = torch.linalg.eigvalsh(covariance).clamp_min(0.0)
+    except NotImplementedError:
+        eigenvalues = torch.linalg.eigvalsh(covariance.cpu()).clamp_min(0.0).to(covariance.device)
     total = eigenvalues.sum().clamp_min(1e-12)
     probabilities = eigenvalues / total
     entropy = -(probabilities * probabilities.clamp_min(1e-12).log()).sum()
@@ -147,3 +147,16 @@ def embedding_spread_diagnostics(embeddings: torch.Tensor) -> dict[str, torch.Te
         "top_eigen_ratio": (eigenvalues.max() / total).detach(),
         "effective_rank": entropy.exp().detach(),
     }
+
+
+def embedding_spread_diagnostics(embeddings: torch.Tensor) -> dict[str, torch.Tensor]:
+    if embeddings.ndim != 2:
+        raise ValueError(f"embeddings must be [batch, dim], got {embeddings.shape}")
+    if embeddings.shape[0] < 3:
+        zero = embeddings.new_tensor(0.0)
+        return {"top_eigen_ratio": zero.detach(), "effective_rank": zero.detach()}
+
+    values = embeddings.detach().float()
+    centered = values - values.mean(dim=0, keepdim=True)
+    covariance = centered.T @ centered / float(max(1, centered.shape[0] - 1))
+    return _eigen_diagnostics(covariance)

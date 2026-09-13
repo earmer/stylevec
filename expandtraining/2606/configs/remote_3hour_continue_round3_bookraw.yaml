@@ -46,7 +46,7 @@ model:
   max_length: 192
   projection_dim: 256
   dropout: 0.05
-  gradient_checkpointing: true
+  gradient_checkpointing: false
   layer_fusion:
     mode: last
     layers: []
@@ -85,6 +85,9 @@ train:
   max_grad_norm: 1.0
   num_workers: 8
   pin_memory: true
+  combine_triplet_forward: true
+  fused_adamw: true
+  checkpoint_every_steps: 500
   rule_balanced_batches: true
   rule_balance_rotate_each_epoch: true
   allow_manifest_mismatch_on_resume: true
@@ -103,3 +106,6 @@ validation:
   max_batches: 32
   bookraw_triplets_per_rule: 200
   length_course_triplets_per_domain: 80
+
+logging:
+  train_every_steps: 5

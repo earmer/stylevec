@@ -69,6 +69,7 @@ train:
   max_grad_norm: 1.0
   num_workers: 0
   pin_memory: false
+  combine_triplet_forward: true
   rule_balanced_batches: false
   rule_balance_rotate_each_epoch: false
 

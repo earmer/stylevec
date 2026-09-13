@@ -74,6 +74,7 @@ train:
   persistent_workers: false
   combine_triplet_forward: true
   fused_adamw: true
+  checkpoint_every_steps: 500
   rule_balanced_batches: true
   rule_balance_rotate_each_epoch: true
 

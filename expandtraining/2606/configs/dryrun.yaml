@@ -74,7 +74,7 @@ margins:
 
 train:
   batch_size: 2
-  grad_accum: 1
+  grad_accum: 3
   max_steps: 1
   epochs: 1
   lr: 2.0e-4
@@ -83,6 +83,8 @@ train:
   max_grad_norm: 1.0
   num_workers: 0
   pin_memory: false
+  combine_triplet_forward: true
+  checkpoint_every_steps: 1
   rule_balanced_batches: true
   rule_balance_rotate_each_epoch: true
 

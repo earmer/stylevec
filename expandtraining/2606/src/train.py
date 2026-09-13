@@ -345,6 +345,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     grad_accum = int(config["train"].get("grad_accum", 1))
     max_grad_norm = float(config["train"].get("max_grad_norm", 1.0))
     max_seconds = float(config["train"].get("max_seconds", 0.0))
+    checkpoint_every_steps = int(config["train"].get("checkpoint_every_steps", 0))
     regularization = config.get("regularization", {})
     spread_variance_weight = float(regularization.get("variance_weight", 0.0))
     spread_covariance_weight = float(regularization.get("covariance_weight", 0.0))
@@ -354,6 +355,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
     log_every_steps = max(1, int(config.get("logging", {}).get("train_every_steps", 1)))
+    total_batches = len(train_loader)
     stop_time = time.monotonic() + max_seconds if max_seconds > 0.0 else 0.0
     optimizer.zero_grad(set_to_none=True)
     model.train()
@@ -392,6 +394,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         spread_covariance_weight,
                     )
                     loss = loss + spread_loss + matryoshka_loss
+                    if grad_accum > 1:
+                        window_size = accumulation_window(batch_index, total_batches, grad_accum)
+                        loss = loss * (float(grad_accum) / float(window_size))
                     accelerator.backward(loss)
                     if accelerator.sync_gradients:
                         grad_norm = accelerator.clip_grad_norm_(model.parameters(), max_grad_norm)
@@ -399,6 +404,17 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         scheduler.step()
                         optimizer.zero_grad(set_to_none=True)
                         global_step += 1
+                        if is_main and checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
+                            save_checkpoint(
+                                model,
+                                optimizer,
+                                scheduler,
+                                checkpoint_dir / "latest",
+                                global_step,
+                                last_epoch,
+                                manifest_hash,
+                                accelerator,
+                            )
                         if is_main and writer is not None and global_step % log_every_steps == 0:
                             log_train_step(
                                 writer,
@@ -439,14 +455,26 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         spread_covariance_weight,
                     )
                     loss = loss + spread_loss + matryoshka_loss
-                    scaled_loss = loss / grad_accum
+                    window_size = accumulation_window(batch_index, total_batches, grad_accum)
+                    scaled_loss = loss / float(window_size)
                 scaled_loss.backward()
-                if (batch_index + 1) % grad_accum == 0:
+                if (batch_index + 1) % grad_accum == 0 or (batch_index + 1) == total_batches:
                     grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
                     optimizer.step()
                     scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
                     global_step += 1
+                    if is_main and checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
+                        save_checkpoint(
+                            model,
+                            optimizer,
+                            scheduler,
+                            checkpoint_dir / "latest",
+                            global_step,
+                            last_epoch,
+                            manifest_hash,
+                            None,
+                        )
                     if writer is not None and global_step % log_every_steps == 0:
                         log_train_step(
                             writer,
@@ -507,6 +535,13 @@ def should_stop(global_step: int, total_steps: int, stop_time: float) -> bool:
     if global_step >= total_steps:
         return True
     return stop_time > 0.0 and time.monotonic() >= stop_time
+
+
+def accumulation_window(batch_index: int, total_batches: int, accumulation: int) -> int:
+    if accumulation <= 1:
+        return 1
+    window_start = (batch_index // accumulation) * accumulation
+    return max(1, min(accumulation, total_batches - window_start))
 
 
 def matryoshka_step_loss(
