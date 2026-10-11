@@ -1,0 +1,297 @@
+[
+  {
+    "book_id": "95f2c9116a47",
+    "cleaned_fragment_count": 5588,
+    "reviewed_paragraph_source_count": 5596,
+    "removed_paragraph_source_count": 8,
+    "removed_ids_audited": 8,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2151,
+      "abstract": 10
+    }
+  },
+  {
+    "book_id": "55e91c672ed4",
+    "cleaned_fragment_count": 6395,
+    "reviewed_paragraph_source_count": 6395,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 8,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2853,
+      "abstract": 14
+    }
+  },
+  {
+    "book_id": "b9b40c19e637",
+    "cleaned_fragment_count": 4144,
+    "reviewed_paragraph_source_count": 4144,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2351,
+      "abstract": 4
+    }
+  },
+  {
+    "book_id": "ba1ea6a1eb11",
+    "cleaned_fragment_count": 3925,
+    "reviewed_paragraph_source_count": 3925,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "abstract": 2,
+      "text": 2409
+    }
+  },
+  {
+    "book_id": "bc87fbaddf81",
+    "cleaned_fragment_count": 4493,
+    "reviewed_paragraph_source_count": 4493,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2397
+    }
+  },
+  {
+    "book_id": "0d144c794cf6",
+    "cleaned_fragment_count": 3011,
+    "reviewed_paragraph_source_count": 3011,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1779
+    }
+  },
+  {
+    "book_id": "d5f0f5c8c05e",
+    "cleaned_fragment_count": 2596,
+    "reviewed_paragraph_source_count": 2596,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1386
+    }
+  },
+  {
+    "book_id": "36900f1061f3",
+    "cleaned_fragment_count": 4472,
+    "reviewed_paragraph_source_count": 4488,
+    "removed_paragraph_source_count": 16,
+    "removed_ids_audited": 16,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2794
+    }
+  },
+  {
+    "book_id": "1cc7f875ba10",
+    "cleaned_fragment_count": 3675,
+    "reviewed_paragraph_source_count": 3692,
+    "removed_paragraph_source_count": 17,
+    "removed_ids_audited": 17,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1588
+    }
+  },
+  {
+    "book_id": "94a5fb7e75e1",
+    "cleaned_fragment_count": 4961,
+    "reviewed_paragraph_source_count": 4961,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 3171
+    }
+  },
+  {
+    "book_id": "1c0e28a46b63",
+    "cleaned_fragment_count": 1746,
+    "reviewed_paragraph_source_count": 1763,
+    "removed_paragraph_source_count": 17,
+    "removed_ids_audited": 17,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1030
+    }
+  },
+  {
+    "book_id": "24520e2f06ee",
+    "cleaned_fragment_count": 3191,
+    "reviewed_paragraph_source_count": 3191,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1447,
+      "paragraph_title": 1
+    }
+  },
+  {
+    "book_id": "34139a2ac15b",
+    "cleaned_fragment_count": 3580,
+    "reviewed_paragraph_source_count": 3580,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2154,
+      "abstract": 5
+    }
+  },
+  {
+    "book_id": "4484675aeb7e",
+    "cleaned_fragment_count": 3205,
+    "reviewed_paragraph_source_count": 3205,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1571,
+      "algorithm": 9
+    }
+  },
+  {
+    "book_id": "91558afdf6a5",
+    "cleaned_fragment_count": 5205,
+    "reviewed_paragraph_source_count": 5205,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2832,
+      "abstract": 16,
+      "algorithm": 2
+    }
+  },
+  {
+    "book_id": "b551c3764d50",
+    "cleaned_fragment_count": 4411,
+    "reviewed_paragraph_source_count": 4411,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2227,
+      "table": 7
+    }
+  },
+  {
+    "book_id": "bc43c71cc312",
+    "cleaned_fragment_count": 2259,
+    "reviewed_paragraph_source_count": 2259,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1202,
+      "abstract": 26
+    }
+  },
+  {
+    "book_id": "ce71b57bb15e",
+    "cleaned_fragment_count": 4101,
+    "reviewed_paragraph_source_count": 4101,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 20,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 1976,
+      "abstract": 6,
+      "content": 2,
+      "algorithm": 10
+    }
+  },
+  {
+    "book_id": "f81d523111a4",
+    "cleaned_fragment_count": 4085,
+    "reviewed_paragraph_source_count": 4085,
+    "removed_paragraph_source_count": 0,
+    "removed_ids_audited": 0,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 2456
+    }
+  },
+  {
+    "book_id": "f8cd13a4e2f9",
+    "cleaned_fragment_count": 3408,
+    "reviewed_paragraph_source_count": 3440,
+    "removed_paragraph_source_count": 32,
+    "removed_ids_audited": 32,
+    "cleaned_fragments_not_in_assembled_paragraphs": 0,
+    "not_assembled_but_excluded_upstream_count": 0,
+    "not_assembled_sample_ids": [],
+    "not_assembled_reason": "retained layout fragments absent from the saved paragraph source chains are not silently added to training rows",
+    "selected_layout_label_counts": {
+      "text": 948,
+      "abstract": 2
+    }
+  }
+]

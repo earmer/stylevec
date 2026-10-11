@@ -1,0 +1,561 @@
+[
+  {
+    "book_id": "95f2c9116a47",
+    "page_count": 519,
+    "ocr_revision": "pdf_ocr-reviewed-v1+pdf_ocr-server-v1",
+    "retained_fragment_count": 5588,
+    "scored_line_count": 12080,
+    "mean_line_confidence": 0.9606191498344371,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 166,
+    "weak_line_fraction": 0.013741721854304636,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2161,
+    "authors": [
+      "周立波"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "周立波文集·第1卷《暴风骤雨》"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2151,
+      "abstract": 10
+    }
+  },
+  {
+    "book_id": "55e91c672ed4",
+    "page_count": 652,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 6395,
+    "scored_line_count": 15109,
+    "mean_line_confidence": 0.9681929247468397,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 132,
+    "weak_line_fraction": 0.008736514660136342,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2867,
+    "authors": [
+      "周立波"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "周立波文集·第2卷（《铁水奔流》《周立波短篇小说集》）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2853,
+      "abstract": 14
+    }
+  },
+  {
+    "book_id": "b9b40c19e637",
+    "page_count": 524,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 4144,
+    "scored_line_count": 13233,
+    "mean_line_confidence": 0.979297763167838,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 86,
+    "weak_line_fraction": 0.006498904254515227,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2355,
+    "authors": [
+      "杨沫"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "杨沫文集·第4卷《中短篇小说选》"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2351,
+      "abstract": 4
+    }
+  },
+  {
+    "book_id": "ba1ea6a1eb11",
+    "page_count": 437,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 3925,
+    "scored_line_count": 11461,
+    "mean_line_confidence": 0.9748258092662072,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 113,
+    "weak_line_fraction": 0.009859523601779949,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2411,
+    "authors": [
+      "柳青"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "柳青文集·第1卷（《种谷记》《铜墙铁壁》）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "abstract": 2,
+      "text": 2409
+    }
+  },
+  {
+    "book_id": "bc87fbaddf81",
+    "page_count": 440,
+    "ocr_revision": "pdf_ocr-reviewed-v1+pdf_ocr-server-v1",
+    "retained_fragment_count": 4493,
+    "scored_line_count": 11985,
+    "mean_line_confidence": 0.9743625765540258,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 160,
+    "weak_line_fraction": 0.013350020859407593,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2397,
+    "authors": [
+      "柳青"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "柳青文集·第2卷"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2397
+    }
+  },
+  {
+    "book_id": "0d144c794cf6",
+    "page_count": 313,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 3011,
+    "scored_line_count": 8384,
+    "mean_line_confidence": 0.9776123294370229,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 67,
+    "weak_line_fraction": 0.007991412213740457,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1779,
+    "authors": [
+      "柳青"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "柳青文集·第3卷"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1779
+    }
+  },
+  {
+    "book_id": "d5f0f5c8c05e",
+    "page_count": 341,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 2596,
+    "scored_line_count": 8606,
+    "mean_line_confidence": 0.9784978398791541,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 62,
+    "weak_line_fraction": 0.007204276086451313,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1386,
+    "authors": [
+      "柳青"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "柳青文集·第4卷"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1386
+    }
+  },
+  {
+    "book_id": "36900f1061f3",
+    "page_count": 436,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 4472,
+    "scored_line_count": 11758,
+    "mean_line_confidence": 0.9730041886375234,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 88,
+    "weak_line_fraction": 0.007484266031638034,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2794,
+    "authors": [
+      "梁斌"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "梁斌文集·第1卷《红旗谱》"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2794
+    }
+  },
+  {
+    "book_id": "1cc7f875ba10",
+    "page_count": 407,
+    "ocr_revision": "pdf_ocr-reviewed-v1+pdf_ocr-server-v1",
+    "retained_fragment_count": 3675,
+    "scored_line_count": 10006,
+    "mean_line_confidence": 0.9792567209674196,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 74,
+    "weak_line_fraction": 0.007395562662402559,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1588,
+    "authors": [
+      "梁斌"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "梁斌文集·第6卷"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1588
+    }
+  },
+  {
+    "book_id": "94a5fb7e75e1",
+    "page_count": 653,
+    "ocr_revision": "pdf_ocr-server-v1",
+    "retained_fragment_count": 4961,
+    "scored_line_count": 15006,
+    "mean_line_confidence": 0.9823581907237104,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 32,
+    "weak_line_fraction": 0.0021324803411968546,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 3171,
+    "authors": [
+      "杨沫"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "《英华之歌》自序",
+      "英华之歌"
+    ],
+    "unique_work_id_count": 2,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 3171
+    }
+  },
+  {
+    "book_id": "1c0e28a46b63",
+    "page_count": 291,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 1746,
+    "scored_line_count": 6493,
+    "mean_line_confidence": 0.9833976466964424,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 31,
+    "weak_line_fraction": 0.004774372401047282,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1030,
+    "authors": [
+      "梁斌"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "梁斌文集·第七卷（集外集及集外文）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1030
+    }
+  },
+  {
+    "book_id": "24520e2f06ee",
+    "page_count": 509,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 3191,
+    "scored_line_count": 9822,
+    "mean_line_confidence": 0.9902556933414782,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 5,
+    "weak_line_fraction": 0.0005090612909794339,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1448,
+    "authors": [
+      "何其芳"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "何其芳全集·第八卷（书信、家信、日记）",
+      "日记二则"
+    ],
+    "unique_work_id_count": 2,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1447,
+      "paragraph_title": 1
+    }
+  },
+  {
+    "book_id": "34139a2ac15b",
+    "page_count": 446,
+    "ocr_revision": "pdf_ocr-reviewed-v1+pdf_ocr-server-v1",
+    "retained_fragment_count": 3580,
+    "scored_line_count": 11045,
+    "mean_line_confidence": 0.9847554223630602,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 103,
+    "weak_line_fraction": 0.009325486645540969,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2159,
+    "authors": [
+      "陆文夫"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "陆文夫代表作（短篇小说及长篇《美食家》）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2154,
+      "abstract": 5
+    }
+  },
+  {
+    "book_id": "4484675aeb7e",
+    "page_count": 599,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 3205,
+    "scored_line_count": 13378,
+    "mean_line_confidence": 0.9834428748691882,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 51,
+    "weak_line_fraction": 0.00381222903274032,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1580,
+    "authors": [
+      "周立波"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "周立波选集·第六卷（文学论文）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1571,
+      "algorithm": 9
+    }
+  },
+  {
+    "book_id": "91558afdf6a5",
+    "page_count": 756,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 5205,
+    "scored_line_count": 16080,
+    "mean_line_confidence": 0.9744488103233832,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 117,
+    "weak_line_fraction": 0.007276119402985074,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2850,
+    "authors": [
+      "周立波"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "周立波文集·第四卷（报告文学、回忆录、诗）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2832,
+      "abstract": 16,
+      "algorithm": 2
+    }
+  },
+  {
+    "book_id": "b551c3764d50",
+    "page_count": 398,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 4411,
+    "scored_line_count": 12976,
+    "mean_line_confidence": 0.9822746547472256,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 43,
+    "weak_line_fraction": 0.003313810110974106,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2234,
+    "authors": [
+      "张承志"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "创作要目",
+      "张承志精选集（小序及精选作品）"
+    ],
+    "unique_work_id_count": 2,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2227,
+      "table": 7
+    }
+  },
+  {
+    "book_id": "bc43c71cc312",
+    "page_count": 558,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 2259,
+    "scored_line_count": 10573,
+    "mean_line_confidence": 0.9924468873545823,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 7,
+    "weak_line_fraction": 0.0006620637472808096,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1228,
+    "authors": [
+      "何其芳"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "何其芳全集·第二卷（星火集、星火集续编、关于现实主义）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1202,
+      "abstract": 26
+    }
+  },
+  {
+    "book_id": "ce71b57bb15e",
+    "page_count": 757,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 4101,
+    "scored_line_count": 16548,
+    "mean_line_confidence": 0.9723288596809283,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 157,
+    "weak_line_fraction": 0.009487551365723955,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 1994,
+    "authors": [
+      "周立波"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "周立波文集·第五卷（三十年代文学评论集及其他文学评论）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 1976,
+      "abstract": 6,
+      "content": 2,
+      "algorithm": 10
+    }
+  },
+  {
+    "book_id": "f81d523111a4",
+    "page_count": 566,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 4085,
+    "scored_line_count": 13948,
+    "mean_line_confidence": 0.9833573308001147,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 81,
+    "weak_line_fraction": 0.005807284198451391,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 2456,
+    "authors": [
+      "杨沫"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "我的日记（上）",
+      "自白（前言）"
+    ],
+    "unique_work_id_count": 2,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 2456
+    }
+  },
+  {
+    "book_id": "f8cd13a4e2f9",
+    "page_count": 714,
+    "ocr_revision": "pdf_ocr-reviewed-v1",
+    "retained_fragment_count": 3408,
+    "scored_line_count": 13686,
+    "mean_line_confidence": 0.9765454223293877,
+    "weak_line_threshold": 0.75,
+    "weak_line_count": 102,
+    "weak_line_fraction": 0.007452871547566856,
+    "interpretation": "OCR confidence is a model-specific triage signal, not an estimate of character accuracy.",
+    "selected_rows": 950,
+    "authors": [
+      "臧克家"
+    ],
+    "unique_author_count": 1,
+    "work_titles": [
+      "臧克家全集·第一卷（新诗1929—1944）"
+    ],
+    "unique_work_id_count": 1,
+    "languages": [
+      "zh"
+    ],
+    "strict_row_layout_label_counts": {
+      "text": 948,
+      "abstract": 2
+    }
+  }
+]

@@ -1,0 +1,154 @@
+{
+  "verified": true,
+  "verified_at": "2026-09-30T11:56:30.966082+00:00",
+  "parquet": "/Users/earmercarey/stylevec/reports/bookraw/books_scanned.parquet",
+  "rows": 40838,
+  "book_count": 20,
+  "book_rows": {
+    "0d144c794cf6": 1779,
+    "1c0e28a46b63": 1030,
+    "1cc7f875ba10": 1588,
+    "24520e2f06ee": 1448,
+    "34139a2ac15b": 2159,
+    "36900f1061f3": 2794,
+    "4484675aeb7e": 1580,
+    "55e91c672ed4": 2867,
+    "91558afdf6a5": 2850,
+    "94a5fb7e75e1": 3171,
+    "95f2c9116a47": 2161,
+    "b551c3764d50": 2234,
+    "b9b40c19e637": 2355,
+    "ba1ea6a1eb11": 2411,
+    "bc43c71cc312": 1228,
+    "bc87fbaddf81": 2397,
+    "ce71b57bb15e": 1994,
+    "d5f0f5c8c05e": 1386,
+    "f81d523111a4": 2456,
+    "f8cd13a4e2f9": 950
+  },
+  "unique_author_count": 8,
+  "unique_work_id_count": 24,
+  "unique_source_block_id_count": 40838,
+  "unique_source_fragment_id_count": 46342,
+  "lineage_rows": 40838,
+  "exclusion_audit_records": 32030,
+  "reference": {
+    "path": "/Users/earmercarey/stylevec/reports/bookraw/books_work_primary_strict.parquet",
+    "sha256": "ccf10e2874f03ecbab8b51fc73661c109f40d95f80c8fc2b1417f97bb4388e39",
+    "size_bytes": 1127386,
+    "mtime_ns": 1790747454051419549,
+    "schema": "text: large_string\nauthor: large_string\nwork: large_string\nwork_id: large_string\ngenre: large_string\nlang: large_string\ntext_role: large_string\nrole_confidence: large_string\nrole_evidence: large_string\nrole_source: large_string\nboundary_confidence: large_string\nboundary_evidence: large_string\nsection_id: large_string\nsection_title: large_string\nsource_file: large_string\nsource_href: large_string\nsource_spine_file: large_string\nsource_spine_index: int64\nsource_dom_position: int64\nsource_block_id: large_string\nsource_tag: large_string\nsource_html_id: large_string\nsource_html_classes: list<element: string>\n  child 0, element: string\nsource_epub_type: large_string\ncatalog_source: large_string\ncatalog_line: int64\nreference_ids: list<element: string>\n  child 0, element: string"
+  },
+  "raw_ocr_integrity_verified_books": 20,
+  "raw_ocr_integrity": [
+    {
+      "book": "bc43c71cc312",
+      "pages": 558,
+      "sha256": "e893268e9db72e63c95f9a1a67561d67ffe8cc71ddf547f1b78ef934b2e41fae"
+    },
+    {
+      "book": "24520e2f06ee",
+      "pages": 509,
+      "sha256": "865cd34092432ada2dd545a6c14839c27cdf747eff0468872a57c55a18593b64"
+    },
+    {
+      "book": "95f2c9116a47",
+      "pages": 519,
+      "sha256": "e27a5c85d236ba6f65df48b47092cc93e743193a130aa77bac16453e210425f7"
+    },
+    {
+      "book": "55e91c672ed4",
+      "pages": 652,
+      "sha256": "1859e910dfc631a6fb450f98863ed4fa1f74399a99a723cefe65d863a197b8a5"
+    },
+    {
+      "book": "91558afdf6a5",
+      "pages": 756,
+      "sha256": "708ad2e51bd8e05b0727909074eb193122c44877c3f96e6d532b2289b9c48571"
+    },
+    {
+      "book": "ce71b57bb15e",
+      "pages": 757,
+      "sha256": "a57094ec48f58d79312207045be404b54089d2c56413d1d7e5db7c6ee6a9a02f"
+    },
+    {
+      "book": "4484675aeb7e",
+      "pages": 599,
+      "sha256": "de712316936b2135f45b99948cd4155ad9b12dfed90e4c9d008bf44178806fcf"
+    },
+    {
+      "book": "b551c3764d50",
+      "pages": 398,
+      "sha256": "388e26636f14f391eecceb307215948695ddeac40c8ad395f2498af41aa3b5c9"
+    },
+    {
+      "book": "b9b40c19e637",
+      "pages": 524,
+      "sha256": "e5b9962762f11eb308f1a7af660780e72c9c6edea56a793e1c2e88bfe26ee2de"
+    },
+    {
+      "book": "f81d523111a4",
+      "pages": 566,
+      "sha256": "660dd36fa303c2079397b13b75899f5f8a7bc3d89ed59f704d0090f3256cc470"
+    },
+    {
+      "book": "ba1ea6a1eb11",
+      "pages": 437,
+      "sha256": "9a3ac1389697a76830be995c231c94dc1d38b4c9fd359244c02fa25018c4fba8"
+    },
+    {
+      "book": "bc87fbaddf81",
+      "pages": 440,
+      "sha256": "58b367798026b8f517051d86033b20b7464bb326a824f5568ab3a71d359ea057"
+    },
+    {
+      "book": "0d144c794cf6",
+      "pages": 313,
+      "sha256": "d3ee81f02d1c168bf8a4fdbd88eb33a0500a13aeb4528ac1f2bb644edefe7374"
+    },
+    {
+      "book": "d5f0f5c8c05e",
+      "pages": 341,
+      "sha256": "484e056dc04646d717ac8628008cd1aa408ad83120be10ab01790617022906dc"
+    },
+    {
+      "book": "36900f1061f3",
+      "pages": 436,
+      "sha256": "6ddf54a71ab7f5d1d3c3fc627b7235beca80e25716d628a09a6ad26d1b1e8e72"
+    },
+    {
+      "book": "1cc7f875ba10",
+      "pages": 407,
+      "sha256": "76326f09d38df4fd95ff40798e4ebdd05acc6016373a11c7400e621aa990ab15"
+    },
+    {
+      "book": "1c0e28a46b63",
+      "pages": 291,
+      "sha256": "ae9f1f23415a1ba742a8251d938c22befd25723e8f855038536b9491add8f65b"
+    },
+    {
+      "book": "f8cd13a4e2f9",
+      "pages": 714,
+      "sha256": "12e8ff3ff09ef4c1a0b9fd3ddaf053305b51296bfc4681dab8d338c9c6f80d49"
+    },
+    {
+      "book": "94a5fb7e75e1",
+      "pages": 653,
+      "sha256": "70e010e163f9777543ae96b19e18bfe740b2d84ad8c99909f2fb1da32e85dd8b"
+    },
+    {
+      "book": "34139a2ac15b",
+      "pages": 446,
+      "sha256": "34d92ec9d5012ea1115460a00563647bdedfd73601daa0d336f894efa64e7eae"
+    }
+  ],
+  "checks": [
+    "exact 27-field Arrow schema matches the saved strict reference",
+    "all manifest books and source PDFs are represented",
+    "unique strict block IDs and unique source fragments",
+    "row text hashes, source paragraph IDs/positions, ranges, and source fragments match lineage",
+    "strict role/language/minimum length/confidence invariants",
+    "source-accounting and OCR quality sidecars cover every book",
+    "raw OCR file hashes match the reviewed baseline"
+  ]
+}
