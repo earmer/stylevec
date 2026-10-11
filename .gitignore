@@ -35,6 +35,8 @@ reports/bookraw/scanned_body_range_assignments.jsonl
 reports/bookraw/scanned_body_ranges*.jsonl
 reports/bookraw/luna2_review_imgs/
 reports/bookraw/selected_layout_review/
+# Generated listing built from the gitignored works catalog.
+bookraw_works_authors.md
 artifacts/base-models/
 artifacts/lora/trained/
 artifacts/lora/plots/
