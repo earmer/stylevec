@@ -23,19 +23,19 @@ expandtraining/2607/
 scripts/chinese_authors/
 stylegpt/FIX_HANDOFF.md
 stylegpt/leftovers.md
-# Generated book tables and provenance sidecars. Regenerate with
-# scripts/bookraw/ and re-verify; the documentation and audit reports are tracked.
+# Book tables, provenance sidecars, and review images live on the
+# stylevec_data volume; see reports/bookraw/README.md for the map. Only the
+# narrative documentation and small audit records stay in the repo.
 reports/bookraw/*.parquet
-reports/bookraw/books_scanned_lineage.jsonl
-reports/bookraw/books_scanned_exclusions.jsonl
-reports/bookraw/passage_relations.jsonl
-reports/bookraw/works_catalog_*.jsonl
-reports/bookraw/work_boundary_manifest.jsonl
-reports/bookraw/scanned_body_range_assignments.jsonl
-reports/bookraw/scanned_body_ranges*.jsonl
 reports/bookraw/luna2_review_imgs/
 reports/bookraw/selected_layout_review/
-# Generated listing built from the gitignored works catalog.
+reports/bookraw/scanned_quality_review/
+# Corpus sources and derived legacy parquets are on the volume too.
+data/datasets/corpora/bookraw/*.epub
+data/datasets/corpora/bookraw/*.mobi
+data/datasets/corpora/bookraw/books_*.parquet
+data/datasets/corpora/bookraw/*catalog*.jsonl
+# Generated listing built from the works catalog.
 bookraw_works_authors.md
 artifacts/base-models/
 artifacts/lora/trained/

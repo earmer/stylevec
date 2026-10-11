@@ -18,6 +18,8 @@ import pyarrow.parquet as pq
 
 
 ROOT = Path(__file__).resolve().parents[2]
+# Outputs live on the data volume; see reports/bookraw/README.md.
+DATA = Path(os.environ.get("STYLEVEC_DATA", "/Volumes/EMC/stylevec_data"))
 DEFAULT_INPUT = Path("/Volumes/EMC/stylevec_data/processed/pdf_ocr-reviewed-v1/clean_export")
 SCHEMA_COLUMNS = [
     "text", "author", "work", "work_id", "genre", "lang", "text_role",
@@ -854,9 +856,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-root", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--body-ranges", type=Path, required=True)
-    parser.add_argument("--output", type=Path, default=ROOT / "reports/bookraw/books_scanned.parquet")
-    parser.add_argument("--audit", type=Path, default=ROOT / "reports/bookraw/books_scanned_exclusions.jsonl")
-    parser.add_argument("--lineage", type=Path, default=ROOT / "reports/bookraw/books_scanned_lineage.jsonl")
+    parser.add_argument("--output", type=Path, default=DATA / "processed/bookraw/books_scanned.parquet")
+    parser.add_argument("--audit", type=Path, default=DATA / "manifests/bookraw/books_scanned_exclusions.jsonl")
+    parser.add_argument("--lineage", type=Path, default=DATA / "manifests/bookraw/books_scanned_lineage.jsonl")
     parser.add_argument("--boundary-reidentification", type=Path)
     parser.add_argument("--strict-exclusion-manifest", type=Path)
     parser.add_argument("--cleaning-audit", type=Path)

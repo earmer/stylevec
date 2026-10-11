@@ -30,7 +30,7 @@ The repository includes active research code, reproducibility artifacts, generat
 - `scripts/bookraw/`: book corpus extraction, scanned-book export, and verification.
 - `scripts/weak_ocr_audit/`: sampled character-level OCR quality audit of the strict scanned table.
 - `docs/bookraw/`: annotation schema for the labeled book corpus.
-- `reports/bookraw/`: scanned-books documentation, audits, and provenance sidecars. Large generated tables here (`*.parquet`, the lineage and exclusion JSONLs) are not tracked; see `.gitignore`.
+- `reports/bookraw/`: scanned-books documentation and audits. Code and docs only; the tables, sidecars, and corpus sources live on the `stylevec_data` volume under `processed/bookraw/` and `manifests/bookraw/`. Start at `reports/bookraw/README.md`.
 - `shared/`: reusable configuration, device, dataset, classifier, and evaluation utilities.
 - `tools/simlar/`: Rust/PyO3 batch similarity library.
 - `verifier/`: algorithm notes and verification material.

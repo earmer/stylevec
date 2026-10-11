@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,10 +18,14 @@ from export_scanned import SCANNED_SCHEMA, join_fragment_texts, read_jsonl
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_REPORTS = ROOT / "reports/bookraw"
-DEFAULT_INPUT_ROOT = Path("/Volumes/EMC/stylevec_data/processed/pdf_ocr-reviewed-v1/clean_export")
-DEFAULT_SERVER_ROOT = Path("/Volumes/EMC/stylevec_data/processed/pdf_ocr-server-v1")
-DEFAULT_REVIEWED_VERIFICATION = Path("/Volumes/EMC/stylevec_data/processed/pdf_ocr-reviewed-v1/verification.json")
+# Tables and sidecars live on the data volume, not under reports/bookraw/; see
+# reports/bookraw/README.md. Override with STYLEVEC_DATA for another checkout.
+DATA = Path(os.environ.get("STYLEVEC_DATA", "/Volumes/EMC/stylevec_data"))
+DEFAULT_REPORTS = DATA / "manifests/bookraw"
+DEFAULT_TABLES = DATA / "processed/bookraw"
+DEFAULT_INPUT_ROOT = DATA / "processed/pdf_ocr-reviewed-v1/clean_export"
+DEFAULT_SERVER_ROOT = DATA / "processed/pdf_ocr-server-v1"
+DEFAULT_REVIEWED_VERIFICATION = DATA / "processed/pdf_ocr-reviewed-v1/verification.json"
 
 
 def sha256_file(path: Path) -> str:
@@ -448,8 +453,8 @@ def verify(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--parquet", type=Path, default=DEFAULT_REPORTS / "books_scanned.parquet")
-    parser.add_argument("--reference", type=Path, default=DEFAULT_REPORTS / "books_work_primary_strict.parquet")
+    parser.add_argument("--parquet", type=Path, default=DEFAULT_TABLES / "books_scanned.parquet")
+    parser.add_argument("--reference", type=Path, default=DEFAULT_TABLES / "books_work_primary_strict.parquet")
     parser.add_argument("--body-ranges", type=Path, default=DEFAULT_REPORTS / "scanned_body_ranges.jsonl")
     parser.add_argument("--lineage", type=Path, default=DEFAULT_REPORTS / "books_scanned_lineage.jsonl")
     parser.add_argument("--exclusions", type=Path, default=DEFAULT_REPORTS / "books_scanned_exclusions.jsonl")

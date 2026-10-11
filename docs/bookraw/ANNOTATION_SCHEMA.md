@@ -94,3 +94,121 @@ The old `books_cleaned.parquet` is still consumed by
 training use of the new annotations must explicitly select eligible roles;
 unknown, editorial matter, notes, and commentary should not enter author-style
 training by default.
+
+## Post-hoc repair (`scripts/bookraw/repair_labeled_parquet.py`)
+
+The source EPUBs referenced by `extract_labeled_bookraw.py` are no longer
+present, so the extractor cannot be re-run. `repair_labeled_parquet.py`
+repairs the existing exports from the evidence they already carry and rebuilds
+every derived view from the repaired master. It is deterministic and
+idempotent. Repairs, in the order applied:
+
+1. **Whitespace injection.** `dom_blocks()` used `tag.get_text(" ")`, which
+   inserts a space at every inline-tag boundary. That stranded spaces before
+   fullwidth punctuation (`〔1〕 。`) and split Chinese words at inline-markup
+   seams. 49,378 Chinese rows were corrected by collapsing only
+   typographically impossible spacing. Spaces between two CJK characters are
+   left alone, because those are genuine (`二十七日 晴。` in a Lu Xun diary).
+   English rows are never touched.
+2. **The `后记` role-state leak.** `classify_blocks()` set `role_state` from a
+   role cue and never reset it, so a stray marker near a book's start
+   relabelled everything after it. 76,795 blocks of Jin Yong novel prose were
+   carried as `editorial_matter` at `high` confidence. Where the leaked region
+   began within the first 5% of a work, those blocks are restored to
+   `primary_text` with `role_evidence=role_state_leak_reverted_to_primary_text`
+   and `role_source=post_hoc_repair` — 71,502 surviving rows across 12 Jin Yong
+   novels. Works where the cue landed on a real, short, terminal afterword
+   (Ba Jin's `寒夜`, `憩园`, and Jin Yong's `袁崇焕评传`) are left alone,
+   because there the inherited label is correct. Navigation stubs such as
+   `返回总目录` are skipped, since relabelling them would only swap one wrong
+   label for another.
+3. **The Zhonghua-classics heading state, and the editorial voice.** In the
+   reviewed 中华经典藏书 edition, `classify_blocks` set `role_state =
+   "commentary"` at every unlabelled `<h>` heading, so the poems and essays
+   themselves were labelled commentary under `chapter_intro_before_body_marker`
+   — 李白's 月下独酌 and 孟郊's 游子吟 among them — which left 289 authors with
+   no `primary_text` at all. A block is restored to `primary_text` only when the
+   reference marks it carries are glossed by the apparatus block of the *same*
+   section, which commentary about a poem never does. Three bracket styles are
+   recognised, each only when the section's notes use that same style: `〔n〕` in
+   中华经典藏书, `[n]` elsewhere, and `(n)` where a note block *opens* with
+   `(n)`. The test runs against *every* commentary evidence, not just the heading
+   state, because `introductory_material_after_work_title` and
+   `reviewed_publisher_commentary_style` also swallow poem bodies — the first
+   lines of 关雎 carry the second of those. The EPUB's author-credit lines
+   (`白居易 (2)`, `程颢 (2)`) are excluded by shape: their number resolves to a
+   biographical note rather than a gloss, so they would otherwise pass. 6,756
+   rows / 618,045 chars were restored, tagged
+   `role_evidence=classics_heading_state_restored_to_primary_text`.
+
+   Separately, every `commentary` block in this corpus comes from that one
+   volume, whose modern editors — 胡平生、王国轩、陈晓芬、于天池、陈曦 — are
+   named in the source filename. None of the commentary is by the classical
+   author it discusses: 304 rows of 王国轩's prose on 王国维's 人间词话 were
+   recorded as author=王国维, and the same rows also swept up the analysed
+   work's own text. 7,414 commentary rows now carry `author=(现代编者)` and
+   `role_evidence` suffixed `|attribution_to_modern_editor`, while the genuine
+   primary text of those authors (王国维's 人间词话, 王永彬's 围炉夜话) is
+   restored to them. A named editor is not guessed, because the volume credits
+   five of them for one file.
+
+   Blocks with no reference marks at all, in sections whose notes define none,
+   remain unclassified. Most genuine commentary and many genuine poems fall in
+   that bucket, and separating them needs a judgement this repair does not make.
+4. **Wrong-author prefaces.** Sections that credit a different writer
+   (`OSCAR WILDE: AN IDLER'S IMPRESSION by Edgar Saltus`) are not that
+   catalog author's prose. 2,805 rows in `TELENY` were re-attributed to the
+   writer the section names (Frank Harris, G. Bernard Shaw, Edgar Saltus).
+5. **Language mismatches.** `lang` was copied from the catalog, not measured
+   from the text. 4,829 rows marked `zh` that carry Latin prose with no CJK
+   (Hu Shi's English writings) were corrected to `en`.
+6. **Junk rows.** 3,961 rows whose text is only punctuation, only a page number,
+   or only index furniture (`Ⅱ`, `331119 331220 ③ 340522 ①`, the Cyrillic sort
+   keys of a notes index) were dropped, plus 37 Project Gutenberg licence
+   paragraphs, which ship inside the book body and otherwise survive the role
+   and length gates as apparent `primary_text`. The licence filter matches
+   Gutenberg's own vocabulary (`Project Gutenberg`, `PGLAF`, `gutenberg.org`),
+   so the three genuine literary mentions of the Gutenberg Bible survive.
+
+Counts above are rows surviving the deletions, not pre-deletion totals. The
+pass is deterministic and idempotent: running it twice produces byte-identical
+files.
+
+`books_work_passages_labeled.parquet` is byte-identical to the master by
+construction: its filter keeps all six roles the extractor emits and no
+`unknown` row survives extraction.
+
+### Remaining limits after repair
+
+These are known and are *not* fixed by the repair:
+
+- **`primary_clean` is still 96% one weak heuristic.** 208,721 of 278,709 rows
+  rest only on `catalog_author_and_*_text_language`, which infers a role from
+  whether the catalog author name is CJK or Latin. Sampling those rows finds
+  genuine novel prose but also table-of-contents entries, index fragments, and
+  editor biographies filed under the author's name.
+- **Author coverage is narrow.** `primary_clean` has 44 authors, `strict` only
+  14, and 27.6% of `strict` is placeholder attribution (`多位作者`, `佚名`).
+  `strict` is entirely Chinese classical text, so it is not a balanced
+  benchmark.
+- **A small number of works are entirely wrong-author.** The catalog names the
+  biographer, not the subject, for some biographies (`MARK TWAIN A BIOGRAPHY`
+  is Paine), so the `author` column describes the book, not necessarily its
+  prose.
+- **Cross-work duplicate text.** 1,385 texts in `primary_clean` appear under
+  more than one `work_id`, including long verbatim reprints shared across
+  works. Group splits by text, not by row, to avoid leakage.
+- **Reference ids miss fullwidth markers.** `reference_ids` is built from
+  ASCII `[n]` only, so 32,538 rows numbered `〔n〕` populate nothing, and ~74% of
+  annotation references dangle in `passage_relations.jsonl`.
+- **`section_title` is a running heading, not a per-work label.** In the
+  中华经典藏书 volume it carries forward across consecutive poems, so 343 of
+  3,500 works contain a section titled with a *different* poet — 李白's 春思
+  contains a section called 杜甫, which is the next poem bleeding in. It must not
+  be used to re-attribute a work's author, even though it looks like the obvious
+  signal: doing so would have mislabelled 2,458 rows, including 蜀道难 as 高适
+  and 登岳阳楼 as 王湾. The `author` column is wrong for those Tang poems
+  (the catalog carries the previous entry forward), and that is left uncorrected
+  here. Resolving it needs the poem's own title matched to a poet, which this
+  data does not carry.
+

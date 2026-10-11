@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
 from collections import Counter, defaultdict
@@ -22,14 +23,16 @@ from ebooklib import epub
 
 
 ROOT = Path(__file__).resolve().parents[2]
-DATA = ROOT / "data/datasets/corpora/bookraw"
-OUT = ROOT / "reports/bookraw"
-MANIFEST_OUT = OUT
+# Sources and outputs live on the data volume; see reports/bookraw/README.md.
+DATA_ROOT = Path(os.environ.get("STYLEVEC_DATA", "/Volumes/EMC/stylevec_data"))
+DATA = DATA_ROOT / "raw/human_author/bookraw_epub"
+OUT = DATA_ROOT / "processed/bookraw"
+MANIFEST_OUT = DATA_ROOT / "manifests/bookraw/epub20_legacy"
 sys.path.insert(0, str(DATA))
 CATALOGS = [
-    DATA / "work_catalog_english.jsonl",
-    DATA / "work_catalog_chinese_a.jsonl",
-    DATA / "work_catalog_chinese_b.jsonl",
+    MANIFEST_OUT / "work_catalog_english.jsonl",
+    MANIFEST_OUT / "work_catalog_chinese_a.jsonl",
+    MANIFEST_OUT / "work_catalog_chinese_b.jsonl",
 ]
 ROLE_MARKERS = {
     "注释": "annotation",
@@ -60,6 +63,24 @@ ROLE_CONFIDENCE = {
     "paratext": "high",
 }
 REF_RE = re.compile(r"\[(\d{1,6})\]")
+# `get_text(" ")` splits on inline tags, so Chinese text arrives with a space at
+# every inline boundary: `有蕡 其实 〔1〕` for `有蕡其实〔1〕`, and `〔1〕 。` with a
+# stranded space. Both forms are typographically impossible, so they are safe to
+# collapse. A space between two CJK characters is left alone: `二十七日 晴。` is a
+# genuine Lu Xun diary heading, not an extraction artifact.
+ZH_PUNCT_AFTER = re.compile(r"(?<=[，。、；：？！）」』】〕《〉·]) +")
+ZH_SPACE_BEFORE_OPEN = re.compile(r" +(?=[（「『【〔《〈])")
+ZH_SPACE_BEFORE_CLOSE = re.compile(r"(?<=[（「『【〔《〈]) +(?=[）」』】〕《〉])")
+ZH_SPACE_AFTER_CLOSE = re.compile(r"(?<=[）」』】〕《〉]) +(?=[㐀-䶿（「『【〔《])")
+
+
+def fix_zh_spacing(text: str) -> str:
+    text = ZH_PUNCT_AFTER.sub("", text)
+    text = ZH_SPACE_BEFORE_OPEN.sub("", text)
+    text = ZH_SPACE_BEFORE_CLOSE.sub("", text)
+    return ZH_SPACE_AFTER_CLOSE.sub("", text)
+
+
 NOTE_START_RE = re.compile(r"^\s*\[\d{1,6}\]")
 BOILERPLATE_RE = re.compile(
     r"^(?:copyright|all rights reserved|project gutenberg|gutenberg license|"
@@ -130,7 +151,12 @@ def dom_blocks(html: bytes, lang: str) -> list[dict]:
         paragraphs.append(
             {
                 "pos": positions[id(tag)],
-                "text": text,
+                # `get_text(" ")` joins every inline element with a space, which
+                # splits Chinese words at inline-markup seams and strands a space
+                # before fullwidth punctuation. Collapse only the spacing that is
+                # typographically impossible; spaces between two CJK characters may
+                # be genuine (diary dates, verse) and are kept.
+                "text": fix_zh_spacing(text) if lang == "zh" else text,
                 "tag": tag.name,
                 "id": tag.get("id"),
                 "classes": [str(x) for x in classes],
@@ -343,6 +369,13 @@ def classify_blocks(rows: list[dict], filenames: list[str], page_blocks: list[li
                     role, confidence, evidence = "commentary", "medium", "unlabeled_introductory_paragraph_in_classics_edition"
                 elif role_state != "unknown":
                     role, confidence, evidence = role_state, role_state_conf, role_state_evidence
+                    # A cue marker labels the block that follows it, not the rest
+                    # of the work. Consuming it once here stops a stray `后记`
+                    # near the start of a book from relabelling the whole novel
+                    # as editorial matter, which is what leaked before.
+                    role_state = "unknown"
+                    role_state_conf = "unknown"
+                    role_state_evidence = "role_state_cleared_after_single_use"
                 elif BOILERPLATE_RE.match(text):
                     role, confidence, evidence = "paratext", "high", "publication_boilerplate_pattern"
                 elif base_role != "unknown":
@@ -554,9 +587,12 @@ def main() -> None:
     if not blocks_frame.empty:
         blocks_frame.to_parquet(OUT / "books_work_blocks_labeled.parquet", index=False)
         clean_roles = {"primary_text", "translation", "annotation", "commentary", "editorial_matter", "paratext"}
-        blocks_frame[blocks_frame["text_role"].isin(clean_roles)].to_parquet(
-            OUT / "books_work_passages_labeled.parquet", index=False
-        )
+        # `blocks_frame` only ever emits those six roles -- anything else is
+        # dropped as `unknown` before a record is built -- so this filter is a
+        # no-op today and the two files are byte-identical. Keep the subset so
+        # the contract holds if a seventh role is ever introduced.
+        passages = blocks_frame[blocks_frame["text_role"].isin(clean_roles)]
+        passages.to_parquet(OUT / "books_work_passages_labeled.parquet", index=False)
         primary_mask = (
             (blocks_frame["text_role"] == "primary_text")
             & (blocks_frame["role_confidence"].isin(["high", "medium"]))

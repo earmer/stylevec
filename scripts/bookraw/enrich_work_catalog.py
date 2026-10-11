@@ -10,20 +10,23 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 from collections import Counter
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DATA_ROOT = REPO_ROOT / "data/datasets/corpora/bookraw"
-ACTIVE_DATA_ROOT = DATA_ROOT
+# Sources and outputs live on the data volume; see reports/bookraw/README.md.
+DATA_ROOT = Path(os.environ.get("STYLEVEC_DATA", "/Volumes/EMC/stylevec_data"))
+CATALOG_DIR = DATA_ROOT / "manifests/bookraw/epub20_legacy"
+ACTIVE_DATA_ROOT = DATA_ROOT / "raw/human_author/bookraw_epub"
 CATALOGS = [
-    DATA_ROOT / "work_catalog_english.jsonl",
-    DATA_ROOT / "work_catalog_chinese_a.jsonl",
-    DATA_ROOT / "work_catalog_chinese_b.jsonl",
+    CATALOG_DIR / "work_catalog_english.jsonl",
+    CATALOG_DIR / "work_catalog_chinese_a.jsonl",
+    CATALOG_DIR / "work_catalog_chinese_b.jsonl",
 ]
-WORK_OUTPUT = REPO_ROOT / "reports/bookraw/works_catalog_enriched.jsonl"
-SOURCE_OUTPUT = REPO_ROOT / "reports/bookraw/epub_sources.jsonl"
+WORK_OUTPUT = DATA_ROOT / "manifests/bookraw/works_catalog_enriched.jsonl"
+SOURCE_OUTPUT = DATA_ROOT / "manifests/bookraw/epub_sources.jsonl"
 TRANSLATION_RE = re.compile(r"\btranslation by\s+([^.;,]+)", re.I)
 TITLE_ROLE_RULES = [
     ("annotation", re.compile(r"^(?:注释条目|注释|注解|校注|译注|集注)")),

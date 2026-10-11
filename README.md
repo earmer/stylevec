@@ -53,7 +53,9 @@ A 75-language text quality pipeline used by the msynthstel data program: documen
 
 ### Literary Book Collection
 
-Several Chinese and English literary works collected from EPUB files attributed in their filenames to Anna's Archive, Z-Library, and Project Gutenberg. The legacy pipeline's 82,682 passages across 4,245 works remain in `data/datasets/corpora/bookraw/books_work_segments.parquet`. A new paragraph-level re-extraction labels primary text, translations, notes, commentary, editorial matter, and paratext in separate rows. It writes `reports/bookraw/books_work_blocks_labeled.parquet` and the training-ready primary-text subset `books_work_primary_clean.parquet`, with work-boundary and passage-relation sidecars. See [the annotation schema](docs/bookraw/ANNOTATION_SCHEMA.md) and the scripts in `scripts/bookraw/`.
+Several Chinese and English literary works collected from EPUB files attributed in their filenames to Anna's Archive, Z-Library, and Project Gutenberg, plus scanned PDFs of contemporary Chinese authors. A paragraph-level re-extraction labels primary text, translations, notes, commentary, editorial matter, and paratext in separate rows; a deterministic post-hoc repair pass then corrects whitespace injection, a role-state leak, misattributed editorials, and language mismatches in the master table. A separate scan-derived export produces a strict author-body subset for training.
+
+The datasets live on the external volume at `/Volumes/EMC/stylevec_data` (tables in `processed/bookraw/`, sidecars and audits in `manifests/bookraw/`); the repository keeps the code and documentation. See [reports/bookraw/README.md](reports/bookraw/README.md) for the map, [the annotation schema](docs/bookraw/ANNOTATION_SCHEMA.md) for what a row means and the limits that remain, and `scripts/bookraw/` for the pipeline.
 
 Copyright status varies depending on the author and your jurisdiction.
 

@@ -163,6 +163,11 @@ proofreading. The audit changed no existing table, sidecar, or export.
 
 ## Validation
 
+Tables and sidecars for this dataset live on the data volume under
+`/Volumes/EMC/stylevec_data` (`processed/bookraw/` and `manifests/bookraw/`); see
+[README.md](README.md) for the full map. The scripts default to that location and
+honour `STYLEVEC_DATA` for another checkout.
+
 The exporter is `scripts/bookraw/export_scanned.py`; server blocks are prepared
 with `scripts/bookraw/prepare_server_clean_fragments.py`. Run both with `uv run`
 and the reviewed body-range manifest. The exporter refuses incomplete assembled
