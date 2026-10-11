@@ -9,6 +9,32 @@ artifacts/lora/checkpoints_*/
 **/*.pt
 *.egg-info/
 .DS_Store
+stylevec_data
+# Local drafts, generated corpus artifacts, and one-off project additions.
+.commandcode/
+.scratch/
+artifacts/
+automating.md
+emc-preset/
+expandtraining/2606/colab/
+expandtraining/2606/configs/colab_smoke.yaml
+expandtraining/2606/configs/colab_t4.yaml
+expandtraining/2607/
+scripts/chinese_authors/
+stylegpt/FIX_HANDOFF.md
+stylegpt/leftovers.md
+# Generated book tables and provenance sidecars. Regenerate with
+# scripts/bookraw/ and re-verify; the documentation and audit reports are tracked.
+reports/bookraw/*.parquet
+reports/bookraw/books_scanned_lineage.jsonl
+reports/bookraw/books_scanned_exclusions.jsonl
+reports/bookraw/passage_relations.jsonl
+reports/bookraw/works_catalog_*.jsonl
+reports/bookraw/work_boundary_manifest.jsonl
+reports/bookraw/scanned_body_range_assignments.jsonl
+reports/bookraw/scanned_body_ranges*.jsonl
+reports/bookraw/luna2_review_imgs/
+reports/bookraw/selected_layout_review/
 artifacts/base-models/
 artifacts/lora/trained/
 artifacts/lora/plots/
@@ -43,3 +69,4 @@ data/datasets/msynthstel/analysis/
 data/datasets/msynthstel/pipeline/
 data/datasets/msynthstel/.cache/
 data/datasets/msynthstel/.claude/
+.env

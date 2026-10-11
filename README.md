@@ -53,7 +53,7 @@ A 75-language text quality pipeline used by the msynthstel data program: documen
 
 ### Literary Book Collection
 
-Several Chinese and English literary works collected from Anna's Archive and Z-Library. Raw epub/mobi formats acquired; text extraction and character-dialogue annotation pending to done.
+Several Chinese and English literary works collected from EPUB files attributed in their filenames to Anna's Archive, Z-Library, and Project Gutenberg. The legacy pipeline's 82,682 passages across 4,245 works remain in `data/datasets/corpora/bookraw/books_work_segments.parquet`. A new paragraph-level re-extraction labels primary text, translations, notes, commentary, editorial matter, and paratext in separate rows. It writes `reports/bookraw/books_work_blocks_labeled.parquet` and the training-ready primary-text subset `books_work_primary_clean.parquet`, with work-boundary and passage-relation sidecars. See [the annotation schema](docs/bookraw/ANNOTATION_SCHEMA.md) and the scripts in `scripts/bookraw/`.
 
 Copyright status varies depending on the author and your jurisdiction.
 

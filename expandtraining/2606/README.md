@@ -70,6 +70,12 @@ expandtraining/2606/
   configs/
     dryrun.yaml
     remote_5090x2.yaml
+    colab_t4.yaml
+    colab_smoke.yaml
+  colab/
+    colab_train.ipynb
+    prepare_drive.sh
+    requirements.txt
   src/
     config.py
     records.py
@@ -379,6 +385,44 @@ The first remote lane writes a final validation pass and one `latest`
 checkpoint. Resume uses the same script with a `--resume` pass-through if
 needed. Do not add top-k checkpoint ranking until there is a real model-selection
 metric.
+
+## Google Colab (Free T4)
+
+A single-GPU lane for Colab's free T4. It is the same code path as the remote
+lane, with a config that adapts to one Turing GPU:
+
+- `configs/colab_t4.yaml` — `precision: fp16` (T4 has no native bf16) and
+  `distributed: accelerate` so Accelerator installs the fp16 GradScaler;
+  batch 16 x accum 8 = 128 effective; 2 dataloader workers; 3000-step / 3-hour cap.
+- `configs/colab_smoke.yaml` — the `dryrun.yaml` shape for CUDA, no bookraw.
+
+Colab has no persistent disk, so code, data and outputs live in Drive:
+
+```text
+<Drive>/stylevec-colab/
+  code/expandtraining/2606/...   staged from the repo by prepare_drive.sh
+  data/...                       repo-relative data files
+  outputs/                       symlinked from the workspace (checkpoints)
+  tf-logs/                       symlinked from the workspace (TensorBoard)
+  base-models/                   Qwen3-0.6B downloaded once from HuggingFace
+```
+
+One-time staging from the machine that holds the data:
+
+```bash
+bash expandtraining/2606/colab/prepare_drive.sh \
+  "/path/to/Google Drive/My Drive/stylevec-colab"
+```
+
+Then open `expandtraining/2606/colab/colab_train.ipynb` in Colab with a T4
+runtime and run the cells. The notebook copies the code and data into
+`/content/stylevec`, symlinks `outputs/` and `tf-logs/` back to Drive, pulls
+`Qwen/Qwen3-0.6B` from HuggingFace, runs the smoke test, then trains. Resume
+after a disconnect uses the same `--resume` checkpoint in Drive.
+
+Do not install the repo's `pyproject.toml` on Colab: it would replace the
+preinstalled CUDA torch build. `colab/requirements.txt` lists only the extra
+packages the lane imports.
 
 ## Validation
 

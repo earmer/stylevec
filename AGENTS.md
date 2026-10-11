@@ -27,6 +27,10 @@ The repository includes active research code, reproducibility artifacts, generat
 - `hidden/`: hidden-state probing experiments and data preparation for causal LM analysis.
 - `lora/`: LoRA fine-tuning experiments, plots, evaluation code, and training utilities.
 - `paper_replication/`: StyleDistance replication code, evaluation scripts, configuration, logs, and paper sources.
+- `scripts/bookraw/`: book corpus extraction, scanned-book export, and verification.
+- `scripts/weak_ocr_audit/`: sampled character-level OCR quality audit of the strict scanned table.
+- `docs/bookraw/`: annotation schema for the labeled book corpus.
+- `reports/bookraw/`: scanned-books documentation, audits, and provenance sidecars. Large generated tables here (`*.parquet`, the lineage and exclusion JSONLs) are not tracked; see `.gitignore`.
 - `shared/`: reusable configuration, device, dataset, classifier, and evaluation utilities.
 - `tools/simlar/`: Rust/PyO3 batch similarity library.
 - `verifier/`: algorithm notes and verification material.
@@ -151,3 +155,13 @@ When editing any of these, keep the surrounding experimental narrative intact. I
 - It is fine to leave experiments in place if they document the path taken.
 - It is better to preserve a useful artifact than to polish it away prematurely.
 - If a directory already contains generated results, treat them as part of the project history unless the User says otherwise.
+
+## AutoDL CLI
+
+- Use the globally installed `autodl` command for AutoDL Pro machine management; check `autodl --help` for current commands.
+- If `autodl` is not found, prepend `$HOME/Library/pnpm/bin` to `PATH` for the subprocess; noninteractive Codex shells may not load `.zshrc`.
+- `.env` stores the developer token as `AUTODL_DEV_TOK`; the CLI reads `AUTODL_TOKEN`. Map it only into the child process environment. Never print, log, pass as an argument, or commit the token or `.env` file.
+- `autodl info <id> --show-password` reveals the SSH password. Request it only when needed and redact it from output.
+- The CLI does not load `.env` itself. Map `AUTODL_DEV_TOK` to `AUTODL_TOKEN` for each subprocess; do not use the CLI's `--token` option for secrets.
+- Common commands: `autodl ls --json`, `autodl info <id>`, `autodl start <id> --wait`, and `autodl stop <id>`. `autodl rm <id>` permanently deletes the instance and its data; use only when explicitly requested.
+- Only AutoDL Pro instances are API-managed. Starting an instance begins billing. There is no restart command: stop it, wait for shutdown, then start it again.

@@ -33,4 +33,8 @@ dependencies = [
     "opentsne>=1.0.4",
     "ebooklib>=0.18",
     "mobi>=0.3.3",
+    # scripts/chinese_authors: wikitext cleaning + simplified/traditional
+    # matching for the Wikisource and Wikidata lookups.
+    "zhconv>=1.4.3",
+    "mwparserfromhell>=0.7.2",
 ]
