@@ -1,0 +1,22 @@
+# Round C: training-method toggles FINDINGS.md section 6 lists, on the round-A control.
+# Equal steps, not equal wall-clock: max_length_384 is slower per step and that is the price it pays.
+name: methods_c
+description: >
+  One method change per arm against the same curriculum. Spread regularization is two keys
+  (variance and covariance weights) declared as one factor.
+base: configs/remote_5090x2.yaml
+world_size: 2
+seeds: [42, 43, 44]
+common:
+  curriculum.mode: staged
+arms:
+  control: {}
+  no_spread: {regularization.variance_weight: 0.0, regularization.covariance_weight: 0.0}
+  no_matryoshka: {regularization.matryoshka_weight: 0.0}
+  max_length_384: {model.max_length: 384}
+comparisons:
+  - {arm: no_spread, against: control, isolates: spread regularization,
+     keys: [regularization.covariance_weight, regularization.variance_weight]}
+  - {arm: no_matryoshka, against: control, isolates: matryoshka prefix loss}
+  - {arm: max_length_384, against: control, isolates: truncation at 192 tokens}
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, macro_violation]

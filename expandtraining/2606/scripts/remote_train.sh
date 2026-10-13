@@ -5,6 +5,8 @@ cd "$(dirname "$0")/../../.."
 
 export OMP_NUM_THREADS=8
 
+# CONFIG overrides the config, e.g. an ablation arm from scripts/ablation.py plan.
+CONFIG="${CONFIG:-expandtraining/2606/configs/remote_5090x2.yaml}"
 RUN_NAME="${1:?usage: remote_train.sh <run_name> [--resume checkpoint_dir]}"
 shift
 
@@ -18,6 +20,6 @@ fi
   --num_processes 2 \
   --mixed_precision bf16 \
   expandtraining/2606/scripts/train.py \
-  --config expandtraining/2606/configs/remote_5090x2.yaml \
+  --config "$CONFIG" \
   --run-name "$RUN_NAME" \
   "$@"

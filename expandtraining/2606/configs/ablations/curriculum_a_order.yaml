@@ -1,0 +1,22 @@
+# Round A: does ordering help beyond what the re-weighting alone does?
+# uv run python expandtraining/2606/scripts/ablation.py plan expandtraining/2606/configs/ablations/curriculum_a_order.yaml
+name: curriculum_a
+description: >
+  Order vs exposure. Every arm shares data, steps, seeds and the evaluation set.
+  uniform -> mixed isolates the tier re-weighting; mixed -> staged isolates the ordering
+  (the curriculum proper); staged vs anti tests direction; staged_linear tests the pacing shape.
+base: configs/remote_5090x2.yaml
+world_size: 2
+seeds: [42, 43, 44]
+arms:
+  uniform: {curriculum.mode: uniform}
+  mixed: {curriculum.mode: mixed}
+  staged: {curriculum.mode: staged}
+  anti: {curriculum.mode: anti}
+  staged_linear: {curriculum.pacing: linear}
+comparisons:
+  - {arm: mixed, against: uniform, isolates: exposure}
+  - {arm: staged, against: mixed, isolates: order}
+  - {arm: staged, against: anti, isolates: direction}
+  - {arm: staged_linear, against: staged, isolates: pacing}
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para]

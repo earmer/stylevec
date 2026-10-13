@@ -1,0 +1,32 @@
+# Round D: 2x2 factorial, order x late hard share. Only worth running if round A found an order effect.
+# Changing stage weights also changes exposure, so a schedule variant is judged against its own mixed
+# twin; the interaction asks whether the order effect grows when the late stage gets harder.
+name: curriculum_d
+description: >
+  order {staged, mixed} x late stage {default 0.50 hard, 0.65 hard}. Main effects come from the two order
+  comparisons; the interaction is their difference, paired by seed.
+base: configs/remote_5090x2.yaml
+world_size: 2
+seeds: [42, 43, 44]
+arms:
+  staged: {curriculum.mode: staged}
+  mixed: {curriculum.mode: mixed}
+  staged_hard65:
+    curriculum.mode: staged
+    curriculum.stages:
+      - {until: 0.35, tiers: {easy: 0.70, mid: 0.25, hard: 0.05}}
+      - {until: 0.70, tiers: {easy: 0.35, mid: 0.40, hard: 0.25}}
+      - {until: 1.00, tiers: {easy: 0.20, mid: 0.15, hard: 0.65}}
+  mixed_hard65:
+    curriculum.mode: mixed
+    curriculum.stages:
+      - {until: 0.35, tiers: {easy: 0.70, mid: 0.25, hard: 0.05}}
+      - {until: 0.70, tiers: {easy: 0.35, mid: 0.40, hard: 0.25}}
+      - {until: 1.00, tiers: {easy: 0.20, mid: 0.15, hard: 0.65}}
+comparisons:
+  - {name: order_default, arm: staged, against: mixed, isolates: order at hard 0.50}
+  - {name: order_hard65, arm: staged_hard65, against: mixed_hard65, isolates: order at hard 0.65}
+  - {name: schedule_hard65, arm: staged_hard65, against: staged, isolates: schedule shape and exposure}
+interactions:
+  - {name: order_x_hard_share, of: [order_hard65, order_default]}
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched]

@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 from build_triplets import build_training_triplets
 from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
-from curriculum import curriculum_order
+from curriculum import curriculum_order, schedule_summary
 from losses import embedding_spread_loss, matryoshka_triplet_margin_loss, weighted_triplet_margin_loss
 from model import (
     build_qwen_style_encoder,
@@ -189,13 +189,22 @@ def curriculum_row_budget(config: dict[str, Any]) -> int:
     return int(train["max_steps"]) * int(train["batch_size"]) * int(train.get("grad_accum", 1)) * world
 
 
+def curriculum_enabled(config: dict[str, Any]) -> bool:
+    return bool(config.get("curriculum", {}).get("enabled", False))
+
+
+def train_loader_shuffles(config: dict[str, Any]) -> bool:
+    # Curriculum and rule-balanced orders are positional; a shuffling loader would erase them.
+    return not (curriculum_enabled(config) or bool(config["train"].get("rule_balanced_batches", False)))
+
+
 def order_train_triplets(
     config: dict[str, Any],
     train_triplets: list[Any],
     epoch: int,
     start_step: int = 0,
 ) -> list[Any]:
-    if bool(config.get("curriculum", {}).get("enabled", False)):
+    if curriculum_enabled(config):
         # One pass covers all max_steps; stage follows position, so `epochs` is irrelevant here.
         ordered = curriculum_order(
             train_triplets, config, int(config["runtime"]["seed"]), curriculum_row_budget(config)
@@ -233,7 +242,7 @@ def build_loaders(
     train_loader = DataLoader(
         train_dataset,
         batch_size=int(config["train"]["batch_size"]),
-        shuffle=not bool(config["train"].get("rule_balanced_batches", False)),
+        shuffle=train_loader_shuffles(config),
         generator=generator,
         collate_fn=collate,
         **train_loader_kwargs,
@@ -301,6 +310,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     train_dataset, train_loader, val_loader = build_loaders(config, tokenizer, triplets)
     eval_val_loader = val_loader
     raw_train_triplets = [row for row in triplets if row.split == "train"]
+    write_run_records(config, run_dir, train_dataset.triplets, raw_train_triplets)
 
     requested_device = str(config["runtime"]["device"])
     use_accelerate = str(config["runtime"].get("distributed", "none")) == "accelerate" or int(os.environ.get("WORLD_SIZE", "1")) > 1
@@ -552,6 +562,31 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
         accelerator.wait_for_everyone()
         accelerator.end_training()
     return run_dir
+
+
+def write_run_records(
+    config: dict[str, Any],
+    run_dir: Path,
+    ordered: list[Any],
+    train_triplets: list[Any],
+) -> None:
+    """The exact config and, under a curriculum, what the schedule actually sampled."""
+    if int(os.environ.get("RANK", "0")) != 0:
+        return
+    (run_dir / "config.yaml").write_text(config_snapshot(config), encoding="utf-8")
+    if not curriculum_enabled(config):
+        return
+    if float(config["train"].get("max_seconds", 0.0)) > 0.0:
+        print(
+            "warning: curriculum stages follow max_steps; train.max_seconds can stop the run before the late "
+            "stages, so a time-capped staged arm is not comparable to its mixed control",
+            flush=True,
+        )
+    available: dict[str, int] = {}
+    for row in train_triplets:
+        available[row.rule] = available.get(row.rule, 0) + 1
+    summary = schedule_summary(ordered, config, available)
+    (run_dir / "curriculum_schedule.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
 def should_stop(global_step: int, total_steps: int, stop_time: float) -> bool:

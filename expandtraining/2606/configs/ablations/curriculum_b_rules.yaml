@@ -1,0 +1,29 @@
+# Round B: which rules earn their place. Run after round A; set curriculum.mode to its winner
+# (staged if the order effect was real, else mixed). Each arm is the control plus one tier change.
+# Dropping a rule hands its draws to the rest of its tier: read the plan's exposure audit.
+name: curriculum_b
+description: >
+  Leave-one-rule-out on the rules FINDINGS.md flags. drop_topic_matched removes the only hard-tier rule,
+  so it also tests whether a hard tier matters at all. To test measured tiers, add an arm with the output of
+  `ablation.py tiers <control run>/validation` as `curriculum.tiers` (it needs the control's validation first).
+base: configs/remote_5090x2.yaml
+world_size: 2
+seeds: [42, 43, 44]
+common:
+  curriculum.mode: staged
+arms:
+  control: {}
+  drop_topic_matched: {curriculum.tiers.same_speaker_topic_matched: drop}
+  drop_original_push: {curriculum.tiers.paratarget_original_push: drop}
+  drop_target_hard_negative: {curriculum.tiers.target_hard_negative: drop}
+  # The length course is split per domain, so it holds 2 of the 5 easy-tier rule slots.
+  length_course_one_slot:
+    curriculum.rule_shares.length_course_genshin: 0.5
+    curriculum.rule_shares.length_course_msynthstel: 0.5
+comparisons:
+  - {arm: drop_topic_matched, against: control, isolates: scene-matched negatives}
+  - {arm: drop_original_push, against: control, isolates: human-vs-generated push}
+  - {arm: drop_target_hard_negative, against: control, isolates: generated hard negatives}
+  - {arm: length_course_one_slot, against: control, isolates: length-course share of the easy tier,
+     keys: [curriculum.rule_shares.length_course_genshin, curriculum.rule_shares.length_course_msynthstel]}
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:generated_to_target]

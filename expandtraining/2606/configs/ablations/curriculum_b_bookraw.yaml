@@ -1,0 +1,48 @@
+# Round B (bookraw): settle the open bookraw_same_work question by measurement.
+# The remote box needs paths.bookraw_cleaned to exist there; the volume path below is local only.
+name: curriculum_bookraw
+description: >
+  bookraw_same_work uses adjacent positives and previously taught work/topic detection (gap +0.54 vs
+  cross-work +0.05). keep vs drop vs demoting it to mid, judged on bookraw_same_author_cross_work.
+base: configs/remote_5090x2.yaml
+world_size: 2
+seeds: [42, 43, 44]
+new_keys:
+  - paths.bookraw_cleaned
+  - data.bookraw_enabled
+  - data.bookraw_authors
+  - data.bookraw_segments_per_author
+  - data.bookraw_segments_per_work
+  - data.bookraw_min_chars
+  - data.bookraw_max_chars
+  - data.bookraw_min_segments_per_author
+  - data.bookraw_min_segments_per_work
+  - data.bookraw_triplets_per_rule
+  - weights.bookraw_same_work
+  - weights.bookraw_cross_work
+  - weights.bookraw_author_negative
+  - validation.bookraw_triplets_per_rule
+common:
+  curriculum.mode: staged
+  paths.bookraw_cleaned: /Volumes/EMC/stylevec_data/manifests/bookraw/epub20_legacy/books_cleaned.parquet
+  data.bookraw_enabled: true
+  data.bookraw_authors: 48
+  data.bookraw_segments_per_author: 384
+  data.bookraw_segments_per_work: 128
+  data.bookraw_min_chars: 160
+  data.bookraw_max_chars: 1800
+  data.bookraw_min_segments_per_author: 16
+  data.bookraw_min_segments_per_work: 4
+  data.bookraw_triplets_per_rule: 4500
+  weights.bookraw_same_work: 0.35
+  weights.bookraw_cross_work: 0.45
+  weights.bookraw_author_negative: 0.40
+  validation.bookraw_triplets_per_rule: 200
+arms:
+  keep_same_work: {}
+  drop_same_work: {curriculum.tiers.bookraw_same_work: drop}
+  same_work_mid: {curriculum.tiers.bookraw_same_work: mid}
+comparisons:
+  - {arm: drop_same_work, against: keep_same_work, isolates: same-work positives}
+  - {arm: same_work_mid, against: keep_same_work, isolates: same-work tier}
+headline: [gap:bookraw_same_author_cross_work, provenance_acc, heldout_top1_lift]

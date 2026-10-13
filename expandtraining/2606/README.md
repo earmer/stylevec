@@ -125,7 +125,16 @@ validate.py:      --config --run-name [--resume]
 ```
 
 The messy work belongs inside importer files and config files, not in training
-entrypoints. The core training code should receive already-normalized triplets.
+entrypoints.
+
+Curriculum strategies and ablations (one config per arm and seed, one shared
+evaluation set, paired comparisons) are described in `CURRICULUM.md`:
+
+```bash
+uv run python expandtraining/2606/scripts/ablation.py plan <spec> [--manifest <manifest.json>]
+uv run python expandtraining/2606/scripts/ablation.py compare <spec>
+uv run python expandtraining/2606/scripts/ablation.py tiers <run>/validation
+``` The core training code should receive already-normalized triplets.
 
 ## Data Contract
 
