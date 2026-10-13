@@ -5,12 +5,14 @@ from collections import defaultdict
 from typing import Any
 
 from config import resolve_repo_path
+from import_genshin import heldout_speakers
 from records import SampleRecord, normalize_text, stable_id
 
 
 def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tuple[list[SampleRecord], dict[str, int]]:
     path = resolve_repo_path(str(config["paths"]["paratarget_jsonl"]))
     speaker_set = set(speakers)
+    heldout = heldout_speakers(config, speakers)
     max_jobs = int(config["data"]["paratarget_jobs"])
     per_target_cap = int(config["data"].get("paratarget_per_target_cap", max_jobs))
     min_ratio = float(config["data"].get("paratarget_min_length_ratio", 0.5))
@@ -48,6 +50,7 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
                 continue
             kept_for_job = 0
             job_id = str(row.get("job_id", f"line-{line_no}"))
+            job_split = paratarget_job_split(job_id, str(source_speaker), str(target_speaker), heldout)
             for index, (source_raw, generated_raw) in enumerate(zip(source_lines, generated_lines)):
                 source_text = normalize_text(str(source_raw))
                 generated_text = normalize_text(str(generated_raw))
@@ -61,7 +64,7 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
                 if ratio < min_ratio or ratio > max_ratio:
                     filter_counts["length_ratio"] += 1
                     continue
-                split = "val" if stable_id(job_id, index, size=2) < "20" else "train"
+                split = job_split
                 samples.append(
                     SampleRecord(
                         sample_id=stable_id("paratarget", job_id, index),
@@ -96,3 +99,10 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
     if not samples:
         raise ValueError("paratarget importer produced no samples")
     return samples, dict(filter_counts)
+
+
+def paratarget_job_split(job_id: str, source: str, target: str, heldout: set[str]) -> str:
+    """Whole job to one split; jobs touching a held-out speaker are always val."""
+    if source in heldout or target in heldout:
+        return "val"
+    return "val" if stable_id(job_id, size=2) < "20" else "train"

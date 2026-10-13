@@ -17,6 +17,7 @@ from config import configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from losses import embedding_spread_diagnostics, scalar_stats, weighted_triplet_margin_loss
 from model import build_qwen_style_encoder, encode_triplet, load_trainable_state_dict
+from report import per_rule_table, provenance_probe, render_report, speaker_retrieval
 from probes import length_leakage_metrics, vector_probe_metrics
 
 
@@ -103,7 +104,7 @@ def collect_validation_embeddings(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
-    max_samples: int,
+    max_samples: int | None = None,
     prefix_dims: list[int] | None = None,
     combine_forward: bool = False,
     non_blocking: bool = False,
@@ -127,28 +128,45 @@ def collect_validation_embeddings(
                         "triplet_id": batch["triplet_id"][index],
                         "role": role,
                         "rule": batch["rule"][index],
+                        "heldout": bool(batch["meta"][index].get("heldout", False)),
+                        "speaker": speaker_of(batch["meta"][index], role),
                         "char_length": len(text),
                         "length_bucket": len(text) // 40,
                         "text_preview": text[:120],
                     }
                 )
                 vectors.append(embedding.numpy())
-                if len(rows) >= max_samples:
-                    matrix = np.stack(vectors, axis=0)
-                    summary = cosine_summary(
-                        torch.cat(all_pos),
-                        torch.cat(all_neg),
-                        matrix,
-                        pd.DataFrame(rows),
-                        prefix_dims or (),
-                    )
-                    return pd.DataFrame(rows), matrix, summary
+        # Stop only on a batch boundary (and only if asked): never leave a triplet half-collected.
+        if max_samples is not None and len(rows) >= max_samples:
+            break
     if not rows:
         raise ValueError("no validation embeddings collected")
     matrix = np.stack(vectors, axis=0)
     frame = pd.DataFrame(rows)
     summary = cosine_summary(torch.cat(all_pos), torch.cat(all_neg), matrix, frame, prefix_dims or ())
     return frame, matrix, summary
+
+
+def speaker_of(meta: dict[str, Any], role: str) -> str:
+    if role == "negative":
+        return str(meta.get("negative_speaker", ""))
+    return str(meta.get("speaker", ""))
+
+
+def select_validation_triplets(triplets: list[Any], per_rule: int) -> list[Any]:
+    """Fixed N per (rule, heldout) bucket, evenly spread; every val rule present is represented."""
+    buckets: dict[tuple[str, bool], list[Any]] = {}
+    for row in triplets:
+        if row.split == "val":
+            buckets.setdefault((row.rule, bool(row.meta.get("heldout", False))), []).append(row)
+    chosen: list[Any] = []
+    for key in sorted(buckets):
+        rows = sorted(buckets[key], key=lambda r: r.triplet_id)
+        if len(rows) > per_rule:
+            picks = np.unique(np.linspace(0, len(rows) - 1, per_rule).astype(int))
+            rows = [rows[i] for i in picks]
+        chosen.extend(rows)
+    return chosen
 
 
 def cosine_summary(
@@ -252,7 +270,8 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
             raise ValueError("tokenizer has neither pad_token nor eos_token")
         tokenizer.pad_token = tokenizer.eos_token
     collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]))
-    val_dataset = TripletTextDataset(triplets, "val")
+    selected = select_validation_triplets(triplets, int(config["validation"].get("per_rule", 64)))
+    val_dataset = TripletTextDataset(selected, "val")
     val_loader = DataLoader(
         val_dataset,
         batch_size=int(config["validation"]["batch_size"]),
@@ -269,7 +288,7 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
         model,
         val_loader,
         device,
-        max_samples=int(config["validation"]["max_samples"]),
+        max_samples=None,
         prefix_dims=configured_matryoshka_dims(config),
         combine_forward=bool(config["train"].get("combine_triplet_forward", False)),
         non_blocking=False,
@@ -278,6 +297,16 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
     np.save(out_dir / "embeddings.npy", embeddings)
     (out_dir / "cosine_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     write_umap_outputs(rows, embeddings, out_dir)
+    table = per_rule_table(rows, embeddings)
+    retrieval = {
+        "heldout speakers": speaker_retrieval(rows, embeddings, heldout=True),
+        "seen speakers": speaker_retrieval(rows, embeddings, heldout=False),
+    }
+    probe = provenance_probe(rows, embeddings)
+    table.to_csv(out_dir / "per_rule.csv", index=False)
+    (out_dir / "retrieval_probe.json").write_text(
+        json.dumps({"retrieval": retrieval, "provenance": probe}, indent=2, sort_keys=True), encoding="utf-8"
+    )
     report = [
         "# Validation Report",
         "",
@@ -292,6 +321,7 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
         f"- length/cosine delta corr: `{summary['length_cosine_delta_corr']:.4f}`",
         f"- same-bucket cosine lift: `{summary['length_same_minus_diff_cos']:.4f}`",
     ]
+    report += [""] + render_report(table, retrieval, probe)
     (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     return out_dir
 

@@ -19,6 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 from build_triplets import build_training_triplets
 from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
+from curriculum import curriculum_order
 from losses import embedding_spread_loss, matryoshka_triplet_margin_loss, weighted_triplet_margin_loss
 from model import (
     build_qwen_style_encoder,
@@ -27,7 +28,7 @@ from model import (
     parameter_summary,
     trainable_state_dict,
 )
-from validate import evaluate_triplet_loader, move_batch_to_device
+from validate import evaluate_triplet_loader, move_batch_to_device, select_validation_triplets
 
 
 def seed_everything(seed: int) -> None:
@@ -182,7 +183,27 @@ def _rotated(values: list[str], offset: int) -> list[str]:
     return values[offset:] + values[:offset]
 
 
-def order_train_triplets(config: dict[str, Any], train_triplets: list[Any], epoch: int) -> list[Any]:
+def curriculum_row_budget(config: dict[str, Any]) -> int:
+    train = config["train"]
+    world = int(os.environ.get("WORLD_SIZE", "1"))
+    return int(train["max_steps"]) * int(train["batch_size"]) * int(train.get("grad_accum", 1)) * world
+
+
+def order_train_triplets(
+    config: dict[str, Any],
+    train_triplets: list[Any],
+    epoch: int,
+    start_step: int = 0,
+) -> list[Any]:
+    if bool(config.get("curriculum", {}).get("enabled", False)):
+        # One pass covers all max_steps; stage follows position, so `epochs` is irrelevant here.
+        ordered = curriculum_order(
+            train_triplets, config, int(config["runtime"]["seed"]), curriculum_row_budget(config)
+        )
+        per_step = int(config["train"]["batch_size"]) * int(config["train"].get("grad_accum", 1)) * int(
+            os.environ.get("WORLD_SIZE", "1")
+        )
+        return ordered[start_step * per_step :] or ordered[-per_step:]
     if not bool(config["train"].get("rule_balanced_batches", False)):
         rows = list(train_triplets)
         generator = random.Random(int(config["runtime"]["seed"]) + epoch)
@@ -203,7 +224,9 @@ def build_loaders(
     collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]))
     train_triplets = [row for row in triplets if row.split == "train"]
     train_dataset = TripletTextDataset(order_train_triplets(config, train_triplets, epoch=0), "train")
-    val_dataset = TripletTextDataset(triplets, "val")
+    val_dataset = TripletTextDataset(
+        select_validation_triplets(triplets, int(config["validation"].get("per_rule", 64))), "val"
+    )
     generator = torch.Generator()
     generator.manual_seed(int(config["runtime"]["seed"]))
     train_loader_kwargs = dataloader_worker_kwargs(config["train"])
@@ -362,7 +385,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     last_epoch = start_epoch
     for epoch in range(start_epoch, int(config["train"]["epochs"])):
         last_epoch = epoch
-        train_dataset.set_triplets(order_train_triplets(config, raw_train_triplets, epoch))
+        train_dataset.set_triplets(order_train_triplets(config, raw_train_triplets, epoch, global_step))
         for batch_index, batch in enumerate(train_loader):
             if should_stop(global_step, total_steps, stop_time):
                 break

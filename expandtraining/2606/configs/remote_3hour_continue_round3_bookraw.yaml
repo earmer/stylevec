@@ -11,7 +11,7 @@ paths:
   paratarget_jsonl: data/paratarget/generations_pairwise_validation_2p5cny.jsonl
   msynthstel_train: data/datasets/msynthstel/data/train-00000-of-00001.parquet
   msynthstel_test: data/datasets/msynthstel/data/test-00000-of-00001.parquet
-  bookraw_cleaned: data/datasets/corpora/bookraw/books_cleaned.parquet
+  bookraw_cleaned: /Volumes/EMC/stylevec_data/manifests/bookraw/epub20_legacy/books_cleaned.parquet
   base_model: artifacts/base-models/qwen-3-0.6b
 
 data:

@@ -15,6 +15,11 @@ paths:
 
 data:
   speakers: 100
+  heldout_speakers: 20
+  genshin_min_id_gap: 150
+  genshin_scene_window: 12
+  genshin_candidates: 24
+  same_content_diff_style_enabled: false
   genshin_lines_per_speaker: 64
   paratarget_jobs: 20000
   paratarget_per_target_cap: 500
@@ -48,6 +53,7 @@ model:
 
 weights:
   genshin_real: 1.0
+  genshin_topic_matched: 1.0
   paratarget: 0.75
   paratarget_original_push: 0.08
   msynthstel: 0.10
@@ -88,9 +94,18 @@ regularization:
 validation:
   batch_size: 32
   max_samples: 512
+  per_rule: 64
   max_triplets: 2048
   max_batches: 32
   length_course_triplets_per_domain: 40
 
 logging:
   train_every_steps: 5
+
+curriculum:
+  enabled: true
+  mode: staged   # staged | mixed (control: same budget, time-averaged mixture)
+  stages:
+    - {until: 0.35, tiers: {easy: 0.70, mid: 0.25, hard: 0.05}}
+    - {until: 0.70, tiers: {easy: 0.35, mid: 0.40, hard: 0.25}}
+    - {until: 1.00, tiers: {easy: 0.20, mid: 0.30, hard: 0.50}}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from bisect import bisect_left
 from collections import Counter, defaultdict
 from typing import Any
@@ -9,6 +10,7 @@ from import_bookraw import load_bookraw_samples
 from import_genshin import load_genshin_samples, load_top_speakers
 from import_msynthstel import load_msynthstel_samples
 from import_paratarget import load_paratarget_samples
+from similarity import char_ngrams, jaccard
 from records import SampleRecord, TripletRecord, normalize_text, stable_id
 
 
@@ -61,10 +63,12 @@ def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord]
 
 def require_rule_coverage(config: dict[str, Any], triplets: list[TripletRecord]) -> None:
     required = {
-        "genshin": {"same_speaker_real", "origin_vs_para"},
-        "paratarget": {"generated_to_target", "same_content_diff_style", "target_hard_negative"},
+        "genshin": {"same_speaker_real", "same_speaker_topic_matched", "origin_vs_para"},
+        "paratarget": {"generated_to_target", "target_hard_negative"},
         "msynthstel": {"trait_positive_vs_negative", "trait_cross_feature_hard"},
     }
+    if bool(config["data"].get("same_content_diff_style_enabled", True)):
+        required["paratarget"].add("same_content_diff_style")
     if bool(config["data"].get("bookraw_enabled", False)):
         required["bookraw"] = {
             "bookraw_same_work",
@@ -118,45 +122,86 @@ def add_triplet(
 
 
 def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], split: str) -> list[TripletRecord]:
+    """Same-speaker triplets that cannot be solved by scene/topic.
+
+    same_speaker_real           positive: same speaker, different scene. negative: length-matched random speaker.
+    same_speaker_topic_matched  positive: same speaker, different scene, least lexical overlap.
+                                negative: another speaker's line from the SAME scene as the anchor.
+    origin_vs_para              positive: same speaker, different scene. negative: neutral paraphrase of the anchor.
+    """
     weights = config["weights"]
     margins = config["margins"]
+    min_gap = int(config["data"].get("genshin_min_id_gap", 150))
+    candidates = int(config["data"].get("genshin_candidates", 24))
     grouped = by_style(samples, split, "genshin")
     speakers = [speaker for speaker, rows in grouped.items() if len(rows) >= 2]
     if len(speakers) < 2:
         return []
+    grams = {row.sample_id: char_ngrams(row.text) for rows in grouped.values() for row in rows}
+    pool = [(speaker, row) for speaker in speakers for row in grouped[speaker]]
     triplets: list[TripletRecord] = []
-    for speaker_index, speaker in enumerate(speakers):
+    for speaker in speakers:
         rows = grouped[speaker]
-        negative_speaker = speakers[(speaker_index + 1) % len(speakers)]
-        negative_rows = grouped[negative_speaker]
-        for index, anchor in enumerate(rows):
-            positive = rows[(index + 1) % len(rows)]
-            negative = negative_rows[index % len(negative_rows)]
-            add_triplet(
-                triplets,
-                anchor.text,
-                positive.text,
-                negative.text,
-                "same_speaker_real",
-                split,
-                float(weights["genshin_real"]),
-                float(margins["medium"]),
-                {"speaker": speaker, "negative_speaker": negative_speaker},
-            )
+        for anchor in rows:
+            rng = random.Random(f"genshin:{anchor.sample_id}")
+            far = far_rows(anchor, rows, min_gap)
+            if not far:
+                continue
+            anchor_grams = grams[anchor.sample_id]
+            sampled_far = rng.sample(far, min(candidates, len(far)))
+            easy_positive = sampled_far[0]
+            topic_positive = min(sampled_far, key=lambda row: jaccard(anchor_grams, grams[row.sample_id]))
+            others = [
+                row
+                for other, row in rng.sample(pool, min(candidates * 4, len(pool)))
+                if other != speaker and length_compatible(anchor, row)
+            ]
+            meta = {"speaker": speaker, "heldout": bool(anchor.meta.get("heldout", False))}
+            if others:
+                easy_negative = min(others[:candidates], key=lambda row: abs(sample_length(row) - sample_length(anchor)))
+                add_triplet(
+                    triplets, anchor.text, easy_positive.text, easy_negative.text,
+                    "same_speaker_real", split, float(weights["genshin_real"]), float(margins["medium"]),
+                    {**meta, "negative_speaker": easy_negative.style_id},
+                )
+            scene = [n for n in anchor.meta.get("scene_neighbors", []) if 0.4 <= len(n[1]) / max(1, len(anchor.text)) <= 2.5]
+            if scene:
+                neighbor = scene[rng.randrange(len(scene))]
+                add_triplet(
+                    triplets, anchor.text, topic_positive.text, neighbor[1],
+                    "same_speaker_topic_matched", split,
+                    float(weights.get("genshin_topic_matched", weights["genshin_real"])), float(margins["hard"]),
+                    {
+                        **meta,
+                        "negative_speaker": neighbor[0],
+                        "negative_id_distance": neighbor[2],
+                        "positive_id_distance": abs(int(topic_positive.meta["db_id"]) - int(anchor.meta["db_id"])),
+                    },
+                )
             para_text = anchor.meta.get("para_text")
             if isinstance(para_text, str) and para_text:
                 add_triplet(
-                    triplets,
-                    anchor.text,
-                    positive.text,
-                    para_text,
-                    "origin_vs_para",
-                    split,
-                    float(weights["genshin_real"]),
-                    float(margins["hard"]),
-                    {"speaker": speaker},
+                    triplets, anchor.text, easy_positive.text, para_text,
+                    "origin_vs_para", split, float(weights["genshin_real"]), float(margins["hard"]), meta,
                 )
     return triplets
+
+
+def far_rows(anchor: SampleRecord, rows: list[SampleRecord], min_gap: int) -> list[SampleRecord]:
+    """Same-speaker rows at least `min_gap` DB ids away (different scene); else the farthest available."""
+    key = "db_id" if "db_id" in anchor.meta else "order"
+    here = int(anchor.meta.get(key, 0))
+    others = [row for row in rows if row.sample_id != anchor.sample_id]
+    far = [row for row in others if abs(int(row.meta.get(key, 0)) - here) >= min_gap]
+    if far or not others:
+        return far
+    farthest = max(abs(int(row.meta.get(key, 0)) - here) for row in others)
+    return [row for row in others if abs(int(row.meta.get(key, 0)) - here) == farthest]
+
+
+def length_compatible(anchor: SampleRecord, other: SampleRecord, ratio: float = 2.0) -> bool:
+    a, b = max(1, sample_length(anchor)), max(1, sample_length(other))
+    return max(a, b) / min(a, b) <= ratio
 
 
 def build_paratarget_triplets(
@@ -211,18 +256,19 @@ def build_paratarget_triplets(
                     "generated_length": len(generated.text),
                 },
             )
-        source_positive = source_refs[(index + 1) % len(source_refs)]
-        add_triplet(
-            triplets,
-            source_text,
-            source_positive.text,
-            generated.text,
-            "same_content_diff_style",
-            split,
-            float(weights["paratarget"]),
-            float(margins["adversarial"]),
-            {"target_speaker": target, "source_speaker": source},
-        )
+        if bool(config["data"].get("same_content_diff_style_enabled", True)):
+            source_positive = source_refs[(index + 1) % len(source_refs)]
+            add_triplet(
+                triplets,
+                source_text,
+                source_positive.text,
+                generated.text,
+                "same_content_diff_style",
+                split,
+                float(weights["paratarget"]),
+                float(margins["adversarial"]),
+                {"target_speaker": target, "source_speaker": source},
+            )
         targets = [name for name in generated_by_target if name != target and generated_by_target[name]]
         if targets:
             other_target = targets[index % len(targets)]
@@ -638,6 +684,10 @@ def cap_by_rule(rows: list[TripletRecord], limit: int) -> list[TripletRecord]:
     for row in rows:
         by_rule_rows[row.rule].append(row)
     rules = sorted(by_rule_rows)
+    # Builders emit rows speaker/author by speaker/author; truncating without a shuffle drops the tail ones
+    # (including every held-out speaker). Deterministic per-rule shuffle keeps the cap unbiased.
+    for rule in rules:
+        random.Random(f"cap:{rule}").shuffle(by_rule_rows[rule])
     capped: list[TripletRecord] = []
     index = 0
     while len(capped) < limit:
