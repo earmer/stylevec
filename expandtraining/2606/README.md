@@ -359,6 +359,13 @@ bash expandtraining/2606/scripts/dryrun.sh
 
 ## Remote Training
 
+A new box needs the environment once: `bash expandtraining/2606/scripts/remote_setup.sh` installs
+`.venv` from `uv.lock` through the region's pip mirror, with the uv cache on autodl-fs so the next
+box in the region installs from it. For ablation specs, `scripts/run_queue.sh <spec>` (inside tmux)
+runs Stage 0b, then trains and validates each run with resume; see `CURRICULUM.md`, Run protocol.
+`DATASET=<name>` makes `remote_train.sh` and `validate.sh` load a prebuilt dataset
+(`scripts/build_dataset.py`) instead of rebuilding triplets from raw. `NUM_PROCESSES` sets the GPU count.
+
 Primary remote command:
 
 ```bash
@@ -468,21 +475,29 @@ Keep sync simple and explicit.
 To remote:
 
 ```bash
-bash expandtraining/2606/scripts/sync_to_remote.sh user@host:/workspace/stylevec
+SSH_PORT=12345 bash expandtraining/2606/scripts/sync_to_remote.sh root@host:/root/stylevec \
+  counts_remote_5090x2_20261013
 ```
+
+Pushes code (with `--delete`, run outputs untouched) to the remote root, and the training inputs,
+base model and any named prebuilt datasets from `outputs/datasets/` to `DATA_ROOT` (default
+`/root/autodl-fs/stylevec`, which survives switching instances in a region). The remote root's
+`data/`, `artifacts/` and `outputs/datasets/` become links into it. sha256 is compared on the remote.
+`DATA_ROOT=<remote root>` keeps everything on the instance disk. Re-runs skip
+unchanged files and resume interrupted ones. `BOOKRAW=1` adds the volume's `books_cleaned.parquet`
+as `data/bookraw/books_cleaned.parquet`; `CHECKSUM=1` repairs a copy that fails verification;
+`VERIFY=0` skips the hash pass (~15 s for 3 GB).
 
 From remote:
 
 ```bash
-bash expandtraining/2606/scripts/sync_from_remote.sh \
-  user@host:/workspace/stylevec qwen06b_top100_paratarget_msynthstel_r64
+bash expandtraining/2606/scripts/sync_from_remote.sh --instance pro-xxxx curriculum_a
+bash expandtraining/2606/scripts/sync_from_remote.sh root@host:/root/stylevec <run_name>
 ```
 
-Sync checks should fail if:
-
-- required data file is missing or empty
-- model directory is missing tokenizer/config/weights
-- synced output checkpoint is missing training state
+Names are run names or spec names (every `<spec>__*` run). It pulls results only: validation, configs,
+schedule and logs. It never pulls `training_state.pt`; `WITH_ADAPTER=1` adds the adapter and `WITH_TB=1`
+the TensorBoard logs. `--instance` starts a stopped Pro box for the pull and stops it afterwards.
 
 ## Experiments
 

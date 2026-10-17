@@ -156,9 +156,11 @@ Findings:
 |---|--:|---|---|
 | `curriculum_a_order.yaml` | 15 | exposure vs order vs direction vs pacing | §4 base-data decision |
 | `curriculum_b_rules.yaml` | 15 | which rules earn their place; length-course share | round A done; set `common.curriculum.mode` to its winner |
-| `curriculum_b_bookraw.yaml` | 9 | keep / drop / demote `bookraw_same_work` | a bookraw path that exists on the remote (§7) |
+| `curriculum_b_bookraw.yaml` | 9 | keep / drop / demote `bookraw_same_work` | `BOOKRAW=1` sync; dataset `d-0b8e3cafc83a` |
 | `methods_c.yaml` | 12 | spread reg, matryoshka, max_length 384 | round A control chosen |
 | `curriculum_d_factorial.yaml` | 12 | does ordering scale with late hard share | round A shows an order effect |
+| `curriculum_a_1gpu.yaml` | 3 | round A's exposure and order steps, 1 seed, 1×5090 (`grad_accum` 8, same row budget) | none; a screening read, ~5 h |
+| `smoke_1gpu.yaml` | 2 | pipeline check: 40 steps, both arms, train→validate→pull→compare | none; ~4 min |
 
 Stop rule: if any round-A arm meets the kill criterion of `FINDINGS.md` §6, B–D do not run.
 That criterion is held-out retrieval at chance while provenance stays above ~0.85. `compare` flags it
@@ -171,21 +173,51 @@ Per-rule values use held-out-speaker rows where a rule has them.
 
 ### Run protocol
 
+On the Mac (Stage 0a), then push:
+
 ```bash
-uv run python expandtraining/2606/scripts/ablation.py plan expandtraining/2606/configs/ablations/curriculum_a_order.yaml --manifest expandtraining/2606/outputs/datasets/counts_remote_5090x2_20261013/manifest.json
+uv run python expandtraining/2606/scripts/ablation.py plan expandtraining/2606/configs/ablations/curriculum_a_order.yaml
+uv run python expandtraining/2606/scripts/build_dataset.py --config <configs plan.md lists as unbuilt>
+uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/curriculum_a_order.yaml
+SSH_PORT=<port> bash expandtraining/2606/scripts/sync_to_remote.sh root@<host>:/root/stylevec <datasets plan.md names>
 ```
 
-The plan writes per-(arm, seed) configs to `configs/ablations/generated/<name>/` (gitignored but synced
-by `sync_to_remote.sh`). It also writes `outputs/ablations/<name>/plan.md`, which lists the train and
-validate commands per run: `CONFIG=<arm config> remote_train.sh <run>`, then
-`CONFIG=<eval config> validate.sh <run>`. After `sync_from_remote.sh` brings each run back:
+`plan` writes per-(arm, seed) configs to `configs/ablations/generated/<name>/` (gitignored, synced) and
+`outputs/ablations/<name>/plan.md`. The plan names each run's prebuilt dataset `d-<data key>`, a hash of
+the config sections the builder reads plus the builder's source. Arms that share data share one
+directory: rounds A, B, C and D all train on `d-394fce31815f`. Once every dataset is built, the
+exposure audit uses each arm's own counts, so data-changing arms no longer need a rebuild to be exact.
+`preflight.py local` checks the datasets and runs the tests, then records a code fingerprint in
+`generated/<name>/preflight.json`.
+
+On the instance, once per box (`remote_setup.sh` builds `.venv` from `uv.lock` via the region's
+pip mirror, using a uv cache on autodl-fs), then the queue inside tmux:
 
 ```bash
+bash expandtraining/2606/scripts/remote_setup.sh
+tmux new -s queue 'bash expandtraining/2606/scripts/run_queue.sh expandtraining/2606/configs/ablations/curriculum_a_order.yaml --prune --shutdown'
+```
+
+The queue starts with Stage 0b: the code matches the 0a fingerprint, the GPU count equals
+`world_size`, bf16 kernels exist for the card, and the base model, datasets and disk headroom are in
+place. Before each run it does 0c (configs present, datasets match their configs, no
+`allow_manifest_mismatch_on_resume`). Then it trains (resuming from `checkpoints/latest` if a run was
+cut off), validates on the eval config, and with `--prune` deletes `training_state.pt`. Finished runs
+are skipped, so re-running the queue continues where it stopped. With `--shutdown` the box powers off at
+the end, unless the queue was interrupted by hand. SwanLab mirrors each run's TensorBoard scalars live
+and logs the final `compare` metrics under `final/`, grouped by spec and tagged by arm and seed.
+
+Back on the Mac:
+
+```bash
+bash expandtraining/2606/scripts/sync_from_remote.sh --instance <pro-id> curriculum_a
 uv run python expandtraining/2606/scripts/ablation.py compare expandtraining/2606/configs/ablations/curriculum_a_order.yaml
 ```
 
-That writes `outputs/ablations/<name>/compare.md` and lists missing runs. Partial results are fine:
-pairs are formed only on seeds where both arms finished.
+`--instance` starts a stopped box for the pull and stops it again. Only results come back
+(`validation/`, configs, schedule, logs); adapters come back only with `WITH_ADAPTER=1`. `compare`
+writes `outputs/ablations/<name>/compare.md` and lists missing runs. Partial results are fine: pairs
+are formed only on seeds where both arms finished.
 
 ## 6. Measured tiers
 
@@ -226,12 +258,16 @@ noisy at a 0.10 loss weight. Audit before promoting them.
 
 ## 8. Open items found on the way
 
-- `scripts/sync_to_remote.sh` still requires `data/datasets/corpora/bookraw/books_cleaned.parquet`,
-  which moved to the volume in `2205e5c`. The sync fails at that check until it is repointed or
-  dropped. The bookraw spec also needs a path that exists on the remote.
+- The bookraw spec names `data/bookraw/books_cleaned.parquet`. Locally that is a link to the volume's
+  file; `sync_to_remote.sh BOOKRAW=1` puts a real copy there on the box. Its dataset is
+  `d-0b8e3cafc83a`.
+- All specs assume `world_size: 2`. On a 1×5090 box the queue refuses them in 0b. Run them on 2×5090,
+  or write a 1-GPU twin with `train.grad_accum` doubled so the row budget stays the same.
 - `bookraw_max_chars: 1800` in the bookraw spec is copied from `dryrun.yaml`. The handoff measured that
-  the 160–1800 window discards over half of the repaired `primary_clean` (median 134 chars). Check
-  yield with a dataset build before that round.
+  the 160–1800 window discards over half of the repaired `primary_clean` (median 134 chars). The
+  build gives 4,377 `bookraw_same_work`, 938 `bookraw_same_author_cross_work` and 4,378
+  `bookraw_same_language_author_negative` train triplets. The cross-work rule, the one the round is
+  judged on, is the thinnest of the three.
 - Use `remote_5090x2.yaml` as the base. The `remote_1hour*` and colab configs have time caps and
   fail the planner.
 
