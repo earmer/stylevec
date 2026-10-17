@@ -11,8 +11,14 @@ CONFIG="${CONFIG:-expandtraining/2606/configs/remote_5090x2.yaml}"
 RUN_NAME="${1:?usage: remote_train.sh <run_name> [--resume checkpoint_dir]}"
 shift
 
+# remote_setup.sh installed .venv from the mirror; a plain `uv run` would re-sync from uv.lock's URLs.
+UV_RUN=(uv run)
+if [[ -f .venv/.remote-setup-lock && "$(cat .venv/.remote-setup-lock)" == "$(sha256sum uv.lock 2>/dev/null | cut -d' ' -f1)" ]]; then
+  UV_RUN+=(--no-sync)
+fi
+
 if command -v uv >/dev/null 2>&1; then
-  LAUNCH=(uv run accelerate launch)
+  LAUNCH=("${UV_RUN[@]}" accelerate launch)
 else
   LAUNCH=(.venv/bin/python -m accelerate.commands.launch)
 fi
