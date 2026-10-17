@@ -1,0 +1,18 @@
+# Pipeline smoke test on one GPU: preflight -> sync -> run_queue -> pull. Minutes, not a measurement.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/smoke_1gpu.yaml
+name: smoke_1gpu
+description: >
+  Two arms, one seed, 40 steps each on the base data. Proves the queue trains, resumes, validates and
+  compares end to end; the numbers mean nothing.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+common:
+  train.max_steps: 40
+  train.checkpoint_every_steps: 20
+  logging.train_every_steps: 5
+arms:
+  staged: {}
+  mixed: {curriculum.mode: mixed}
+comparisons:
+  - {arm: staged, against: mixed, isolates: order}

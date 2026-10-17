@@ -6,6 +6,7 @@ cd "$(dirname "$0")/../../.."
 export OMP_NUM_THREADS=8
 
 # CONFIG overrides the config, e.g. an ablation arm from scripts/ablation.py plan.
+# NUM_PROCESSES sets the GPU count (default 2); run_queue.py passes the spec's world_size.
 # DATASET names a prebuilt dataset (scripts/build_dataset.py); unset builds triplets from raw.
 CONFIG="${CONFIG:-expandtraining/2606/configs/remote_5090x2.yaml}"
 RUN_NAME="${1:?usage: remote_train.sh <run_name> [--resume checkpoint_dir]}"
@@ -24,7 +25,7 @@ else
 fi
 
 "${LAUNCH[@]}" \
-  --num_processes 2 \
+  --num_processes "${NUM_PROCESSES:-2}" \
   --mixed_precision bf16 \
   expandtraining/2606/scripts/train.py \
   --config "$CONFIG" \
