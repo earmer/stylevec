@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from build_triplets import build_training_triplets
+from prebuilt import load_or_build
 from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from curriculum import curriculum_order, schedule_summary
@@ -288,7 +288,7 @@ def build_optimizer(
         return torch.optim.AdamW(parameters, **kwargs)
 
 
-def train_from_config(config_path: str, run_name: str, resume: str | None = None) -> Path:
+def train_from_config(config_path: str, run_name: str, resume: str | None = None, dataset: str | None = None) -> Path:
     from transformers import AutoTokenizer
 
     config = load_config(config_path)
@@ -298,7 +298,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     run_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    triplets, manifest = build_training_triplets(config)
+    triplets, manifest = load_or_build(config, dataset)
     manifest_hash = manifest["manifest_hash"]
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -683,8 +683,9 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--dataset", default=None, help="prebuilt dataset name or path; default: build from raw")
     args = parser.parse_args()
-    out_dir = train_from_config(args.config, args.run_name, args.resume)
+    out_dir = train_from_config(args.config, args.run_name, args.resume, args.dataset)
     print(f"run outputs: {out_dir}")
 
 

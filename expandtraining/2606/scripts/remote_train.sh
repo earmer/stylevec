@@ -6,6 +6,7 @@ cd "$(dirname "$0")/../../.."
 export OMP_NUM_THREADS=8
 
 # CONFIG overrides the config, e.g. an ablation arm from scripts/ablation.py plan.
+# DATASET names a prebuilt dataset (scripts/build_dataset.py); unset builds triplets from raw.
 CONFIG="${CONFIG:-expandtraining/2606/configs/remote_5090x2.yaml}"
 RUN_NAME="${1:?usage: remote_train.sh <run_name> [--resume checkpoint_dir]}"
 shift
@@ -22,4 +23,5 @@ fi
   expandtraining/2606/scripts/train.py \
   --config "$CONFIG" \
   --run-name "$RUN_NAME" \
+  ${DATASET:+--dataset "$DATASET"} \
   "$@"

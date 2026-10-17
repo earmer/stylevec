@@ -1,5 +1,6 @@
 # Round B (bookraw): settle the open bookraw_same_work question by measurement.
-# The remote box needs paths.bookraw_cleaned to exist there; the volume path below is local only.
+# data/bookraw/books_cleaned.parquet is a link to the volume locally and a real file on remote boxes
+# (sync_to_remote.sh BOOKRAW=1), so the one path resolves on both.
 name: curriculum_bookraw
 description: >
   bookraw_same_work uses adjacent positives and previously taught work/topic detection (gap +0.54 vs
@@ -24,7 +25,7 @@ new_keys:
   - validation.bookraw_triplets_per_rule
 common:
   curriculum.mode: staged
-  paths.bookraw_cleaned: /Volumes/EMC/stylevec_data/manifests/bookraw/epub20_legacy/books_cleaned.parquet
+  paths.bookraw_cleaned: data/bookraw/books_cleaned.parquet
   data.bookraw_enabled: true
   data.bookraw_authors: 48
   data.bookraw_segments_per_author: 384

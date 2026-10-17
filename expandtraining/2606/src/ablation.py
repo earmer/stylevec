@@ -20,6 +20,7 @@ import yaml
 
 from config import repo_root, validate_config, workspace_dir
 from curriculum import DEFAULT_STAGES, expected_exposure
+from prebuilt import data_key, dataset_dir, default_name, read_manifest
 from report import per_rule_table
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -238,12 +239,17 @@ def plan(
     evals = {json.dumps(comparable(shared_eval), sort_keys=True, default=str): "eval.yaml"}
     files: dict[Path, dict[str, Any]] = {target / "eval.yaml": shared_eval}
     runs: list[dict[str, Any]] = []
+    datasets: dict[str, dict[str, Any]] = {}
     for arm, config in arms.items():
         evaluation = eval_config(shared, config)
         key = json.dumps(comparable(evaluation), sort_keys=True, default=str)
         if key not in evals:
             evals[key] = f"eval__{arm}.yaml"
             files[target / evals[key]] = evaluation
+        train_data, eval_data = default_name(config), default_name(evaluation)
+        for name, source, use in ((train_data, config, "train"), (eval_data, evaluation, "eval")):
+            entry = datasets.setdefault(name, {"key": data_key(source), "config": None, "used_by": {}})
+            entry["used_by"].setdefault(use, []).append(arm)
         for seed in spec["seeds"]:
             seeded = copy.deepcopy(config)
             seeded["runtime"]["seed"] = int(seed)
@@ -253,12 +259,27 @@ def plan(
                 "run": run_name(spec["name"], arm, int(seed)), "arm": arm, "seed": int(seed),
                 "config": str(config_path.relative_to(repo)),
                 "eval_config": str((target / evals[key]).relative_to(repo)),
+                "dataset": train_data, "eval_dataset": eval_data,
             })
-    counts = rule_counts_from_manifest(manifest) if manifest else None
-    exposure = None
-    if counts:
+            for name in (train_data, eval_data):
+                datasets[name]["config"] = datasets[name]["config"] or runs[-1][
+                    "config" if name == train_data else "eval_config"]
+    for name, entry in datasets.items():
+        built = (dataset_dir(name) / "manifest.json").is_file()
+        entry["built"] = built and read_manifest(name).get("data_key") == entry["key"]
+    # Exposure from each arm's own prebuilt dataset when every one exists, else from one shared manifest.
+    arm_data = {run["arm"]: run["dataset"] for run in runs}
+    exposure, source = None, None
+    if manifest:
+        counts = rule_counts_from_manifest(manifest)
         exposure = {arm: expected_exposure(counts, config, row_budget(config, spec["world_size"]))
                     for arm, config in arms.items()}
+        source = str(manifest)
+    elif all(datasets[name]["built"] for name in arm_data.values()):
+        exposure = {arm: expected_exposure(rule_counts_from_manifest(dataset_dir(arm_data[arm]) / "manifest.json"),
+                                           config, row_budget(config, spec["world_size"]))
+                    for arm, config in arms.items()}
+        source = "each arm's prebuilt dataset"
     shared_flat = comparable(shared)
     data_arms = sorted(arm for arm, config in arms.items()
                        if any(k.startswith(("data.", "paths.")) and v != shared_flat.get(k)
@@ -274,9 +295,10 @@ def plan(
         "comparisons": comparisons,
         "interactions": spec["interactions"],
         "runs": runs,
+        "datasets": datasets,
         "exposure": exposure,
-        "exposure_source": str(manifest) if manifest else None,
-        "data_changing_arms": data_arms,
+        "exposure_source": source,
+        "data_changing_arms": data_arms if manifest else [],
     }
     if write:
         if target.exists():
@@ -317,15 +339,26 @@ def render_plan(result: dict[str, Any]) -> str:
             lines.append(f"| {c['name']} | {c.get('isolates', '')} | `{key}` | {_short(arm_value)} | {_short(against_value)} |")
     for interaction in result["interactions"]:
         lines.append(f"\nInteraction `{interaction['name']}` = ({interaction['of'][0]}) - ({interaction['of'][1]}), paired by seed.")
+    datasets = result["datasets"]
+    lines += ["", "## Datasets", "", "Build locally, then push with `sync_to_remote.sh <remote> <name>...`:", "",
+              "| dataset | built | used by |", "|---|---|---|"]
+    for name, entry in datasets.items():
+        uses = "; ".join(f"{use}: {', '.join(arms)}" for use, arms in entry["used_by"].items())
+        lines.append(f"| `{name}` | {'yes' if entry['built'] else 'no'} | {uses} |")
+    missing = [entry["config"] for entry in datasets.values() if not entry["built"]]
+    if missing:
+        lines += ["", "```bash", f"uv run python expandtraining/2606/scripts/build_dataset.py --config {' '.join(missing)}", "```"]
     lines += ["", "## Runs", "", "Train, then validate on the shared evaluation config:", "", "```bash"]
     for run in result["runs"]:
-        lines.append(f"CONFIG={run['config']} bash expandtraining/2606/scripts/remote_train.sh {run['run']}")
-        lines.append(f"CONFIG={run['eval_config']} bash expandtraining/2606/scripts/validate.sh {run['run']}")
+        lines.append(f"DATASET={run['dataset']} CONFIG={run['config']} "
+                     f"bash expandtraining/2606/scripts/remote_train.sh {run['run']}")
+        lines.append(f"DATASET={run['eval_dataset']} CONFIG={run['eval_config']} "
+                     f"bash expandtraining/2606/scripts/validate.sh {run['run']}")
     lines += ["```", ""]
     if result["exposure"]:
         lines += render_exposure(result)
     else:
-        lines += ["## Exposure audit", "", "Not computed: pass `--manifest` (a `data_manifest.json` or dataset `manifest.json`).", ""]
+        lines += ["## Exposure audit", "", "Not computed: build the datasets above and re-plan, or pass `--manifest`.", ""]
     return "\n".join(lines) + "\n"
 
 

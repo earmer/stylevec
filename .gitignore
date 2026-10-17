@@ -65,6 +65,8 @@ data/datasets/corpora/
 data/genshin/*.db
 data/genshin/*.json
 data/paratarget/
+# Training-time link to the volume's books_cleaned.parquet (a real copy on remote boxes).
+data/bookraw/
 data/datasets/msynthstel/data/*.parquet
 data/datasets/msynthstel/data/translated/
 data/datasets/msynthstel/analysis/

@@ -12,7 +12,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from build_triplets import build_training_triplets
+from prebuilt import load_or_build
 from config import configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from losses import embedding_spread_diagnostics, scalar_stats, weighted_triplet_margin_loss
@@ -254,7 +254,7 @@ def select_device(config: dict[str, Any]) -> torch.device:
     return torch.device(requested)
 
 
-def run_validation(config_path: str, run_name: str, resume: str | None = None) -> Path:
+def run_validation(config_path: str, run_name: str, resume: str | None = None, dataset: str | None = None) -> Path:
     from transformers import AutoTokenizer
 
     config = load_config(config_path)
@@ -263,7 +263,7 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None) -
     out_dir = run_dir / "validation"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    triplets, _manifest = build_training_triplets(config)
+    triplets, _manifest = load_or_build(config, dataset)
     tokenizer = AutoTokenizer.from_pretrained(config["model"]["base_model_path"], local_files_only=True, trust_remote_code=True)
     if tokenizer.pad_token is None:
         if tokenizer.eos_token is None:
@@ -331,8 +331,9 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--dataset", default=None, help="prebuilt dataset name or path; default: build from raw")
     args = parser.parse_args()
-    out_dir = run_validation(args.config, args.run_name, args.resume)
+    out_dir = run_validation(args.config, args.run_name, args.resume, args.dataset)
     print(f"validation outputs: {out_dir}")
 
 
