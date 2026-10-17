@@ -101,6 +101,8 @@ validation:
 
 logging:
   train_every_steps: 5
+  # Mirrors TensorBoard scalars plus final validation metrics. Key: `swanlab login` on the box once.
+  swanlab: {enabled: true, project: stylevec-2606, mode: online}
 
 curriculum:
   enabled: true

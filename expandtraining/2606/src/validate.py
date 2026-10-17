@@ -13,6 +13,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from prebuilt import load_or_build
+import tracking
 from config import configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from losses import embedding_spread_diagnostics, scalar_stats, weighted_triplet_margin_loss
@@ -323,7 +324,18 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None, d
     ]
     report += [""] + render_report(table, retrieval, probe)
     (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+    log_final_metrics(config, run_name, run_dir)
     return out_dir
+
+
+def log_final_metrics(config: dict[str, Any], run_name: str, run_dir: Path) -> None:
+    """The numbers `ablation.py compare` judges arms on, into the run's SwanLab experiment."""
+    from ablation import DEFAULT_FOCUS_RULES, run_metrics
+
+    tracker = tracking.start(config, run_name, run_dir, "validate")
+    metrics = run_metrics(run_dir, DEFAULT_FOCUS_RULES) or {}
+    tracking.log(tracker, {f"final/{k.replace(':', '/')}": v for k, v in metrics.items()})
+    tracking.finish(tracker)
 
 
 def main() -> None:

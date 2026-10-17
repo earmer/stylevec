@@ -74,3 +74,5 @@ data/datasets/msynthstel/pipeline/
 data/datasets/msynthstel/.cache/
 data/datasets/msynthstel/.claude/
 .env
+# SwanLab API key (TOK=...); piped to remote boxes, never committed.
+swanlab.env

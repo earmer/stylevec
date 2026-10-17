@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
 from prebuilt import load_or_build
+import tracking
 from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from curriculum import curriculum_order, schedule_summary
@@ -365,6 +366,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     else:
         is_main = True
 
+    tracker = tracking.start(config, run_name, run_dir, "train") if is_main else None
+    tracking.mirror_tensorboard(tracker)
     writer = SummaryWriter(str(tensorboard_dir(config, device, run_name))) if is_main else None
     if writer is not None:
         writer.add_text("config/snapshot", config_snapshot(config), global_step)
@@ -558,6 +561,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
         if writer is not None:
             writer.flush()
             writer.close()
+        tracking.finish(tracker)
     if accelerator is not None:
         accelerator.wait_for_everyone()
         accelerator.end_training()

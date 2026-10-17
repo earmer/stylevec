@@ -37,4 +37,5 @@ dependencies = [
     # matching for the Wikisource and Wikidata lookups.
     "zhconv>=1.4.3",
     "mwparserfromhell>=0.7.2",
+    "swanlab>=0.10.2",
 ]
