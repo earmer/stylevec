@@ -52,6 +52,19 @@ fi
 resolve_ssh "$INSTANCE"
 wait_for_ssh
 
+# Waiting for stock can take long; if the code changed meanwhile, Stage 0b on the box would refuse it.
+if [[ "${SKIP_PREFLIGHT:-0}" != 1 ]] && ! uv run python - "$NAME" <<'PY'
+import json, sys
+sys.path.insert(0, "expandtraining/2606/src")
+from ablation import generated_dir
+from preflight import code_fingerprint, preflight_path
+sys.exit(json.loads(preflight_path(generated_dir(sys.argv[1])).read_text())["code"] != code_fingerprint())
+PY
+then
+  echo "== code changed since Stage 0a; re-running it"
+  uv run python expandtraining/2606/scripts/preflight.py local "$SPEC"
+fi
+
 echo "== sync to $HOST:$SSH_PORT (datasets: ${datasets[*]:-none})"
 SSH_PORT="$SSH_PORT" bash expandtraining/2606/scripts/sync_to_remote.sh "$HOST:$REMOTE_ROOT" "${datasets[@]}"
 
