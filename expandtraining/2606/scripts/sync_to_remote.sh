@@ -14,8 +14,9 @@
 #                    set it to the remote root to keep everything on the instance disk
 #   SSH_PORT=12345   AutoDL's ssh port (or use a Host alias in ~/.ssh/config instead)
 #   BOOKRAW=1        also push books_cleaned.parquet from the data volume to data/bookraw/
-#   VERIFY=0         skip the sha256 comparison after transfer
 #   CHECKSUM=1       compare file contents instead of size+mtime (repairs a corrupt remote copy)
+#   VERIFY=1         also sha256 every pushed data file on the remote afterwards (rsync already checks
+#                    each transfer; this is for auditing a copy you suspect)
 #
 # Re-runs are cheap: unchanged files are skipped, and an interrupted transfer resumes from
 # .rsync-partial/ instead of leaving a truncated file at the real path.
@@ -123,8 +124,7 @@ if [[ "${BOOKRAW:-0}" == 1 ]]; then
   "${rsync_base[@]}" "$BOOKRAW_SRC" "$HOST:$DATA_ROOT/$BOOKRAW_DST"
 fi
 
-if [[ "${VERIFY:-1}" == 0 ]]; then
-  echo "skipped sha256 verification (VERIFY=0)"
+if [[ "${VERIFY:-0}" != 1 ]]; then
   exit 0
 fi
 

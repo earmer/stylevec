@@ -489,11 +489,12 @@ SSH_PORT=12345 bash expandtraining/2606/scripts/sync_to_remote.sh root@host:/roo
 Pushes code (with `--delete`, run outputs untouched) to the remote root, and the training inputs,
 base model and any named prebuilt datasets from `outputs/datasets/` to `DATA_ROOT` (default
 `/root/autodl-fs/stylevec`, which survives switching instances in a region). The remote root's
-`data/`, `artifacts/` and `outputs/datasets/` become links into it. sha256 is compared on the remote.
+`data/`, `artifacts/` and `outputs/datasets/` become links into it.
 `DATA_ROOT=<remote root>` keeps everything on the instance disk. Re-runs skip
 unchanged files and resume interrupted ones. `BOOKRAW=1` adds the volume's `books_cleaned.parquet`
-as `data/bookraw/books_cleaned.parquet`; `CHECKSUM=1` repairs a copy that fails verification;
-`VERIFY=0` skips the hash pass (~15 s for 3 GB).
+as `data/bookraw/books_cleaned.parquet`. Files are skipped on matching size and mtime, and rsync checks
+each transfer it makes; `CHECKSUM=1` compares contents instead (repairs a corrupt remote copy), and
+`VERIFY=1` adds a sha256 pass over every data file on the remote (~15 s for 3 GB).
 
 From remote:
 
