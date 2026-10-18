@@ -10,7 +10,7 @@ import torch
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from build_triplets import build_bookraw_triplets, build_length_course_triplets, build_paratarget_triplets, cap_by_rule
+from build_triplets import build_bookraw_triplets, build_genshin_triplets, build_length_course_triplets, build_paratarget_triplets, cap_by_rule
 from losses import embedding_spread_loss, matryoshka_triplet_margin_loss, weighted_triplet_margin_loss
 from probes import length_leakage_metrics
 from records import SampleRecord, TripletRecord, normalize_text, stable_id
@@ -262,3 +262,78 @@ def test_bookraw_triplets_cover_three_author_rules() -> None:
     assert "bookraw_same_work" in rules
     assert "bookraw_same_author_cross_work" in rules
     assert "bookraw_same_language_author_negative" in rules
+
+
+def genshin_line(speaker: str, index: int, text: str, para: str | None = None) -> SampleRecord:
+    meta = {"speaker": speaker, "db_id": index * 1000, "length": len(text), "length_bucket": len(text) // 20}
+    if para is not None:
+        meta["para_text"] = para
+    return SampleRecord(
+        sample_id=stable_id("unit_genshin", speaker, index),
+        text=text,
+        style_id=speaker,
+        style_type="speaker",
+        domain="genshin",
+        content_id=stable_id("unit_genshin_content", speaker, index),
+        source_id=f"genshin:{speaker}:{index}",
+        language="zh",
+        split="train",
+        quality=1.0,
+        meta=meta,
+    )
+
+
+def test_origin_vs_para_drops_only_identical_paraphrases() -> None:
+    config = {
+        "data": {"genshin_min_id_gap": 150, "genshin_candidates": 24},
+        "weights": {"genshin_real": 1.0},
+        "margins": {"medium": 0.12, "hard": 0.18},
+    }
+    lines = {
+        "identical": ("所以只要找到正确的材料，就能唤醒它。", " 所以只要找到正确的材料，就能唤醒它。"),
+        "small_edit": ("请问您会如何评价这场比赛呢？", "请问您如何评价这场比赛？"),
+        "punctuation": ("事不宜迟！得赶紧动起来，我们现在就出发吧！", "事不宜迟…得赶紧动起来 我们现在就出发吧。"),
+        "paraphrase": ("难道，是哪位路过的稻妻客商顺手买走了书，然后带回了稻妻…", "莫非是某位途经的稻妻客商顺便购买了书，然后带回了稻妻…"),
+    }
+    samples = [genshin_line("a", i, origin, para) for i, (origin, para) in enumerate(lines.values())]
+    samples += [genshin_line("b", i, f"另一个角色的第{i}句台词，长度差不多。") for i in range(3)]
+    rows = [row for row in build_genshin_triplets(config, samples, "train") if row.rule == "origin_vs_para"]
+    kept = [lines[key][1] for key in ("small_edit", "punctuation", "paraphrase")]
+    assert sorted(row.negative_text for row in rows) == sorted(kept)
+
+
+def test_target_hard_negative_cycles_through_other_target_lines() -> None:
+    config = {
+        "data": {"paratarget_original_push_enabled": False, "same_content_diff_style_enabled": False},
+        "weights": {"paratarget": 0.75},
+        "margins": {"easy": 0.08, "hard": 0.18, "adversarial": 0.22},
+    }
+    genshin = [style_sample("genshin", name, i, f"{name} real {i}") for name in ("src", "t1", "t2") for i in range(2)]
+
+    def generated(target: str, index: int, text: str) -> SampleRecord:
+        return SampleRecord(
+            sample_id=stable_id("unit_generated", target, index),
+            text=text,
+            style_id=target,
+            style_type="generated_target",
+            domain="paratarget",
+            content_id=stable_id("unit_generated_content", target, index),
+            source_id=f"job:{target}:{index}",
+            language="zh",
+            split="train",
+            quality=0.75,
+            meta={"source_speaker": "src", "target_speaker": target, "source_text": f"src original {index}"},
+        )
+
+    # t2's first line repeats a t1 anchor, so that triplet must advance past it.
+    t1 = [generated("t1", i, f"t1 generated {i}") for i in range(4)]
+    t2 = [generated("t2", 0, "t1 generated 0"), generated("t2", 1, "t2 generated 1"), generated("t2", 2, "t2 generated 2")]
+    rows = build_paratarget_triplets(config, genshin, t1 + t2, "train")
+    hard = [row for row in rows if row.rule == "target_hard_negative"]
+    assert len(hard) == len(t1) + len(t2)
+    to_t2 = [row.negative_text for row in hard if row.meta["negative_target"] == "t2"]
+    # visit 0 would be t2[0] == its own anchor, so it advances to t2[1]
+    assert to_t2 == ["t2 generated 1", "t2 generated 1", "t2 generated 2", "t1 generated 0"]
+    to_t1 = [row.negative_text for row in hard if row.meta["negative_target"] == "t1"]
+    assert to_t1 == ["t1 generated 1", "t1 generated 1", "t1 generated 2"]  # t2[0] repeats t1[0]: advance
+    assert all(row.negative_text not in (row.anchor_text, row.positive_text) for row in hard)

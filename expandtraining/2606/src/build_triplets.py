@@ -189,7 +189,7 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                     },
                 )
             para_text = anchor.meta.get("para_text")
-            if isinstance(para_text, str) and para_text:
+            if isinstance(para_text, str) and para_text and para_text.strip() != anchor.text.strip():
                 add_triplet(
                     triplets, anchor.text, easy_positive.text, para_text,
                     "origin_vs_para", split, float(weights["genshin_real"]), float(margins["hard"]),
@@ -197,6 +197,10 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                 )
     return triplets
 
+
+# origin_vs_para needs a paraphrase that differs from the origin: an identical one cannot satisfy the
+# margin (10.4% of d-350af1498f6a's train triplets; ~half of this rule's late violations in
+# curriculum_a_1gpu). Small edits (呢/会 dropped, ！ -> …) are kept: they are the style signal.
 
 def far_rows(anchor: SampleRecord, rows: list[SampleRecord], min_gap: int) -> list[SampleRecord]:
     """Same-speaker rows at least `min_gap` DB ids away (different scene); else the farthest available."""
@@ -283,19 +287,37 @@ def build_paratarget_triplets(
         targets = [name for name in generated_by_target if name != target and generated_by_target[name]]
         if targets:
             other_target = targets[index % len(targets)]
-            other_negative = generated_by_target[other_target][0]
-            add_triplet(
-                triplets,
-                generated.text,
-                positive.text,
-                other_negative.text,
-                "target_hard_negative",
-                split,
-                float(weights["paratarget"]),
-                float(margins["hard"]),
-                {"target_speaker": target, "negative_target": other_target},
+            other_negative = pick_other_target_negative(
+                generated_by_target[other_target], index // len(targets), (generated.text, positive.text)
             )
+            if other_negative is not None:
+                add_triplet(
+                    triplets,
+                    generated.text,
+                    positive.text,
+                    other_negative.text,
+                    "target_hard_negative",
+                    split,
+                    float(weights["paratarget"]),
+                    float(margins["hard"]),
+                    {"target_speaker": target, "negative_target": other_target},
+                )
     return triplets
+
+
+def pick_other_target_negative(
+    pool: list[SampleRecord],
+    turn: int,
+    avoid: tuple[str, ...],
+) -> SampleRecord | None:
+    """The `turn`-th visit to this other target takes its `turn`-th line (cycling), so negatives spread
+    over the whole pool instead of reusing pool[0]. Deterministic, no RNG. Advances past a line whose
+    text equals the anchor or positive; None only if every line does."""
+    for step in range(len(pool)):
+        candidate = pool[(turn + step) % len(pool)]
+        if candidate.text not in avoid:
+            return candidate
+    return None
 
 
 def build_msynthstel_triplets(
