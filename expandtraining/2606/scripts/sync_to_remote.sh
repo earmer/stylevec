@@ -15,8 +15,9 @@
 #   SSH_PORT=12345   AutoDL's ssh port (or use a Host alias in ~/.ssh/config instead)
 #   BOOKRAW=1        also push books_cleaned.parquet from the data volume to data/bookraw/
 #   CHECKSUM=1       compare file contents instead of size+mtime (repairs a corrupt remote copy)
-#   VERIFY=1         also sha256 every pushed data file on the remote afterwards (rsync already checks
-#                    each transfer; this is for auditing a copy you suspect)
+#
+# Integrity is rsync's own: every transfer is checksummed, and CHECKSUM=1 hashes whole files. Both use
+# xxh128 (then xxh3, xxh64) when both ends have xxhash, which rsync >= 3.2 normally does; md5 otherwise.
 #
 # Re-runs are cheap: unchanged files are skipped, and an interrupted transfer resumes from
 # .rsync-partial/ instead of leaving a truncated file at the real path.
@@ -51,6 +52,7 @@ rsync_base=(
   -e "${ssh_cmd[*]}"
 )
 [[ "${CHECKSUM:-0}" == 1 ]] && rsync_base+=(--checksum)
+export RSYNC_CHECKSUM_LIST="${RSYNC_CHECKSUM_LIST:-xxh128 xxh3 xxh64 md5}"
 
 inputs=(
   data/genshin/genshin.db
@@ -115,24 +117,7 @@ if (( ${#datasets[@]} )); then
   "${rsync_base[@]}" -R "${datasets[@]/%//}" "$HOST:$DATA_ROOT/"
 fi
 
-verify=("${inputs[@]}")
-while IFS= read -r f; do verify+=("$f"); done < <(find "$model" -type f ! -name '._*' ! -name .DS_Store | sort)
-for dir in "${datasets[@]}"; do verify+=("$dir/triplets.jsonl" "$dir/manifest.json"); done
-
 if [[ "${BOOKRAW:-0}" == 1 ]]; then
   echo "== bookraw -> $BOOKRAW_DST"
   "${rsync_base[@]}" "$BOOKRAW_SRC" "$HOST:$DATA_ROOT/$BOOKRAW_DST"
 fi
-
-if [[ "${VERIFY:-0}" != 1 ]]; then
-  exit 0
-fi
-
-echo "== verify sha256 (${#verify[@]} files)"
-sums="$(shasum -a 256 "${verify[@]}")"
-if [[ "${BOOKRAW:-0}" == 1 ]]; then
-  sums+=$'\n'"$(shasum -a 256 "$BOOKRAW_SRC" | awk -v dst="$BOOKRAW_DST" '{print $1 "  " dst}')"
-fi
-printf '%s\n' "$sums" | "${ssh_cmd[@]}" "$HOST" "cd '$DATA_ROOT' && sha256sum --quiet -c -" \
-  || { echo "sha256 mismatch on remote; re-run with CHECKSUM=1 to repair" >&2; exit 1; }
-echo "all ${#verify[@]}$([[ "${BOOKRAW:-0}" == 1 ]] && echo ' + bookraw') files match"
