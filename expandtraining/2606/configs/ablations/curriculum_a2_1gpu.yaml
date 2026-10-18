@@ -1,0 +1,25 @@
+# Curriculum A, second screening on one 5090, on the refined base (CURRICULUM.md §4, 2026-10-18):
+# 256 lines per speaker and a 150k cap, so the hard tier is ~13.6k triplets (~14x reuse, was ~55x);
+# a validation set ~8x larger (up to 512 per bucket, was 64); weights kept at the stage boundaries (35%, 70%)
+# so staged's late hard phase can be seen in trajectory; weights.pt kept through --prune.
+# Two seeds so compare can make calls: 6 runs, ~10 h on a 1x5090 (`--only <arm>` trims).
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/curriculum_a2_1gpu.yaml
+name: curriculum_a2_1gpu
+description: >
+  curriculum_a_1gpu rerun on the larger hard pool and evaluation set. uniform -> mixed isolates the
+  tier re-weighting; mixed -> staged isolates the ordering at equal exposure. The s42 screen found
+  staged best on held-out top-1 but weakest on same-speaker gaps, possibly from replaying a small
+  hard pool ~34x in its last third; this round tests whether that survives a 4x larger pool.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42, 43]
+common:
+  train.grad_accum: 8
+arms:
+  uniform: {curriculum.mode: uniform}
+  mixed: {curriculum.mode: mixed}
+  staged: {curriculum.mode: staged}
+comparisons:
+  - {arm: mixed, against: uniform, isolates: exposure}
+  - {arm: staged, against: mixed, isolates: order}
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para]

@@ -468,6 +468,13 @@ Validation command:
 bash expandtraining/2606/scripts/validate.sh qwen06b_top100_paratarget_msynthstel_r64
 ```
 
+Checkpoints: `checkpoints/latest/` holds `adapter/` (LoRA only), `weights.pt` (every trained
+parameter, including the projection head) and `training_state.pt` (the same plus optimizer state, for
+resume). Validation loads `weights.pt` first, so it works after `--prune` and on the weights-only
+snapshots `train.keep_weights_at` writes to `checkpoints/step_NNNNN/` (pass that directory as `--resume`).
+`adapter/` alone cannot rebuild the encoder. `--untrained` scores the base model with a fixed random
+projection as a baseline. `rows.parquet` carries each Genshin line's `db_id`, for cross-scene retrieval.
+
 ## Sync
 
 Keep sync simple and explicit.
@@ -496,7 +503,8 @@ bash expandtraining/2606/scripts/sync_from_remote.sh root@host:/root/stylevec <r
 ```
 
 Names are run names or spec names (every `<spec>__*` run). It pulls results only: validation, configs,
-schedule and logs. It never pulls `training_state.pt`; `WITH_ADAPTER=1` adds the adapter and `WITH_TB=1`
+schedule, logs and `checkpoints/latest/weights.pt`. It never pulls `training_state.pt`; `WITH_ADAPTER=1`
+adds the adapter and the `step_NNNNN/` snapshots, and `WITH_TB=1`
 the TensorBoard logs. `--instance` starts a stopped Pro box for the pull and stops it afterwards.
 
 ## Experiments

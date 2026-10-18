@@ -12,6 +12,14 @@ world_size: 1
 seeds: [42]
 common:
   train.grad_accum: 8
+  # Pinned to the data this round ran on (d-394fce31815f), from before the base moved to 256 lines,
+  # a 150k cap and a larger validation set; curriculum_a2_1gpu reruns it on the new base.
+  data.genshin_lines_per_speaker: 64
+  data.max_triplets: 50000
+  validation.per_rule: 64
+  validation.max_triplets: 2048
+  validation.length_course_triplets_per_domain: 40
+  train.keep_weights_at: []
 arms:
   uniform: {curriculum.mode: uniform}
   mixed: {curriculum.mode: mixed}

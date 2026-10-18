@@ -143,6 +143,11 @@ Findings:
    arm. It should be made **before** round A, because it changes how much "hard" can be memorised.
    `max_triplets` matters as much as lines per speaker: `cap_by_rule` equalises rules at about
    50,000 / 11 per rule.
+   **Decided 2026-10-18:** after `curriculum_a_1gpu` (staged best on held-out top-1 but weakest on
+   both same-speaker gaps), the base moved to 256 lines and a 150k cap (dataset `d-350af1498f6a`:
+   13,590 topic-matched, 15,639 `same_speaker_real`, 15,640 `origin_vs_para`). Its validation set
+   moved from 64 to up to 512 scored triplets per (rule, seen/held-out) bucket, about ±2 points of
+   standard error on a violation rate instead of ±6.
 2. **Rules are uniform within a tier, so splitting a rule buys budget.** The length course is split per
    domain and holds 2 of the 5 easy-tier slots. As a result `same_speaker_real`, the core identity rule,
    gets the same 8.6% of the budget as `length_course_msynthstel`. Round B tests
@@ -154,12 +159,13 @@ Findings:
 
 | spec | runs | question | gate before running |
 |---|--:|---|---|
-| `curriculum_a_order.yaml` | 15 | exposure vs order vs direction vs pacing | §4 base-data decision |
+| `curriculum_a_order.yaml` | 15 | exposure vs order vs direction vs pacing | `curriculum_a2_1gpu` read |
 | `curriculum_b_rules.yaml` | 15 | which rules earn their place; length-course share | round A done; set `common.curriculum.mode` to its winner |
-| `curriculum_b_bookraw.yaml` | 9 | keep / drop / demote `bookraw_same_work` | `BOOKRAW=1` sync; dataset `d-0b8e3cafc83a` |
+| `curriculum_b_bookraw.yaml` | 9 | keep / drop / demote `bookraw_same_work` | `BOOKRAW=1` sync; build dataset `d-60e5adb1cb07` |
 | `methods_c.yaml` | 12 | spread reg, matryoshka, max_length 384 | round A control chosen |
 | `curriculum_d_factorial.yaml` | 12 | does ordering scale with late hard share | round A shows an order effect |
-| `curriculum_a_1gpu.yaml` | 3 | round A's exposure and order steps, 1 seed, 1×5090 (`grad_accum` 8, same row budget) | none; a screening read, ~5 h |
+| `curriculum_a_1gpu.yaml` | 3 | round A's exposure and order steps, 1 seed, 1×5090 (`grad_accum` 8, same row budget); pinned to the old 64-line base | done 2026-10-18; trained heads lost to `--prune` |
+| `curriculum_a2_1gpu.yaml` | 6 | the same on the refined base, 2 seeds, stage-boundary weight snapshots | none; ~10 h |
 | `smoke_1gpu.yaml` | 2 | pipeline check: 40 steps, both arms, train→validate→pull→compare | none; ~4 min |
 
 Stop rule: if any round-A arm meets the kill criterion of `FINDINGS.md` §6, B–D do not run.
@@ -185,7 +191,7 @@ SSH_PORT=<port> bash expandtraining/2606/scripts/sync_to_remote.sh root@<host>:/
 `plan` writes per-(arm, seed) configs to `configs/ablations/generated/<name>/` (gitignored, synced) and
 `outputs/ablations/<name>/plan.md`. The plan names each run's prebuilt dataset `d-<data key>`, a hash of
 the config sections the builder reads plus the builder's source. Arms that share data share one
-directory: rounds A, B, C and D all train on `d-394fce31815f`. Once every dataset is built, the
+directory: rounds A, B, C and D all train on `d-350af1498f6a`. Once every dataset is built, the
 exposure audit uses each arm's own counts, so data-changing arms no longer need a rebuild to be exact.
 `preflight.py local` checks the datasets and runs the tests, then records a code fingerprint in
 `generated/<name>/preflight.json`.
@@ -202,7 +208,8 @@ The queue starts with Stage 0b: the code matches the 0a fingerprint, the GPU cou
 `world_size`, bf16 kernels exist for the card, and the base model, datasets and disk headroom are in
 place. Before each run it does 0c (configs present, datasets match their configs, no
 `allow_manifest_mismatch_on_resume`). Then it trains (resuming from `checkpoints/latest` if a run was
-cut off), validates on the eval config, and with `--prune` deletes `training_state.pt`. Finished runs
+cut off), validates on the eval config, and with `--prune` deletes `training_state.pt` once
+`weights.pt` (LoRA plus the projection head) sits beside it. Finished runs
 are skipped, so re-running the queue continues where it stopped. The box powers off at the end, so
 billing stops (`--keep-up` leaves it running, and so does stopping the queue by hand). SwanLab mirrors
 each run's TensorBoard scalars live and logs the final `compare` metrics under `final/`, grouped by
@@ -216,7 +223,8 @@ uv run python expandtraining/2606/scripts/ablation.py compare expandtraining/260
 ```
 
 `--instance` starts a stopped box for the pull and stops it again. Only results come back
-(`validation/`, configs, schedule, logs); adapters come back only with `WITH_ADAPTER=1`. `compare`
+(`validation/`, configs, schedule, logs) plus `checkpoints/latest/weights.pt`, enough to re-validate.
+Adapters and the `step_NNNNN/` snapshots come back only with `WITH_ADAPTER=1`. `compare`
 writes `outputs/ablations/<name>/compare.md` and lists missing runs. Partial results are fine: pairs
 are formed only on seeds where both arms finished.
 
@@ -261,7 +269,8 @@ noisy at a 0.10 loss weight. Audit before promoting them.
 
 - The bookraw spec names `data/bookraw/books_cleaned.parquet`. Locally that is a link to the volume's
   file; `sync_to_remote.sh BOOKRAW=1` puts a real copy there on the box. Its dataset is
-  `d-0b8e3cafc83a`.
+  `d-60e5adb1cb07` on the current base (not built yet; the yields below are from the old 64-line base,
+  `d-0b8e3cafc83a`).
 - All specs assume `world_size: 2`. On a 1×5090 box the queue refuses them in 0b. Run them on 2×5090,
   or write a 1-GPU twin with `train.grad_accum` doubled so the row budget stays the same.
 - `bookraw_max_chars: 1800` in the bookraw spec is copied from `dryrun.yaml`. The handoff measured that
