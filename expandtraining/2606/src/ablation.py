@@ -427,6 +427,7 @@ def run_metrics(run_dir: Path, focus_rules: list[str]) -> dict[str, float] | Non
                             ("length_r2_within_speaker", "length_r2_speaker")):
             if source in summary:
                 metrics[key] = float(summary[source])
+    metrics.update(run_diagnostics(validation, probe))
     table = pd.read_csv(per_rule)
     if not table.empty:
         metrics["macro_violation"] = float(
@@ -439,6 +440,26 @@ def run_metrics(run_dir: Path, focus_rules: list[str]) -> dict[str, float] | Non
                 metrics[f"gap:{rule}"] = _weighted(sub, "gap")
                 metrics[f"violation:{rule}"] = _weighted(sub, "violation")
     return metrics
+
+
+DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout_neg", "real_gap_seen_neg",
+                   "heldout_top1_cross_scene", "whitened_top1", "whitened_gap_origin_vs_para")
+
+
+def run_diagnostics(validation: Path, probe: dict[str, Any]) -> dict[str, float]:
+    """report.diagnostics from the probe file, or recomputed from rows + embeddings for older runs."""
+    extra = probe.get("diagnostics")
+    if extra is None:
+        rows_path, embeddings_path = validation / "rows.parquet", validation / "embeddings.npy"
+        if not rows_path.exists() or not embeddings_path.exists():
+            return {}
+        import numpy as np
+
+        from import_genshin import HUB_SPEAKERS
+        from report import diagnostics
+
+        extra = diagnostics(pd.read_parquet(rows_path), np.load(embeddings_path), frozenset(HUB_SPEAKERS))
+    return {key: float(extra[key]) for key in DIAGNOSTIC_KEYS if key in extra}
 
 
 def _stats(values: list[float]) -> dict[str, float]:

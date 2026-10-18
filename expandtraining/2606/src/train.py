@@ -371,6 +371,10 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
         accelerator = Accelerator(
             mixed_precision=mixed_precision if mixed_precision in {"bf16", "fp16"} else "no",
             gradient_accumulation_steps=int(config["train"].get("grad_accum", 1)),
+            # The schedule is in optimizer steps and is stepped once per optimizer step below. Linked to the
+            # optimizer, accelerate would step it num_processes times each, ending a 2-GPU run's schedule
+            # (lr 0) at max_steps / 2.
+            step_scheduler_with_optimizer=False,
         )
         device = accelerator.device
     else:
@@ -665,7 +669,11 @@ def spread_step_loss(
     negative: torch.Tensor,
     settings: dict[str, Any],
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Variance floor and decorrelation on the whole batch, plus uniformity within each role."""
+    """Variance floor and decorrelation on the whole batch, plus uniformity within anchors and positives.
+
+    Not within negatives: 74% of same_speaker_topic_matched negatives are Paimon or Traveler, so
+    uniformity there would push one speaker's lines apart.
+    """
     total, stats = embedding_spread_loss(
         torch.cat([anchor, positive, negative], dim=0),
         settings["min_dim_std"],
@@ -673,7 +681,7 @@ def spread_step_loss(
         settings["covariance_weight"],
         settings["decorrelation"],
     )
-    uniformity = uniformity_loss([anchor, positive, negative], settings["uniformity_t"])
+    uniformity = uniformity_loss([anchor, positive], settings["uniformity_t"])
     stats["uniformity_loss"] = uniformity.detach()
     if settings["uniformity_weight"] > 0.0:
         total = total + uniformity * settings["uniformity_weight"]

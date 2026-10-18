@@ -13,6 +13,13 @@ from records import SampleRecord, normalize_text, stable_id
 
 
 PLACEHOLDER_SPEAKERS = {"？？？", "？？", "???", "？"}
+# Present in almost every quest scene: as the nearest scene neighbour they were 74% of
+# same_speaker_topic_matched negatives (d-fe32ff5dc617), so the rule mostly taught "not Paimon".
+HUB_SPEAKERS = ("派蒙", "旅行者")
+
+
+def hub_speakers(config: dict[str, Any]) -> frozenset[str]:
+    return frozenset(config["data"].get("genshin_hub_speakers", HUB_SPEAKERS))
 
 
 def load_top_speakers(config: dict[str, Any]) -> list[str]:
@@ -136,7 +143,7 @@ def load_genshin_samples(config: dict[str, Any], speakers: list[str]) -> tuple[l
                 )
             if len(selected_rows) < 2:
                 filter_counts["speaker_shortage"] += 1
-    attach_scene_neighbors(samples, scene_lines, heldout, scene_window, scene_neighbors_max)
+    attach_scene_neighbors(samples, scene_lines, heldout, scene_window, scene_neighbors_max, hub_speakers(config))
     if not samples:
         raise ValueError("Genshin importer produced no samples")
     return samples, dict(filter_counts)
@@ -148,11 +155,14 @@ def attach_scene_neighbors(
     heldout: set[str],
     window: int,
     limit: int,
+    hubs: frozenset[str] = frozenset(),
 ) -> None:
     """Give each line the nearest other-speaker lines by DB id (same scene, same topic).
 
     A neighbour is only offered if using it cannot leak across splits: train anchors never get a
     held-out speaker's line or a validation line; validation anchors may use anything.
+    Keeps the `limit` nearest non-hub lines, then the `limit` nearest hub lines as a fallback, so the
+    triplet builder can prefer a non-hub speaker without losing anchors whose scene has only hubs.
     """
     ordered = sorted(scene_lines)
     ids = [row[0] for row in ordered]
@@ -170,4 +180,6 @@ def attach_scene_neighbors(
                 continue
             near.append((abs(row_id - center), speaker, text))
         near.sort()
-        sample.meta["scene_neighbors"] = [[sp, tx, d] for d, sp, tx in near[:limit]]
+        others = [row for row in near if row[1] not in hubs][:limit]
+        fallback = [row for row in near if row[1] in hubs][:limit]
+        sample.meta["scene_neighbors"] = [[sp, tx, d] for d, sp, tx in others + fallback]

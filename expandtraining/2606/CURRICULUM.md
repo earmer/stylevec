@@ -176,7 +176,12 @@ per arm, as top-1 lift over chance < 0.05 (adjust under `kill:` in a spec). A sc
 Headline metric per spec is set in its `headline:` list. All metrics are in `compare.json`:
 `heldout_top1(_lift)`, `heldout_top5`, `seen_top1`, `memory_gap` (seen − held-out),
 `provenance_acc/lift`, `macro_violation`, `gap:<rule>` / `violation:<rule>` for focus rules, and the
-validation geometry: `effective_rank`, `top_component_ratio` and `length_r2` (from `cosine_summary.json`).
+validation geometry: `effective_rank`, `top_component_ratio` and `length_r2` (from `cosine_summary.json`;
+`length_r2_group` / `length_r2_speaker` are within rule:role and within speaker, `length_r2` pooled), and
+diagnostics recomputed from `rows.parquet` + `embeddings.npy` when a run predates them:
+`topic_gap_hub_neg` / `topic_gap_other_neg` (held-out topic-matched gap by negative speaker),
+`heldout_top1_cross_scene` (own-speaker lines within 150 DB ids of the query left out; needs `db_id`),
+and `whitened_top1` / `whitened_gap_origin_vs_para` (PCA-whitened onto 128 directions fitted on seen speakers).
 Per-rule values use held-out-speaker rows where a rule has them.
 
 ### Run protocol
@@ -299,9 +304,36 @@ noisy at a 0.10 loss weight. Audit before promoting them.
   The covariance penalty works on raw covariances; unit vectors have per-dimension std ~0.05, so it is
   ~1e-6 and, at weight 0.005, in effect off. `regularization.decorrelation: correlation` standardises
   dimensions first (mean squared correlation: 0.31 on those embeddings, 0.01 isotropic);
-  `regularization.uniformity_weight` adds a uniformity loss within anchors, positives and negatives;
+  `regularization.uniformity_weight` adds a uniformity loss within anchors and within positives (not
+  negatives: most topic-matched negatives are one speaker);
   `train.head_lr` gives the projection head (and fusion) its own learning rate. All default off, so
   existing specs are unchanged. `spread_a_1gpu.yaml` screens them.
+- **Hub negatives and whitening** (2026-10-18, `curriculum_a_1gpu` s42). 74% of train
+  `same_speaker_topic_matched` negatives were 派蒙 or 旅行者. On held-out topic-matched triplets staged
+  scores +0.049 against them and +0.321 against other speakers; mixed +0.204 and +0.079 (paired
+  staged − mixed: −0.154 ± 0.064 and +0.242 ± 0.121, n = 46 / 18, one seed). The builder now prefers a
+  non-hub scene neighbour. PCA-whitening staged's embeddings onto 128 directions lifts held-out top-1
+  0.136 → 0.196 but flips the `origin_vs_para` gap +0.135 → −0.44: the low-variance directions carry
+  content. Expect the same trade from a decorrelation loss, and judge it against `whitened_top1`.
+  `same_speaker_real` positives were random while negatives were length-matched (negative closer in
+  length in 64/64 held-out triplets); positives are now length-matched too.
+- **Data and validation audit** (2026-10-18; dataset d-cfa298ce2f92 onwards).
+  - 2-GPU runs ended their LR schedule at max_steps / 2: accelerate stepped a scheduler linked to the
+    optimizer once per process. Fixed (`step_scheduler_with_optimizer=False`); 1-GPU runs were unaffected,
+    multi-GPU runs before this (June) trained their second half at lr 0.
+  - paratarget filled every target's cap from the first 32 source speakers, none held out. Now
+    round-robin over all 100 sources; held-out-source jobs (6.1k lines) are val and marked `heldout`.
+  - `length_course_genshin` took all 1,000 train anchors from the first 5 speakers by name, and 77% of
+    its negatives were one speaker (「仆人」, first among equal lengths). Anchors now round-robin over
+    sources; negatives cycle over up to 16 other-source rows near the target length.
+  - `origin_vs_para` positives are length-matched (the paraphrase negative was closer in length in 92%).
+  - msynthstel kept near-duplicate feature names; 3 of 32 cross-feature pairs were near-synonyms.
+  - The end-of-training eval read the first 32 batches of rule-sorted validation: 4 rules, no held-out
+    speakers. Buckets are now interleaved.
+  - Validation `speaker` is now filled for paratarget, length_course and bookraw rows, so
+    `length_r2_speaker` groups them too: not comparable with earlier runs.
+  - About half of held-out `same_speaker_real` negatives are seen speakers: reported as
+    `real_gap_heldout_neg` / `real_gap_seen_neg`, not changed.
 - Margins are per rule already: `same_speaker_topic_matched` and `origin_vs_para` use the largest (0.18).
   A violation rate depends on its margin, so compare rules by `gap`, not by violation rate.
 

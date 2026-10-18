@@ -11,7 +11,7 @@ import torch
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from build_triplets import build_bookraw_triplets, build_genshin_triplets, build_length_course_triplets, build_paratarget_triplets, cap_by_rule
+from build_triplets import length_tolerance, pick_similar_length_negative, build_length_negative_index, build_bookraw_triplets, build_genshin_triplets, build_length_course_triplets, build_paratarget_triplets, cap_by_rule
 from losses import embedding_spread_loss, matryoshka_triplet_margin_loss, weighted_triplet_margin_loss
 from probes import length_leakage_metrics
 from records import SampleRecord, TripletRecord, normalize_text, stable_id
@@ -357,10 +357,8 @@ def test_length_course_negative_matches_anchor_length_by_default() -> None:
     anchored = build_length_course_triplets(config, samples, "train")
     assert anchored
     for row in anchored:
-        assert row.meta["negative_length"] == min(
-            (len(s.text) for s in samples if s.style_id != row.meta["source"]),
-            key=lambda n: abs(n - row.meta["anchor_length"]),
-        )
+        best = min(abs(len(s.text) - row.meta["anchor_length"]) for s in samples if s.style_id != row.meta["source"])
+        assert abs(row.meta["negative_length"] - row.meta["anchor_length"]) <= best + length_tolerance(row.meta["anchor_length"])
     config["data"]["length_course_negative_length"] = "positive"
     legacy = build_length_course_triplets(config, samples, "train")
     assert [row.negative_text for row in legacy] != [row.negative_text for row in anchored]
@@ -416,3 +414,69 @@ def test_length_probe_separates_group_level_from_within_group_length() -> None:
     # An embedding that carries length itself is caught within groups too.
     leaky = np.concatenate([embeddings, np.log1p(lengths)[:, None]], axis=1)
     assert length_leakage_metrics(leaky, lengths, lengths // 20, groups=groups.tolist())["length_r2_within_group"] > 0.8
+
+
+def test_scene_neighbors_prefer_non_hub_speakers() -> None:
+    from import_genshin import attach_scene_neighbors
+
+    anchor = genshin_line("a", 0, "角色甲的一句台词。")
+    anchor.meta["db_id"] = 100
+    scene = [(101, "派蒙", "派蒙的台词。"), (102, "旅行者", "旅行者的台词。"), (105, "c", "角色丙的台词。"),
+             (100, "a", "角色甲的一句台词。")]
+    attach_scene_neighbors([anchor], scene, set(), window=12, limit=1, hubs=frozenset({"派蒙", "旅行者"}))
+    assert [n[0] for n in anchor.meta["scene_neighbors"]] == ["c", "派蒙"]  # nearest non-hub, then nearest hub
+    attach_scene_neighbors([anchor], scene, set(), window=12, limit=1)
+    assert [n[0] for n in anchor.meta["scene_neighbors"]] == ["派蒙"]  # no hubs: plain nearest
+
+
+def test_topic_matched_negative_prefers_non_hub_and_real_positive_matches_length() -> None:
+    config = {
+        "data": {"genshin_min_id_gap": 150, "genshin_candidates": 24},
+        "weights": {"genshin_real": 1.0},
+        "margins": {"medium": 0.12, "hard": 0.18},
+    }
+    texts = ["短句。", "这是一句中等长度的台词。", "这是一句明显要长得多的台词，后面还接着很多很多的字。"]
+    samples = [genshin_line("a", i, text) for i, text in enumerate(texts * 2)]
+    samples += [genshin_line("b", i, f"另一个角色的第{i}句台词，长度差不多。") for i in range(6)]
+    for sample in samples:
+        sample.meta["scene_neighbors"] = [["c", "角色丙在同一场景说的话。", 3], ["派蒙", "派蒙在同一场景说的话。", 1]]
+    rows = build_genshin_triplets(config, samples, "train")
+    topic = [row for row in rows if row.rule == "same_speaker_topic_matched"]
+    assert topic and all(row.meta["negative_speaker"] == "c" for row in topic)
+    for sample in samples:  # only hubs in the scene: still used, so no anchor is lost
+        sample.meta["scene_neighbors"] = [["派蒙", "派蒙在同一场景说的话。", 1]]
+    assert len([r for r in build_genshin_triplets(config, samples, "train") if r.rule == "same_speaker_topic_matched"]) == len(topic)
+    real = [row for row in rows if row.rule == "same_speaker_real" and row.meta["speaker"] == "a"]
+    # Every text of "a" occurs twice in different scenes, so the length-matched positive is its twin.
+    assert real and all(len(row.positive_text) == len(row.anchor_text) for row in real)
+
+
+def test_length_negatives_cycle_within_tolerance_and_anchors_spread_over_sources() -> None:
+    lines = [genshin_line(f"s{k}", i, "台" * (10 + i % 5)) for k in range(6) for i in range(20)]
+    index = build_length_negative_index(lines)
+    picks = [pick_similar_length_negative(index, "s0", 12, turn) for turn in range(16)]
+    assert all(p is not None and p.style_id != "s0" and abs(len(p.text) - 12) <= 2 for p in picks)
+    assert len({p.style_id for p in picks}) >= 3  # cycles over speakers instead of one row per length
+    assert pick_similar_length_negative(index, "s0", 12, 0) is not None
+    config = {
+        "data": {"length_course_enabled": True, "length_course_triplets_per_domain": 12, "max_triplets": 1000},
+        "weights": {"length_course": 0.08},
+        "margins": {"easy": 0.08},
+    }
+    rows = build_length_course_triplets(config, lines, "train")
+    assert len(rows) == 12 and len({row.meta["source"] for row in rows}) == 6
+
+
+def test_msynthstel_near_duplicate_features() -> None:
+    from import_msynthstel import near_duplicate_feature
+
+    assert near_duplicate_feature("Usage of Words Indicating Affective Processes", ["Usage of Words Indicating Affective Process"])
+    assert near_duplicate_feature("Usage of Present-Focused Tense and Words", ["Usage of Present Tense and Present-Focused Words"])
+    assert not near_duplicate_feature("Usage of Words Indicating Cognitive Processes", ["Usage of Words Indicating Affective Processes"])
+    assert not near_duplicate_feature("Usage of Polite Tone", ["Usage of Formal Tone"])
+
+
+def test_paratarget_interleave_round_robin() -> None:
+    from import_paratarget import interleave
+
+    assert interleave([[1, 2, 3], [4], [5, 6]]) == [1, 4, 5, 2, 6, 3]

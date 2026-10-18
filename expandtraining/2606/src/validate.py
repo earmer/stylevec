@@ -18,7 +18,8 @@ from config import configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from losses import embedding_spread_diagnostics, scalar_stats, weighted_triplet_margin_loss
 from model import build_qwen_style_encoder, encode_triplet, load_trainable_state_dict
-from report import per_rule_table, provenance_probe, render_report, speaker_retrieval
+from import_genshin import hub_speakers
+from report import diagnostics, per_rule_table, provenance_probe, render_report, speaker_retrieval
 from probes import length_leakage_metrics, vector_probe_metrics
 
 
@@ -150,10 +151,21 @@ def collect_validation_embeddings(
     return frame, matrix, summary
 
 
+ANCHOR_SPEAKER_KEYS = ("speaker", "target_speaker", "source", "author")
+# paratarget negatives without a negative_* key are the source speaker's line (generated_to_target,
+# paratarget_original_push).
+NEGATIVE_SPEAKER_KEYS = ("negative_speaker", "negative_target", "negative_source", "negative_author", "source_speaker")
+
+
 def speaker_of(meta: dict[str, Any], role: str) -> str:
-    if role == "negative":
-        return str(meta.get("negative_speaker", ""))
-    return str(meta.get("speaker", ""))
+    """Who the line belongs to: a Genshin speaker, a paratarget target or source, a length-course source,
+    a bookraw author. Blank where a rule has none (traits)."""
+    keys = NEGATIVE_SPEAKER_KEYS if role == "negative" else ANCHOR_SPEAKER_KEYS
+    for key in keys:
+        value = meta.get(key)
+        if value:
+            return str(value)
+    return ""
 
 
 def select_validation_triplets(triplets: list[Any], per_rule: int) -> list[Any]:
@@ -162,13 +174,18 @@ def select_validation_triplets(triplets: list[Any], per_rule: int) -> list[Any]:
     for row in triplets:
         if row.split == "val":
             buckets.setdefault((row.rule, bool(row.meta.get("heldout", False))), []).append(row)
-    chosen: list[Any] = []
+    picked: list[list[Any]] = []
     for key in sorted(buckets):
         rows = sorted(buckets[key], key=lambda r: r.triplet_id)
         if len(rows) > per_rule:
             picks = np.unique(np.linspace(0, len(rows) - 1, per_rule).astype(int))
             rows = [rows[i] for i in picks]
-        chosen.extend(rows)
+        picked.append(rows)
+    # Interleave the buckets: the end-of-training eval reads only the first max_batches, which in bucket
+    # order covered 4 rules and no held-out speakers.
+    chosen: list[Any] = []
+    for turn in range(max((len(rows) for rows in picked), default=0)):
+        chosen.extend(rows[turn] for rows in picked if turn < len(rows))
     return chosen
 
 
@@ -339,9 +356,11 @@ def run_validation(
         "seen speakers": speaker_retrieval(rows, embeddings, heldout=False),
     }
     probe = provenance_probe(rows, embeddings)
+    extra = diagnostics(rows, embeddings, hub_speakers(config))
     table.to_csv(out_dir / "per_rule.csv", index=False)
     (out_dir / "retrieval_probe.json").write_text(
-        json.dumps({"retrieval": retrieval, "provenance": probe}, indent=2, sort_keys=True), encoding="utf-8"
+        json.dumps({"retrieval": retrieval, "provenance": probe, "diagnostics": extra}, indent=2, sort_keys=True),
+        encoding="utf-8",
     )
     report = [
         "# Validation Report",
@@ -357,7 +376,7 @@ def run_validation(
         f"- length/cosine delta corr: `{summary['length_cosine_delta_corr']:.4f}`",
         f"- same-bucket cosine lift: `{summary['length_same_minus_diff_cos']:.4f}`",
     ]
-    report += [""] + render_report(table, retrieval, probe)
+    report += [""] + render_report(table, retrieval, probe, extra)
     (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
     log_final_metrics(config, run_name, run_dir)
     return out_dir

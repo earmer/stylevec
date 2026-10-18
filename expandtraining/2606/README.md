@@ -190,8 +190,13 @@ Triplets:
 
 - `same_speaker_real`
   - anchor: speaker A real line
-  - positive: another speaker A real line
-  - negative: speaker B real line
+  - positive: another speaker A real line from a different scene, closest in length to the anchor
+  - negative: speaker B real line, closest in length to the anchor
+- `same_speaker_topic_matched`
+  - anchor: speaker A real line
+  - positive: speaker A line from a different scene, least word overlap with the anchor
+  - negative: another speaker's line from the anchor's scene; a non-hub speaker when the scene has one
+    (`data.genshin_hub_speakers`, default 派蒙 and 旅行者, who were 74% of these negatives)
 - `origin_vs_para`
   - anchor: real line
   - positive: another real line from the same speaker
@@ -221,7 +226,10 @@ Triplets:
   - negative: generated or real line for target speaker B
 
 Generated data must be capped per target speaker so it cannot outweigh real
-Genshin lines.
+Genshin lines. Jobs are taken round-robin over source speakers within each target, and over targets
+(`data.paratarget_per_target_cap` lines per target, `data.paratarget_jobs` jobs in all); taking them in
+file order filled every cap from the first 32 sources. Jobs touching a held-out speaker are val-only and
+marked `heldout`. Only 68 targets have validated jobs in the source file, none of them held out.
 
 ### msynthstel
 
@@ -232,6 +240,8 @@ Filters:
 - require non-empty `positive`, `negative`, `feature`, `feature_clean`
 - use the existing train/test split
 - cap rows per feature in dry-run and first remote runs
+- skip a feature whose name nearly repeats one already kept (word-set Jaccard >= 0.5 after stopwords:
+  "Affective Process" / "Affective Processes"), so it cannot be another feature's cross-feature negative
 
 Triplets:
 

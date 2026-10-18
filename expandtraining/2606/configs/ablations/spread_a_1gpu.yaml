@@ -1,9 +1,13 @@
 # Spread A: does decorrelating the embedding help retrieval? One seed on one 5090, ~6.5 h for 4 runs.
 # The curriculum_a runs used ~4 of 256 directions (validation effective rank 3.97, top component 49%):
 # the covariance penalty is ~1e-6 on unit vectors, so at weight 0.005 it is in effect off (CURRICULUM.md §5).
-# Dataset d-fe32ff5dc617: the a2 base with identical origin_vs_para paraphrases dropped, target_hard_negative
-# negatives varied, and length_course negatives length-matched to the anchor. Only loss and optimizer
-# settings change against its own control.
+# Dataset: the a2 base with identical origin_vs_para paraphrases dropped, target_hard_negative negatives
+# varied, length_course negatives length-matched to the anchor, same_speaker_topic_matched negatives
+# preferring a non-hub speaker (not Paimon/Traveler), same_speaker_real and origin_vs_para positives
+# length-matched, paratarget jobs spread over all source speakers, length_course anchors spread over
+# speakers, and near-duplicate msynthstel features dropped (CURRICULUM.md §8, data and validation audit).
+# So it is not the a2 data: compare arms against this spec's own control, where only loss and optimizer
+# settings change. decorr is learned whitening: it should beat control's whitened_top1 (compare.json).
 #
 # Before launching: set common `curriculum.mode` to the curriculum_a2_1gpu winner (staged is the s42 lead).
 # Weights are screening values sized from the a_1gpu validation embeddings: mean squared correlation
@@ -42,4 +46,5 @@ comparisons:
      keys: [regularization.decorrelation, regularization.covariance_weight]}
   - {arm: uniformity, against: control, isolates: uniformity}
   - {arm: decorr_headlr, against: decorr, isolates: head_lr}
-headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para, effective_rank]
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para, effective_rank,
+           length_r2_speaker]

@@ -7,7 +7,7 @@ from typing import Any
 
 from config import config_hash
 from import_bookraw import load_bookraw_samples
-from import_genshin import load_genshin_samples, load_top_speakers
+from import_genshin import hub_speakers, load_genshin_samples, load_top_speakers
 from import_msynthstel import load_msynthstel_samples
 from import_paratarget import load_paratarget_samples
 from similarity import char_ngrams, jaccard
@@ -139,6 +139,7 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
     variants = int(config["data"].get("genshin_topic_matched_variants", 1))
     if variants < 1:
         raise ValueError("data.genshin_topic_matched_variants must be >= 1")
+    hubs = hub_speakers(config)
     grouped = by_style(samples, split, "genshin")
     speakers = [speaker for speaker, rows in grouped.items() if len(rows) >= 2]
     if len(speakers) < 2:
@@ -155,7 +156,10 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                 continue
             anchor_grams = grams[anchor.sample_id]
             sampled_far = rng.sample(far, min(candidates, len(far)))
-            easy_positive = sampled_far[0]
+            # Length-matched, as the negatives are (a length-matched line; the paraphrase): with a random
+            # positive the negative was closer in length to the anchor in 64/64 held-out same_speaker_real
+            # and 92% of origin_vs_para triplets, so any length signal counted against the rule.
+            real_positive = min(sampled_far, key=lambda row: abs(sample_length(row) - sample_length(anchor)))
             topic_positive = min(sampled_far, key=lambda row: jaccard(anchor_grams, grams[row.sample_id]))
             others = [
                 row
@@ -170,16 +174,18 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
             if others:
                 easy_negative = min(others[:candidates], key=lambda row: abs(sample_length(row) - sample_length(anchor)))
                 add_triplet(
-                    triplets, anchor.text, easy_positive.text, easy_negative.text,
+                    triplets, anchor.text, real_positive.text, easy_negative.text,
                     "same_speaker_real", split, float(weights["genshin_real"]), float(margins["medium"]),
                     {
                         **meta,
                         "negative_speaker": easy_negative.style_id,
-                        "positive_db_id": int(easy_positive.meta.get("db_id", -1)),
+                        "positive_db_id": int(real_positive.meta.get("db_id", -1)),
                         "negative_db_id": int(easy_negative.meta.get("db_id", -1)),
                     },
                 )
             scene = [n for n in anchor.meta.get("scene_neighbors", []) if 0.4 <= len(n[1]) / max(1, len(anchor.text)) <= 2.5]
+            # A non-hub speaker (not Paimon/Traveler) when the scene has one; hubs only as a fallback.
+            scene = [n for n in scene if n[0] not in hubs] or scene
             if scene:
                 first = scene[rng.randrange(len(scene))]
                 pairs = [(topic_positive, first)]
@@ -202,9 +208,9 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
             para_text = anchor.meta.get("para_text")
             if isinstance(para_text, str) and para_text and para_text.strip() != anchor.text.strip():
                 add_triplet(
-                    triplets, anchor.text, easy_positive.text, para_text,
+                    triplets, anchor.text, real_positive.text, para_text,
                     "origin_vs_para", split, float(weights["genshin_real"]), float(margins["hard"]),
-                    {**meta, "positive_db_id": int(easy_positive.meta.get("db_id", -1))},
+                    {**meta, "positive_db_id": int(real_positive.meta.get("db_id", -1))},
                 )
     return triplets
 
@@ -273,6 +279,8 @@ def build_paratarget_triplets(
         positive = target_refs[index % len(target_refs)]
         negative_source = source_refs[index % len(source_refs)]
         source_text = str(generated.meta["source_text"])
+        # Jobs touching a held-out speaker are val-only; marking them lets validation report them apart.
+        heldout = {"heldout": bool(generated.meta.get("heldout", False))}
         add_triplet(
             triplets,
             generated.text,
@@ -282,7 +290,7 @@ def build_paratarget_triplets(
             split,
             float(weights["paratarget"]),
             float(margins["hard"]),
-            {"target_speaker": target, "source_speaker": source},
+            {"target_speaker": target, "source_speaker": source, **heldout},
         )
         if bool(config["data"].get("paratarget_original_push_enabled", False)):
             add_triplet(
@@ -299,6 +307,7 @@ def build_paratarget_triplets(
                     "source_speaker": source,
                     "source_length": len(source_text),
                     "generated_length": len(generated.text),
+                    **heldout,
                 },
             )
         if bool(config["data"].get("same_content_diff_style_enabled", True)):
@@ -312,7 +321,7 @@ def build_paratarget_triplets(
                 split,
                 float(weights["paratarget"]),
                 float(margins["adversarial"]),
-                {"target_speaker": target, "source_speaker": source},
+                {"target_speaker": target, "source_speaker": source, **heldout},
             )
         targets = [name for name in generated_by_target if name != target and generated_by_target[name]]
         if targets:
@@ -330,7 +339,7 @@ def build_paratarget_triplets(
                     split,
                     float(weights["paratarget"]),
                     float(margins["hard"]),
-                    {"target_speaker": target, "negative_target": other_target},
+                    {"target_speaker": target, "negative_target": other_target, **heldout},
                 )
     return triplets
 
@@ -438,16 +447,25 @@ def build_length_course_triplets(
         for domain, rows in domain_rows.items()
         if len({row.style_id for row in rows}) >= 2
     }
-    counts: defaultdict[str, int] = defaultdict(int)
-    triplets: list[TripletRecord] = []
+    # Anchors round-robin over sources (each source's lines in a fixed shuffled order): taking sources in
+    # sorted order filled the domain limit from the first 5 Genshin speakers.
+    sources: list[tuple[str, str, list[SampleRecord], list[int]]] = []
     for domain, source in sorted(grouped):
         rows = grouped[(domain, source)]
         if len(rows) < 2 or domain not in negative_index:
             continue
         rows = sorted(rows, key=lambda row: (sample_length(row), row.sample_id))
-        for index, anchor in enumerate(rows):
-            if counts[domain] >= limit:
-                break
+        visit = list(range(len(rows)))
+        random.Random(f"length_course:{domain}:{source}").shuffle(visit)
+        sources.append((domain, source, rows, visit))
+    counts: defaultdict[str, int] = defaultdict(int)
+    triplets: list[TripletRecord] = []
+    for turn in range(max((len(rows) for _d, _s, rows, _v in sources), default=0)):
+        for domain, source, rows, visit in sources:
+            if turn >= len(rows) or counts[domain] >= limit:
+                continue
+            index = visit[turn]
+            anchor = rows[index]
             positive_text = combine_same_source_texts(rows, index, max_parts, max_chars)
             if positive_text is None:
                 continue
@@ -455,6 +473,7 @@ def build_length_course_triplets(
                 negative_index[domain],
                 source,
                 len(anchor.text) if match_anchor else len(positive_text),
+                counts[domain],
             )
             if negative is None:
                 continue
@@ -470,6 +489,7 @@ def build_length_course_triplets(
                 {
                     "domain": domain,
                     "source": source,
+                    "heldout": bool(anchor.meta.get("heldout", False)),
                     "negative_source": negative.style_id,
                     "anchor_length": len(anchor.text),
                     "positive_length": len(positive_text),
@@ -523,30 +543,57 @@ def combine_same_source_texts(
 
 
 def build_length_negative_index(rows: list[SampleRecord]) -> dict[str, Any]:
-    sorted_rows = sorted(rows, key=lambda row: (sample_length(row), row.style_id, row.sample_id))
+    # Ties in length by a hash, not by source name: name order put the same few sources nearest every length.
+    sorted_rows = sorted(rows, key=lambda row: (sample_length(row), stable_id("length_negative", row.sample_id)))
     return {
         "rows": sorted_rows,
         "lengths": [sample_length(row) for row in sorted_rows],
     }
 
 
+LENGTH_NEGATIVE_POOL = 16
+
+
+def length_tolerance(length: int) -> int:
+    return max(2, length // 20)
+
+
 def pick_similar_length_negative(
     index: dict[str, Any],
     source: str,
     target_length: int,
+    turn: int = 0,
+    pool: int = LENGTH_NEGATIVE_POOL,
 ) -> SampleRecord | None:
+    """The `turn`-th (cycling) of up to `pool` other-source rows nearest in length, all within
+    length_tolerance of the nearest one. Always taking the nearest gave the same row per length: rows
+    tie-break by source name, so 77% of Genshin negatives were one speaker."""
     rows: list[SampleRecord] = index["rows"]
     lengths: list[int] = index["lengths"]
     center = bisect_left(lengths, target_length)
+    tolerance = length_tolerance(target_length)
+    nearest: list[SampleRecord] = []
+    best: int | None = None
     for radius in range(len(rows) + 1):
         probes = (center,) if radius == 0 else (center - radius, center + radius)
+        in_window = False  # lengths are sorted: once both probes leave the window, every later one has too
         for probe in probes:
             if not 0 <= probe < len(rows):
                 continue
-            candidate = rows[probe]
-            if candidate.style_id != source:
-                return candidate
-    return None
+            distance = abs(lengths[probe] - target_length)
+            if best is not None and distance > best + tolerance:
+                continue
+            in_window = True
+            if rows[probe].style_id == source:
+                continue
+            if best is None:
+                best = distance
+            nearest.append(rows[probe])
+        if len(nearest) >= pool or not in_window:
+            break
+    if not nearest:
+        return None
+    return nearest[turn % len(nearest)]
 
 
 def sample_length(sample: SampleRecord) -> int:

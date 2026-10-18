@@ -76,3 +76,54 @@ def test_per_rule_table_and_retrieval_on_synthetic_embeddings() -> None:
     assert table.iloc[0]["violation"] == 0.0 and table.iloc[0]["n"] == 36
     stats = speaker_retrieval(rows, emb, heldout=True)
     assert stats["top1"] > 0.9 and stats["chance_top1"] < 0.2
+
+
+def test_cross_scene_retrieval_drops_same_scene_lines_from_own_centroid() -> None:
+    rng = np.random.default_rng(0)
+    recs, vecs = [], []
+    for sp_index, sp in enumerate("ABCD"):
+        center = rng.normal(size=8)
+        for j in range(4):  # two scenes per speaker, two lines each
+            recs.append({"triplet_id": f"{sp}{j}", "role": "anchor", "rule": "same_speaker_real", "heldout": True,
+                         "speaker": sp, "text_preview": f"{sp}{j}", "db_id": sp_index * 10_000 + (j // 2) * 1000 + j})
+            vecs.append(center + 0.1 * rng.normal(size=8))
+    rows, emb = pd.DataFrame(recs), np.stack(vecs)
+    plain = speaker_retrieval(rows, emb, heldout=True)
+    cross = speaker_retrieval(rows, emb, heldout=True, min_gap=150)
+    assert plain["n_scored"] == cross["n_scored"] == 16 and cross["top1"] > 0.9
+    rows["db_id"] = [i for i in range(16)]  # every line in one scene: nothing left to compare against
+    assert "top1" not in speaker_retrieval(rows, emb, heldout=True, min_gap=150)
+    assert "top1" not in speaker_retrieval(rows.drop(columns="db_id"), emb, heldout=True, min_gap=150)
+
+
+def test_diagnostics_split_topic_gap_and_whiten() -> None:
+    from report import diagnostics, whitened
+
+    rng = np.random.default_rng(1)
+    recs, vecs = [], []
+    for i in range(8):
+        for role, spk in (("anchor", "A"), ("positive", "A"), ("negative", "派蒙" if i < 5 else "C")):
+            recs.append({"triplet_id": f"t{i}", "role": role, "rule": "same_speaker_topic_matched",
+                         "heldout": True, "speaker": spk, "text_preview": f"{role}{i}"})
+            vecs.append(rng.normal(size=6))
+    for i in range(20):
+        recs.append({"triplet_id": f"s{i}", "role": "anchor", "rule": "same_speaker_real", "heldout": False,
+                     "speaker": "S", "text_preview": f"s{i}"})
+        vecs.append(rng.normal(size=6))
+    rows, emb = pd.DataFrame(recs), np.stack(vecs)
+    out = diagnostics(rows, emb, frozenset({"派蒙"}))
+    assert out["n_topic_hub_neg"] == 5 and out["n_topic_other_neg"] == 3
+    white = whitened(rows, emb)
+    assert white.shape == (len(rows), 6) and np.allclose(np.linalg.norm(white, axis=1), 1.0)
+
+
+def test_validation_selection_interleaves_buckets_and_speaker_of_covers_paratarget() -> None:
+    from validate import speaker_of
+
+    rows = [TripletRecord(f"{r}{i}", "p", "n", r, 1.0, 0.1, split="val") for r in ("x", "y", "z") for i in range(5)]
+    chosen = select_validation_triplets(rows, 4)
+    assert {t.rule for t in chosen[:3]} == {"x", "y", "z"} and len(chosen) == 12
+    meta = {"target_speaker": "甲", "source_speaker": "乙"}
+    assert speaker_of(meta, "anchor") == "甲" and speaker_of(meta, "negative") == "乙"
+    assert speaker_of({**meta, "negative_target": "丙"}, "negative") == "丙"
+    assert speaker_of({"feature": "f"}, "anchor") == ""

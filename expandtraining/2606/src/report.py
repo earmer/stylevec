@@ -67,12 +67,19 @@ def per_rule_table(rows: pd.DataFrame, embeddings: np.ndarray) -> pd.DataFrame:
     return table.reset_index()
 
 
-def speaker_retrieval(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool = True) -> dict[str, float]:
+def speaker_retrieval(
+    rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool = True, min_gap: int = 0,
+) -> dict[str, float]:
     """Leave-one-out nearest-centroid speaker retrieval on distinct lines (anchor/positive roles).
 
     With heldout=True only speakers never seen in training are used, so the centroids come from
-    validation lines alone: this measures transfer, not memory.
+    validation lines alone: this measures transfer, not memory. With min_gap > 0 the query's own
+    speaker centroid also leaves out that speaker's lines within `min_gap` DB ids of the query (same
+    scene), so a hit cannot come from scene proximity. Needs a `db_id` column; lines without one
+    (db_id < 0) exclude nothing.
     """
+    if min_gap > 0 and "db_id" not in rows:
+        return {"n_lines": 0.0}
     mask = (
         rows["rule"].isin(SPEAKER_RULES) & rows["role"].isin(["anchor", "positive"])
         & (rows["heldout"] == heldout) & (rows["speaker"] != "")
@@ -89,13 +96,21 @@ def speaker_retrieval(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool 
     if len(classes) < 2:
         return out
     sums = np.stack([vectors[labels == c].sum(axis=0) for c in classes])
+    db_ids = sub["db_id"].to_numpy() if min_gap > 0 else None
     top1 = top5 = valid = 0
     for i, label in enumerate(labels):
-        if counts[label] < 2:
+        same = labels == label
+        if db_ids is None or db_ids[i] < 0:
+            drop = np.zeros(len(labels), dtype=bool)
+            drop[i] = True
+        else:
+            drop = same & (db_ids >= 0) & (np.abs(db_ids - db_ids[i]) < min_gap)
+            drop[i] = True
+        if counts[label] - int((drop & same).sum()) < 1:
             continue  # no other line to build the centroid from
         centroids = sums.copy()
         k = classes.index(label)
-        centroids[k] = centroids[k] - vectors[i]
+        centroids[k] = centroids[k] - vectors[drop & same].sum(axis=0)
         scores = _unit(centroids) @ vectors[i]
         rank = int((scores > scores[k]).sum())
         top1 += rank == 0
@@ -104,6 +119,92 @@ def speaker_retrieval(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool 
     if valid:
         out.update(top1=top1 / valid, top5=min(1.0, top5 / valid), chance_top1=1 / len(classes),
                    chance_top5=min(1.0, 5 / len(classes)), n_scored=float(valid))
+    return out
+
+
+CROSS_SCENE_GAP = 150  # = data.genshin_min_id_gap: what the builder counts as a different scene
+WHITEN_DIMS = 128
+
+
+def topic_gap_by_negative(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]) -> dict[str, float]:
+    """Held-out same_speaker_topic_matched gap, split by whether the negative is a hub speaker.
+
+    Hub speakers (Paimon, Traveler) are seen in training and in nearly every scene, so a model can
+    score on them by learning "not Paimon"; the non-hub split is the cleaner same-scene test.
+    """
+    frame = triplet_frame(rows, embeddings)
+    if frame.empty:
+        return {}
+    frame = frame[(frame["rule"] == "same_speaker_topic_matched") & frame["heldout"]]
+    negatives = rows[rows["role"] == "negative"].set_index("triplet_id")["speaker"]
+    is_hub = frame["triplet_id"].map(negatives).isin(hubs).to_numpy()
+    gap = (frame["pos"] - frame["neg"]).to_numpy()
+    out: dict[str, float] = {}
+    for name, mask in (("hub", is_hub), ("other", ~is_hub)):
+        if mask.any():
+            out[f"topic_gap_{name}_neg"] = float(gap[mask].mean())
+            out[f"n_topic_{name}_neg"] = float(mask.sum())
+    return out
+
+
+def heldout_speaker_set(rows: pd.DataFrame) -> set[str]:
+    """Speakers of held-out Genshin anchors: the speakers never seen in training."""
+    mask = rows["rule"].isin(SPEAKER_RULES) & rows["heldout"].astype(bool) & (rows["role"] == "anchor")
+    return set(rows.loc[mask, "speaker"]) - {""}
+
+
+def real_gap_by_negative(rows: pd.DataFrame, embeddings: np.ndarray) -> dict[str, float]:
+    """Held-out same_speaker_real gap, split by whether the negative speaker is also held out (unseen vs
+    unseen) or was seen in training. About half of these negatives are seen speakers."""
+    frame = triplet_frame(rows, embeddings)
+    if frame.empty:
+        return {}
+    frame = frame[(frame["rule"] == "same_speaker_real") & frame["heldout"]]
+    negatives = rows[rows["role"] == "negative"].set_index("triplet_id")["speaker"]
+    unseen = frame["triplet_id"].map(negatives).isin(heldout_speaker_set(rows)).to_numpy()
+    gap = (frame["pos"] - frame["neg"]).to_numpy()
+    out: dict[str, float] = {}
+    for name, mask in (("heldout", unseen), ("seen", ~unseen)):
+        if mask.any():
+            out[f"real_gap_{name}_neg"] = float(gap[mask].mean())
+            out[f"n_real_{name}_neg"] = float(mask.sum())
+    return out
+
+
+def whitened(rows: pd.DataFrame, embeddings: np.ndarray, dims: int = WHITEN_DIMS) -> np.ndarray | None:
+    """PCA-whiten onto the top `dims` directions, fitted on rows from seen speakers only (out of sample for
+    held-out retrieval). Post-hoc decorrelation for free: a training-time spread loss must beat it.
+
+    Not just heldout == False rows: a seen anchor's negative is often a held-out speaker's line. Rows
+    with no speaker (traits) are kept; they cannot be a held-out speaker's line."""
+    unseen = heldout_speaker_set(rows)
+    keep = ~rows["heldout"].astype(bool) & ~rows["speaker"].isin(unseen)
+    fit = embeddings[keep.to_numpy(dtype=bool)].astype(np.float64)
+    if len(fit) < 3:
+        return None
+    mean = fit.mean(axis=0)
+    _u, singular, vt = np.linalg.svd(fit - mean, full_matrices=False)
+    keep = singular > singular[0] * 1e-6
+    k = min(dims, int(keep.sum()))
+    return _unit((embeddings.astype(np.float64) - mean) @ vt[:k].T / singular[:k])
+
+
+def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]) -> dict[str, float]:
+    """Flat scalars for compare: topic gap by negative type, cross-scene and whitened retrieval."""
+    out = topic_gap_by_negative(rows, embeddings, hubs)
+    out.update(real_gap_by_negative(rows, embeddings))
+    cross = speaker_retrieval(rows, embeddings, heldout=True, min_gap=CROSS_SCENE_GAP)
+    if "top1" in cross:
+        out["heldout_top1_cross_scene"] = cross["top1"]
+    white = whitened(rows, embeddings)
+    if white is not None:
+        retrieval = speaker_retrieval(rows, white, heldout=True)
+        if "top1" in retrieval:
+            out["whitened_top1"] = retrieval["top1"]
+        frame = triplet_frame(rows, white)
+        ovp = frame[frame["rule"] == "origin_vs_para"] if not frame.empty else frame
+        if len(ovp):
+            out["whitened_gap_origin_vs_para"] = float((ovp["pos"] - ovp["neg"]).mean())
     return out
 
 
@@ -131,7 +232,10 @@ def provenance_probe(rows: pd.DataFrame, embeddings: np.ndarray, max_folds: int 
     return out
 
 
-def render_report(table: pd.DataFrame, retrieval: dict[str, dict[str, float]], probe: dict[str, Any]) -> list[str]:
+def render_report(
+    table: pd.DataFrame, retrieval: dict[str, dict[str, float]], probe: dict[str, Any],
+    extra: dict[str, float] | None = None,
+) -> list[str]:
     lines = ["## Per-rule (complete triplets only)", "",
              "| rule | heldout speakers | n | pos | neg | gap | centered gap | violation |", "|---|---|---|---|---|---|---|---|"]
     for r in table.itertuples(index=False):
@@ -150,4 +254,7 @@ def render_report(table: pd.DataFrame, retrieval: dict[str, dict[str, float]], p
                      f"over {probe['classes']} (n={probe['n']}). Progress needs this to FALL while held-out retrieval rises.")
     else:
         lines.append(f"- not enough classes ({probe})")
+    if extra:
+        lines += ["", "## Diagnostics", ""]
+        lines += [f"- {key}: {value:.4f}" for key, value in sorted(extra.items())]
     return lines

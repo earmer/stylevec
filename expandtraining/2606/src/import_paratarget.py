@@ -22,6 +22,10 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
     per_target: defaultdict[str, int] = defaultdict(int)
     accepted_jobs = 0
 
+    # Collect every valid job first, then take them round-robin over sources within each target and over
+    # targets. Streaming in file order (sorted by target, then source) and stopping at the cap kept
+    # 68 targets and 32 sources, none of them held out.
+    jobs: dict[str, dict[str, list[tuple[int, dict[str, Any]]]]] = defaultdict(lambda: defaultdict(list))
     with open(path, "r", encoding="utf-8") as handle:
         for line_no, line in enumerate(handle, start=1):
             row = json.loads(line)
@@ -37,9 +41,6 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
             if source_speaker == target_speaker:
                 filter_counts["same_speaker"] += 1
                 continue
-            if per_target_cap > 0 and per_target[target_speaker] >= per_target_cap:
-                filter_counts["target_cap"] += 1
-                continue
             source_lines = row.get("source_lines")
             generated_lines = row.get("generated_lines")
             if not isinstance(source_lines, list) or not isinstance(generated_lines, list):
@@ -48,57 +49,82 @@ def load_paratarget_samples(config: dict[str, Any], speakers: list[str]) -> tupl
             if len(source_lines) != len(generated_lines):
                 filter_counts["line_count_mismatch"] += 1
                 continue
-            kept_for_job = 0
-            job_id = str(row.get("job_id", f"line-{line_no}"))
-            job_split = paratarget_job_split(job_id, str(source_speaker), str(target_speaker), heldout)
-            for index, (source_raw, generated_raw) in enumerate(zip(source_lines, generated_lines)):
-                source_text = normalize_text(str(source_raw))
-                generated_text = normalize_text(str(generated_raw))
-                if not source_text or not generated_text:
-                    filter_counts["empty_line"] += 1
-                    continue
-                if source_text.casefold() == generated_text.casefold():
-                    filter_counts["copied_line"] += 1
-                    continue
-                ratio = len(generated_text) / max(1, len(source_text))
-                if ratio < min_ratio or ratio > max_ratio:
-                    filter_counts["length_ratio"] += 1
-                    continue
-                split = job_split
-                samples.append(
-                    SampleRecord(
-                        sample_id=stable_id("paratarget", job_id, index),
-                        text=generated_text,
-                        style_id=str(target_speaker),
-                        style_type="generated_target",
-                        domain="paratarget",
-                        content_id=stable_id("paratarget_content", job_id, index),
-                        source_id=f"{job_id}:{index}",
-                        language="zh",
-                        split=split,
-                        quality=0.75,
-                        meta={
-                            "source_speaker": str(source_speaker),
-                            "target_speaker": str(target_speaker),
-                            "source_text": source_text,
-                            "source_length": len(source_text),
-                            "length": len(generated_text),
-                            "length_bucket": len(generated_text) // 20,
-                            "job_id": job_id,
-                        },
-                    )
+            jobs[str(target_speaker)][str(source_speaker)].append(
+                (line_no, {"job_id": row.get("job_id"), "source_speaker": str(source_speaker),
+                           "target_speaker": str(target_speaker), "source_lines": source_lines,
+                           "generated_lines": generated_lines})
+            )
+
+    rank = {speaker: index for index, speaker in enumerate(speakers)}
+    queues = {
+        target: interleave([by_source[source] for source in sorted(by_source, key=rank.__getitem__)])
+        for target, by_source in jobs.items()
+    }
+    for line_no, job in interleave([queues[target] for target in sorted(queues, key=rank.__getitem__)]):
+        if max_jobs > 0 and accepted_jobs >= max_jobs:
+            break
+        source_speaker, target_speaker = job["source_speaker"], job["target_speaker"]
+        if per_target_cap > 0 and per_target[target_speaker] >= per_target_cap:
+            filter_counts["target_cap"] += 1
+            continue
+        kept_for_job = 0
+        job_id = str(job["job_id"] or f"line-{line_no}")
+        job_split = paratarget_job_split(job_id, source_speaker, target_speaker, heldout)
+        touches_heldout = source_speaker in heldout or target_speaker in heldout
+        for index, (source_raw, generated_raw) in enumerate(zip(job["source_lines"], job["generated_lines"])):
+            source_text = normalize_text(str(source_raw))
+            generated_text = normalize_text(str(generated_raw))
+            if not source_text or not generated_text:
+                filter_counts["empty_line"] += 1
+                continue
+            if source_text.casefold() == generated_text.casefold():
+                filter_counts["copied_line"] += 1
+                continue
+            ratio = len(generated_text) / max(1, len(source_text))
+            if ratio < min_ratio or ratio > max_ratio:
+                filter_counts["length_ratio"] += 1
+                continue
+            samples.append(
+                SampleRecord(
+                    sample_id=stable_id("paratarget", job_id, index),
+                    text=generated_text,
+                    style_id=target_speaker,
+                    style_type="generated_target",
+                    domain="paratarget",
+                    content_id=stable_id("paratarget_content", job_id, index),
+                    source_id=f"{job_id}:{index}",
+                    language="zh",
+                    split=job_split,
+                    quality=0.75,
+                    meta={
+                        "source_speaker": source_speaker,
+                        "target_speaker": target_speaker,
+                        "heldout": touches_heldout,
+                        "source_text": source_text,
+                        "source_length": len(source_text),
+                        "length": len(generated_text),
+                        "length_bucket": len(generated_text) // 20,
+                        "job_id": job_id,
+                    },
                 )
-                kept_for_job += 1
-                per_target[target_speaker] += 1
-                if per_target_cap > 0 and per_target[target_speaker] >= per_target_cap:
-                    break
-            if kept_for_job:
-                accepted_jobs += 1
-            if max_jobs > 0 and accepted_jobs >= max_jobs:
+            )
+            kept_for_job += 1
+            per_target[target_speaker] += 1
+            if per_target_cap > 0 and per_target[target_speaker] >= per_target_cap:
                 break
+        if kept_for_job:
+            accepted_jobs += 1
     if not samples:
         raise ValueError("paratarget importer produced no samples")
     return samples, dict(filter_counts)
+
+
+def interleave(queues: list[list[Any]]) -> list[Any]:
+    """Round-robin: the first of each queue, then the second of each, and so on."""
+    out: list[Any] = []
+    for turn in range(max((len(queue) for queue in queues), default=0)):
+        out.extend(queue[turn] for queue in queues if turn < len(queue))
+    return out
 
 
 def paratarget_job_split(job_id: str, source: str, target: str, heldout: set[str]) -> str:

@@ -91,3 +91,17 @@ def test_spread_step_loss_adds_uniformity_only_when_weighted() -> None:
     assert off.item() == 0.0 and stats["uniformity_loss"].item() < 0.0
     on, _ = spread_step_loss(*rows, {**settings, "uniformity_weight": 0.5})
     assert torch.allclose(on, stats["uniformity_loss"] * 0.5)
+
+
+def test_spread_step_uniformity_ignores_negatives() -> None:
+    from train import spread_step_loss
+
+    torch.manual_seed(0)
+    anchor, positive = (torch.nn.functional.normalize(torch.randn(6, 8), dim=-1) for _ in range(2))
+    settings = {"min_dim_std": 0.0, "variance_weight": 0.0, "covariance_weight": 0.0,
+                "decorrelation": "covariance", "uniformity_weight": 1.0, "uniformity_t": 2.0}
+    spread = torch.nn.functional.normalize(torch.randn(6, 8), dim=-1)
+    collapsed = spread[:1].repeat(6, 1)
+    a, _ = spread_step_loss(anchor, positive, spread, settings)
+    b, _ = spread_step_loss(anchor, positive, collapsed, settings)
+    assert torch.allclose(a, b)
