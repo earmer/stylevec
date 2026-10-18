@@ -111,11 +111,13 @@ def save_checkpoint(
     else:
         adapter_dir.mkdir()
         (adapter_dir / "NO_PEFT_ADAPTER.txt").write_text("LoRA disabled; trainable state is in training_state.pt\n")
+    trainable = trainable_state_dict(unwrapped)
+    save_weights(trainable, out_dir, global_step, manifest_hash)
     state = {
         "global_step": global_step,
         "epoch": epoch,
         "manifest_hash": manifest_hash,
-        "model_trainable": trainable_state_dict(unwrapped),
+        "model_trainable": trainable,
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
         "torch_rng_state": torch.random.get_rng_state(),
@@ -123,6 +125,23 @@ def save_checkpoint(
         "python_rng_state": random.getstate(),
     }
     torch.save(state, out_dir / "training_state.pt")
+
+
+def save_weights(trainable: dict[str, torch.Tensor], out_dir: Path, global_step: int, manifest_hash: str) -> None:
+    """Every trained parameter (LoRA, projection head, fusion) without optimizer state: what validation
+    needs, and what survives `run_queue --prune`. adapter/ alone lacks the projection head."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = {"global_step": global_step, "manifest_hash": manifest_hash, "model_trainable": trainable}
+    torch.save(payload, out_dir / "weights.pt.partial")
+    (out_dir / "weights.pt.partial").replace(out_dir / "weights.pt")
+
+
+def snapshot_steps(config: dict[str, Any], total_steps: int) -> set[int]:
+    """Steps (from `train.keep_weights_at`, fractions of max_steps) whose weights are kept in
+    checkpoints/step_NNNNN/, so intermediate points of a run can be validated later."""
+    fractions = config["train"].get("keep_weights_at", []) or []
+    steps = {int(round(float(f) * total_steps)) for f in fractions}
+    return {step for step in steps if 0 < step < total_steps}
 
 
 def load_resume_state(
@@ -382,6 +401,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     max_grad_norm = float(config["train"].get("max_grad_norm", 1.0))
     max_seconds = float(config["train"].get("max_seconds", 0.0))
     checkpoint_every_steps = int(config["train"].get("checkpoint_every_steps", 0))
+    keep_steps = snapshot_steps(config, total_steps)
     regularization = config.get("regularization", {})
     spread_variance_weight = float(regularization.get("variance_weight", 0.0))
     spread_covariance_weight = float(regularization.get("covariance_weight", 0.0))
@@ -440,6 +460,13 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         scheduler.step()
                         optimizer.zero_grad(set_to_none=True)
                         global_step += 1
+                        if is_main and global_step in keep_steps:
+                            save_weights(
+                                trainable_state_dict(accelerator.unwrap_model(model)),
+                                checkpoint_dir / f"step_{global_step:05d}",
+                                global_step,
+                                manifest_hash,
+                            )
                         if is_main and checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
                             save_checkpoint(
                                 model,
@@ -500,6 +527,10 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     scheduler.step()
                     optimizer.zero_grad(set_to_none=True)
                     global_step += 1
+                    if global_step in keep_steps:
+                        save_weights(
+                            trainable_state_dict(model), checkpoint_dir / f"step_{global_step:05d}", global_step, manifest_hash
+                        )
                     if is_main and checkpoint_every_steps > 0 and global_step % checkpoint_every_steps == 0:
                         save_checkpoint(
                             model,

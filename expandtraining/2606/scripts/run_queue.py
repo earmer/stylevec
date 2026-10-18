@@ -59,10 +59,14 @@ def step(command: list[str], env: dict[str, str], log: Path) -> int:
 
 
 def prune(name: str) -> None:
-    """Drop optimizer/scheduler state once validated; the adapter weights stay."""
-    state = run_dir(name) / "checkpoints" / "latest" / "training_state.pt"
-    if state.is_file():
+    """Drop optimizer/scheduler state once validated. Only when weights.pt (LoRA plus projection head)
+    sits beside it: adapter/ alone cannot rebuild the model, so without it nothing is deleted."""
+    latest = run_dir(name) / "checkpoints" / "latest"
+    state = latest / "training_state.pt"
+    if state.is_file() and (latest / "weights.pt").is_file():
         state.unlink()
+    elif state.is_file():
+        print(f"prune skipped for {name}: no weights.pt beside training_state.pt", flush=True)
 
 
 def main() -> None:

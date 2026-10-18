@@ -131,6 +131,8 @@ def collect_validation_embeddings(
                         "rule": batch["rule"][index],
                         "heldout": bool(batch["meta"][index].get("heldout", False)),
                         "speaker": speaker_of(batch["meta"][index], role),
+                        # Genshin DB row of this line (-1 elsewhere): lets retrieval exclude same-scene lines.
+                        "db_id": int(batch["meta"][index].get(f"{role}_db_id", -1)),
                         "char_length": len(text),
                         "length_bucket": len(text) // 40,
                         "text_preview": text[:120],
@@ -229,9 +231,13 @@ def write_umap_outputs(rows: pd.DataFrame, embeddings: np.ndarray, out_dir: Path
 
 
 def load_checkpoint_for_validation(model: torch.nn.Module, checkpoint_dir: Path) -> None:
-    state_path = checkpoint_dir / "training_state.pt"
-    if not state_path.exists():
-        raise FileNotFoundError(f"checkpoint missing training_state.pt: {checkpoint_dir}")
+    """weights.pt when present (all a pruned or step_NNNNN checkpoint has), else training_state.pt."""
+    for name in ("weights.pt", "training_state.pt"):
+        state_path = checkpoint_dir / name
+        if state_path.exists():
+            break
+    else:
+        raise FileNotFoundError(f"checkpoint has neither weights.pt nor training_state.pt: {checkpoint_dir}")
     state = torch.load(state_path, map_location="cpu", weights_only=False)
     if "model_trainable" not in state:
         raise ValueError(f"checkpoint missing model_trainable: {state_path}")
@@ -255,7 +261,25 @@ def select_device(config: dict[str, Any]) -> torch.device:
     return torch.device(requested)
 
 
-def run_validation(config_path: str, run_name: str, resume: str | None = None, dataset: str | None = None) -> Path:
+def untrained_projection(model: torch.nn.Module, seed: int = 0) -> None:
+    """Baseline encoder: base model, LoRA left at its no-op init, and a fixed random Gaussian projection
+    without bias in place of the trained head. A random projection roughly preserves cosines
+    (Johnson-Lindenstrauss), so this scores the base model's own mean-pooled geometry."""
+    generator = torch.Generator().manual_seed(seed)
+    weight = model.projection.weight
+    with torch.no_grad():
+        weight.copy_(torch.randn(weight.shape, generator=generator) / weight.shape[1] ** 0.5)
+        if model.projection.bias is not None:
+            model.projection.bias.zero_()
+
+
+def run_validation(
+    config_path: str,
+    run_name: str,
+    resume: str | None = None,
+    dataset: str | None = None,
+    untrained: bool = False,
+) -> Path:
     from transformers import AutoTokenizer
 
     config = load_config(config_path)
@@ -283,7 +307,10 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None, d
 
     device = select_device(config)
     model = build_qwen_style_encoder(config).to(device)
-    load_checkpoint_for_validation(model, checkpoint_dir)
+    if untrained:
+        untrained_projection(model)
+    else:
+        load_checkpoint_for_validation(model, checkpoint_dir)
 
     rows, embeddings, summary = collect_validation_embeddings(
         model,
@@ -311,7 +338,7 @@ def run_validation(config_path: str, run_name: str, resume: str | None = None, d
     report = [
         "# Validation Report",
         "",
-        f"- checkpoint: `{checkpoint_dir}`",
+        f"- checkpoint: `{'untrained baseline (base model, random projection)' if untrained else checkpoint_dir}`",
         f"- rows: `{len(rows)}`",
         f"- embedding_dim: `{embeddings.shape[1]}`",
         f"- positive cosine mean: `{summary['pos_cos_mean']:.4f}`",
@@ -344,8 +371,9 @@ def main() -> None:
     parser.add_argument("--run-name", required=True)
     parser.add_argument("--resume", default=None)
     parser.add_argument("--dataset", default=None, help="prebuilt dataset name or path; default: build from raw")
+    parser.add_argument("--untrained", action="store_true", help="score the base model (no checkpoint) as a baseline")
     args = parser.parse_args()
-    out_dir = run_validation(args.config, args.run_name, args.resume, args.dataset)
+    out_dir = run_validation(args.config, args.run_name, args.resume, args.dataset, args.untrained)
     print(f"validation outputs: {out_dir}")
 
 

@@ -156,13 +156,22 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                 for other, row in rng.sample(pool, min(candidates * 4, len(pool)))
                 if other != speaker and length_compatible(anchor, row)
             ]
-            meta = {"speaker": speaker, "heldout": bool(anchor.meta.get("heldout", False))}
+            meta = {
+                "speaker": speaker,
+                "heldout": bool(anchor.meta.get("heldout", False)),
+                "anchor_db_id": int(anchor.meta.get("db_id", -1)),
+            }
             if others:
                 easy_negative = min(others[:candidates], key=lambda row: abs(sample_length(row) - sample_length(anchor)))
                 add_triplet(
                     triplets, anchor.text, easy_positive.text, easy_negative.text,
                     "same_speaker_real", split, float(weights["genshin_real"]), float(margins["medium"]),
-                    {**meta, "negative_speaker": easy_negative.style_id},
+                    {
+                        **meta,
+                        "negative_speaker": easy_negative.style_id,
+                        "positive_db_id": int(easy_positive.meta.get("db_id", -1)),
+                        "negative_db_id": int(easy_negative.meta.get("db_id", -1)),
+                    },
                 )
             scene = [n for n in anchor.meta.get("scene_neighbors", []) if 0.4 <= len(n[1]) / max(1, len(anchor.text)) <= 2.5]
             if scene:
@@ -176,13 +185,15 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                         "negative_speaker": neighbor[0],
                         "negative_id_distance": neighbor[2],
                         "positive_id_distance": abs(int(topic_positive.meta["db_id"]) - int(anchor.meta["db_id"])),
+                        "positive_db_id": int(topic_positive.meta["db_id"]),
                     },
                 )
             para_text = anchor.meta.get("para_text")
             if isinstance(para_text, str) and para_text:
                 add_triplet(
                     triplets, anchor.text, easy_positive.text, para_text,
-                    "origin_vs_para", split, float(weights["genshin_real"]), float(margins["hard"]), meta,
+                    "origin_vs_para", split, float(weights["genshin_real"]), float(margins["hard"]),
+                    {**meta, "positive_db_id": int(easy_positive.meta.get("db_id", -1))},
                 )
     return triplets
 

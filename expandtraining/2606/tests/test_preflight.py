@@ -75,5 +75,10 @@ def test_queue_states(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in run_queue.VALIDATION_DONE:
         (run / name).write_text("x")
     assert run_queue.state_of("r") == "done"
+    latest = run / "checkpoints" / "latest"
     run_queue.prune("r")
-    assert not (run / "checkpoints" / "latest" / "training_state.pt").exists()
+    assert (latest / "training_state.pt").exists(), "no weights.pt: pruning would lose the projection head"
+    (latest / "weights.pt").write_bytes(b"w")
+    run_queue.prune("r")
+    assert not (latest / "training_state.pt").exists()
+    assert (latest / "weights.pt").exists()
