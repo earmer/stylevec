@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 import torch
 
 
@@ -337,3 +338,81 @@ def test_target_hard_negative_cycles_through_other_target_lines() -> None:
     to_t1 = [row.negative_text for row in hard if row.meta["negative_target"] == "t1"]
     assert to_t1 == ["t1 generated 1", "t1 generated 1", "t1 generated 2"]  # t2[0] repeats t1[0]: advance
     assert all(row.negative_text not in (row.anchor_text, row.positive_text) for row in hard)
+
+
+def test_length_course_negative_matches_anchor_length_by_default() -> None:
+    config = {
+        "data": {"length_course_enabled": True, "length_course_triplets_per_domain": 4,
+                 "length_course_parts": 2, "length_course_max_chars": 500, "max_triplets": 100},
+        "validation": {"max_triplets": 20},
+        "weights": {"length_course": 0.08},
+        "margins": {"easy": 0.08},
+    }
+    samples = [
+        style_sample("genshin", "alice", 0, "short alice"),
+        style_sample("genshin", "alice", 1, "alice again " + "x" * 30),
+        style_sample("genshin", "bob", 0, "short bobby"),
+        style_sample("genshin", "bob", 1, "longer bob line " + "y" * 60),
+    ]
+    anchored = build_length_course_triplets(config, samples, "train")
+    assert anchored
+    for row in anchored:
+        assert row.meta["negative_length"] == min(
+            (len(s.text) for s in samples if s.style_id != row.meta["source"]),
+            key=lambda n: abs(n - row.meta["anchor_length"]),
+        )
+    config["data"]["length_course_negative_length"] = "positive"
+    legacy = build_length_course_triplets(config, samples, "train")
+    assert [row.negative_text for row in legacy] != [row.negative_text for row in anchored]
+    config["data"]["length_course_negative_length"] = "nope"
+    with pytest.raises(ValueError):
+        build_length_course_triplets(config, samples, "train")
+
+
+def test_topic_matched_variants_widen_train_only() -> None:
+    def scene_line(speaker: str, index: int, text: str, neighbors: list[list]) -> SampleRecord:
+        sample = genshin_line(speaker, index, text)
+        sample.meta["scene_neighbors"] = neighbors
+        return sample
+
+    config = {
+        "data": {"genshin_min_id_gap": 150, "genshin_candidates": 24},
+        "weights": {"genshin_real": 1.0},
+        "margins": {"medium": 0.12, "hard": 0.18},
+    }
+    neighbors = [[f"other{i}", f"同一场景里别人说的第{i}句话。", i + 1] for i in range(4)]
+    samples = [scene_line("a", i, f"角色甲在第{i}个场景说的一句台词。", neighbors) for i in range(5)]
+    samples += [genshin_line("b", i, f"另一个角色的第{i}句台词，长度差不多。") for i in range(3)]
+
+    def topic(rows: list[TripletRecord]) -> list[TripletRecord]:
+        return [row for row in rows if row.rule == "same_speaker_topic_matched"]
+
+    single = topic(build_genshin_triplets(config, samples, "train"))
+    config["data"]["genshin_topic_matched_variants"] = 3
+    widened = topic(build_genshin_triplets(config, samples, "train"))
+    assert len(widened) == 3 * len(single)
+    by_anchor: dict[str, list[TripletRecord]] = {}
+    for row in widened:
+        by_anchor.setdefault(row.anchor_text, []).append(row)
+    for row in single:  # variant 0 is the single-variant triplet, unchanged
+        assert (row.positive_text, row.negative_text) == (
+            by_anchor[row.anchor_text][0].positive_text, by_anchor[row.anchor_text][0].negative_text)
+    for rows in by_anchor.values():
+        assert len({row.positive_text for row in rows}) == 3 and len({row.negative_text for row in rows}) == 3
+
+    val = [SampleRecord(**{**s.__dict__, "split": "val"}) for s in samples]
+    assert len(topic(build_genshin_triplets(config, val, "val"))) == len(single)
+
+
+def test_length_probe_separates_group_level_from_within_group_length() -> None:
+    rng = np.random.default_rng(0)
+    groups = np.repeat(np.arange(8), 40)
+    lengths = (20 + 30 * groups + rng.integers(0, 10, size=groups.size)).astype(float)
+    # The embedding knows only the group (one-hot plus noise), not the length inside a group.
+    embeddings = np.eye(8)[groups] + 0.01 * rng.normal(size=(groups.size, 8))
+    metrics = length_leakage_metrics(embeddings, lengths, lengths // 20, groups=groups.tolist(), speakers=groups.tolist())
+    assert metrics["length_linear_r2"] > 0.8
+    assert metrics["length_r2_within_group"] < 0.2 and metrics["length_r2_within_speaker"] < 0.2
+    # An embedding that carries length itself is caught within groups too.
+    leaky = np.concatenate([embeddings, np.log1p(lengths)[:, None]], axis=1)
+    assert length_leakage_metrics(leaky, lengths, lengths // 20, groups=groups.tolist())["length_r2_within_group"] > 0.8

@@ -193,7 +193,15 @@ def cosine_summary(
     else:
         metrics["pca_top_component_ratio"] = 1.0
     metrics.update(vector_probe_metrics(matrix, prefix_dims))
-    metrics.update(length_leakage_metrics(matrix, rows["char_length"], rows["length_bucket"]))
+    metrics.update(
+        length_leakage_metrics(
+            matrix,
+            rows["char_length"],
+            rows["length_bucket"],
+            groups=(rows["rule"].astype(str) + ":" + rows["role"].astype(str)).tolist(),
+            speakers=rows["speaker"].fillna("").astype(str).tolist(),
+        )
+    )
     return metrics
 
 

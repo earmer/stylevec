@@ -133,6 +133,12 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
     margins = config["margins"]
     min_gap = int(config["data"].get("genshin_min_id_gap", 150))
     candidates = int(config["data"].get("genshin_candidates", 24))
+    # >1 widens the hard pool instead of replaying it: each train anchor gets this many topic-matched
+    # triplets, with its k least-overlapping far positives and k distinct same-scene negatives. Validation
+    # keeps one per anchor, so evaluation does not change with it. Raise data.max_triplets to keep them.
+    variants = int(config["data"].get("genshin_topic_matched_variants", 1))
+    if variants < 1:
+        raise ValueError("data.genshin_topic_matched_variants must be >= 1")
     grouped = by_style(samples, split, "genshin")
     speakers = [speaker for speaker, rows in grouped.items() if len(rows) >= 2]
     if len(speakers) < 2:
@@ -175,19 +181,24 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                 )
             scene = [n for n in anchor.meta.get("scene_neighbors", []) if 0.4 <= len(n[1]) / max(1, len(anchor.text)) <= 2.5]
             if scene:
-                neighbor = scene[rng.randrange(len(scene))]
-                add_triplet(
-                    triplets, anchor.text, topic_positive.text, neighbor[1],
-                    "same_speaker_topic_matched", split,
-                    float(weights.get("genshin_topic_matched", weights["genshin_real"])), float(margins["hard"]),
-                    {
-                        **meta,
-                        "negative_speaker": neighbor[0],
-                        "negative_id_distance": neighbor[2],
-                        "positive_id_distance": abs(int(topic_positive.meta["db_id"]) - int(anchor.meta["db_id"])),
-                        "positive_db_id": int(topic_positive.meta["db_id"]),
-                    },
-                )
+                first = scene[rng.randrange(len(scene))]
+                pairs = [(topic_positive, first)]
+                if variants > 1 and split == "train":
+                    pairs = topic_matched_pairs(anchor, sampled_far, scene, first, grams, variants)
+                for variant, (positive, neighbor) in enumerate(pairs):
+                    add_triplet(
+                        triplets, anchor.text, positive.text, neighbor[1],
+                        "same_speaker_topic_matched", split,
+                        float(weights.get("genshin_topic_matched", weights["genshin_real"])), float(margins["hard"]),
+                        {
+                            **meta,
+                            "negative_speaker": neighbor[0],
+                            "negative_id_distance": neighbor[2],
+                            "positive_id_distance": abs(int(positive.meta["db_id"]) - int(anchor.meta["db_id"])),
+                            "positive_db_id": int(positive.meta["db_id"]),
+                            **({"variant": variant} if variant else {}),
+                        },
+                    )
             para_text = anchor.meta.get("para_text")
             if isinstance(para_text, str) and para_text and para_text.strip() != anchor.text.strip():
                 add_triplet(
@@ -201,6 +212,25 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
 # origin_vs_para needs a paraphrase that differs from the origin: an identical one cannot satisfy the
 # margin (10.4% of d-350af1498f6a's train triplets; ~half of this rule's late violations in
 # curriculum_a_1gpu). Small edits (呢/会 dropped, ！ -> …) are kept: they are the style signal.
+
+def topic_matched_pairs(
+    anchor: SampleRecord,
+    sampled_far: list[SampleRecord],
+    scene: list[Any],
+    first: Any,
+    grams: dict[str, Any],
+    variants: int,
+) -> list[tuple[SampleRecord, Any]]:
+    """Up to `variants` (positive, scene neighbour) pairs: positives by rising word overlap with the anchor,
+    neighbours drawn without replacement after `first`. Pair 0 is the single-variant triplet, unchanged."""
+    anchor_grams = grams[anchor.sample_id]
+    positives = sorted(sampled_far, key=lambda row: jaccard(anchor_grams, grams[row.sample_id]))
+    rest = [neighbor for neighbor in scene if neighbor is not first]
+    random.Random(f"genshin_variants:{anchor.sample_id}").shuffle(rest)
+    neighbors = [first, *rest]
+    count = min(variants, len(positives), len(neighbors))
+    return [(positives[i], neighbors[i]) for i in range(count)]
+
 
 def far_rows(anchor: SampleRecord, rows: list[SampleRecord], min_gap: int) -> list[SampleRecord]:
     """Same-speaker rows at least `min_gap` DB ids away (different scene); else the farthest available."""
@@ -386,6 +416,13 @@ def build_length_course_triplets(
     max_parts = int(config["data"].get("length_course_parts", 2))
     max_chars = int(config["data"].get("length_course_max_chars", 6000))
     limit = length_course_domain_limit(config, split)
+    # anchor (default): the negative is as short as the anchor while the positive is long, so encoding
+    # length favours the wrong answer and only style can satisfy the margin. positive: the pre-2026-10-18
+    # rule, where P and N are both long and length is neutral, so it never penalised encoding length.
+    negative_length = str(config["data"].get("length_course_negative_length", "anchor"))
+    if negative_length not in ("anchor", "positive"):
+        raise ValueError(f"data.length_course_negative_length must be anchor or positive, got {negative_length!r}")
+    match_anchor = negative_length == "anchor"
 
     grouped: defaultdict[tuple[str, str], list[SampleRecord]] = defaultdict(list)
     domain_rows: defaultdict[str, list[SampleRecord]] = defaultdict(list)
@@ -417,7 +454,7 @@ def build_length_course_triplets(
             negative = pick_similar_length_negative(
                 negative_index[domain],
                 source,
-                len(positive_text),
+                len(anchor.text) if match_anchor else len(positive_text),
             )
             if negative is None:
                 continue

@@ -24,7 +24,17 @@ def length_leakage_metrics(
     lengths: Iterable[int | float],
     buckets: Iterable[Any],
     max_pair_items: int = 256,
+    groups: Iterable[Any] | None = None,
+    speakers: Iterable[Any] | None = None,
 ) -> dict[str, float]:
+    """How much text length the embedding encodes.
+
+    `length_linear_r2` pools every row, so it also counts length differences between domains, which the
+    embedding can read off provenance. With `groups` (e.g. rule:role), `length_r2_within_group` is the
+    same R2 after removing each group's mean length and mean embedding. With `speakers`,
+    `length_r2_within_speaker` does that per speaker, over rows that have one: utterance-level length with
+    each speaker's own verbosity (a style trait) taken out.
+    """
     matrix = _as_matrix(embeddings)
     length_values = np.asarray(list(lengths), dtype=np.float64)
     if matrix.shape[0] != length_values.shape[0]:
@@ -43,11 +53,19 @@ def length_leakage_metrics(
         "length_diff_bucket_cos_mean": 0.0,
         "length_same_minus_diff_cos": 0.0,
     }
+    if groups is not None:
+        metrics["length_r2_within_group"] = 0.0
+    if speakers is not None:
+        metrics["length_r2_within_speaker"] = 0.0
     if matrix.shape[0] < 4 or metrics["length_std"] <= 0.0:
         return metrics
 
     log_lengths = np.log1p(length_values)
     metrics["length_linear_r2"] = _ridge_regression_r2(matrix, log_lengths)
+    if groups is not None:
+        metrics["length_r2_within_group"] = _within_r2(matrix, log_lengths, np.asarray(list(groups), dtype=object))
+    if speakers is not None:
+        metrics["length_r2_within_speaker"] = _within_r2(matrix, log_lengths, np.asarray(list(speakers), dtype=object))
     metrics["length_pc1_abs_corr"] = abs(_pc1_corr(matrix, log_lengths))
 
     subset = _even_subset(matrix.shape[0], max_pair_items)
@@ -96,6 +114,27 @@ def _matrix_probe_metrics(matrix: np.ndarray, prefix: str) -> dict[str, float]:
     metrics[f"{prefix}_top_component_ratio"] = float(eigenvalues.max() / total)
     metrics[f"{prefix}_effective_rank"] = float(np.exp(entropy))
     return metrics
+
+
+def _within_r2(matrix: np.ndarray, target: np.ndarray, labels: np.ndarray) -> float:
+    """R2 of length after removing each label's mean from both length and embedding (fixed effects): one
+    pooled fit, so small groups do not overfit, and a label's identity cannot stand in for its typical
+    length. Rows with an empty label, or alone in their label, are left out."""
+    names = [str(value) if value is not None else "" for value in labels.tolist()]
+    counts: dict[str, int] = {}
+    for name in names:
+        counts[name] = counts.get(name, 0) + 1
+    mask = np.array([bool(name) and counts[name] >= 2 for name in names])
+    if mask.sum() < 8:
+        return 0.0
+    kept = np.asarray(names, dtype=object)[mask]
+    x, y = matrix[mask].astype(np.float64), target[mask].astype(np.float64)
+    x_within, y_within = x.copy(), y.copy()
+    for name in set(kept.tolist()):
+        rows = kept == name
+        x_within[rows] -= x[rows].mean(axis=0, keepdims=True)
+        y_within[rows] -= y[rows].mean()
+    return _ridge_regression_r2(x_within, y_within)
 
 
 def _ridge_regression_r2(matrix: np.ndarray, target: np.ndarray, ridge: float = 0.1) -> float:
