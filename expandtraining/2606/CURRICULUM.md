@@ -174,7 +174,10 @@ That criterion is held-out retrieval at chance while provenance stays above ~0.8
 per arm, as top-1 lift over chance < 0.05 (adjust under `kill:` in a spec). A schedule cannot fix that; the representation or objective is next.
 
 Headline metric per spec is set in its `headline:` list. All metrics are in `compare.json`:
-`heldout_top1(_lift)`, `heldout_top5`, `seen_top1`, `memory_gap` (seen − held-out),
+`heldout_top1(_lift)`, `heldout_top5`, `seen_top1`, `memory_gap` (seen − held-out; not a memorisation
+gap: seen retrieval is ~4x more classes with ~4x fewer lines per centroid), `seen_top1_matched` /
+`memory_gap_matched` (seen speakers subsampled to the held-out speaker and line counts; the fair gap),
+`heldout_top1_macro` (mean of per-speaker top-1), `heldout_top1_d32` / `_d64` (Matryoshka prefixes),
 `provenance_acc/lift`, `macro_violation`, `gap:<rule>` / `violation:<rule>` for focus rules, and the
 validation geometry: `effective_rank`, `top_component_ratio` and `length_r2` (from `cosine_summary.json`;
 `length_r2_group` / `length_r2_speaker` are within rule:role and within speaker, `length_r2` pooled), and
@@ -240,10 +243,13 @@ bash expandtraining/2606/scripts/sync_from_remote.sh --instance <pro-id> curricu
 uv run python expandtraining/2606/scripts/ablation.py compare expandtraining/2606/configs/ablations/curriculum_a_order.yaml
 ```
 
-`--instance` starts a stopped box for the pull and stops it again. Only results come back
-(`validation/`, configs, schedule, logs) plus `checkpoints/latest/weights.pt`, enough to re-validate.
-Adapters and the `step_NNNNN/` snapshots come back only with `WITH_ADAPTER=1`. `compare`
-writes `outputs/ablations/<name>/compare.md` and lists missing runs. Partial results are fine: pairs
+`--instance` starts a stopped box for the pull and stops it again. Only metrics come back by default
+(`validation/` and `validation_step_NNNNN/` without embeddings, configs, schedule, logs; ~1 MB a run);
+weights and embeddings are opt-in (`WITH_WEIGHTS=1`, `WITH_EMBEDDINGS=1`) because the ssh proxy is slow.
+The queue validates each `train.keep_weights_at` snapshot after the final weights, so `compare`
+also prints a trajectory table (35%, 70%, final). Comparisons add `heldout_top1_macro (paired by
+speaker)`: per-speaker differences, n = held-out speakers, so even a one-seed screen gets a call.
+`compare` writes `outputs/ablations/<name>/compare.md` and lists missing runs. Partial results are fine: pairs
 are formed only on seeds where both arms finished.
 
 ## 6. Measured tiers

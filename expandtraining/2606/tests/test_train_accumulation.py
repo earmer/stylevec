@@ -105,3 +105,22 @@ def test_spread_step_uniformity_ignores_negatives() -> None:
     a, _ = spread_step_loss(anchor, positive, spread, settings)
     b, _ = spread_step_loss(anchor, positive, collapsed, settings)
     assert torch.allclose(a, b)
+
+
+def test_queue_lists_only_unvalidated_snapshots(tmp_path, monkeypatch) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("run_queue", Path(__file__).resolve().parents[1] / "scripts" / "run_queue.py")
+    run_queue = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_queue)
+    monkeypatch.setattr(run_queue, "run_dir", lambda name: tmp_path / name)
+    checkpoints = tmp_path / "r" / "checkpoints"
+    for step in ("step_01050", "step_02100", "step_00500"):
+        (checkpoints / step).mkdir(parents=True)
+    (checkpoints / "step_01050" / "weights.pt").write_bytes(b"x")
+    (checkpoints / "step_02100" / "weights.pt").write_bytes(b"x")
+    done = tmp_path / "r" / "validation_step_01050"
+    done.mkdir()
+    for name in ("per_rule.csv", "retrieval_probe.json"):
+        (done / name).write_text("x")
+    assert [p.name for p in run_queue.pending_snapshots("r")] == ["step_02100"]

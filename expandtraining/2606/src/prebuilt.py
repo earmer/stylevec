@@ -71,12 +71,16 @@ def read_manifest(dataset: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def load_dataset(config: dict[str, Any], dataset: str) -> tuple[list[TripletRecord], dict[str, Any]]:
-    """Load a prebuilt dataset, refusing one built from different data settings or builder code."""
+def load_dataset(
+    config: dict[str, Any], dataset: str, allow_key_mismatch: bool = False,
+) -> tuple[list[TripletRecord], dict[str, Any]]:
+    """Load a prebuilt dataset, refusing one built from different data settings or builder code.
+    allow_key_mismatch is for re-validating an old run on the exact dataset it trained on after the
+    builder code moved on; never for training."""
     directory = dataset_dir(dataset)
     manifest = read_manifest(dataset)
     expected = data_key(config)
-    if manifest.get("data_key") != expected:
+    if manifest.get("data_key") != expected and not allow_key_mismatch:
         found = manifest.get("data_key", "none (built before data keys)")
         raise ValueError(
             f"dataset {directory} has data key {found}, this config needs {expected}; "
@@ -101,9 +105,11 @@ def load_dataset(config: dict[str, Any], dataset: str) -> tuple[list[TripletReco
     return triplets, {**manifest, "manifest_hash": manifest_hash(config, manifest["counts"]), "dataset": str(directory)}
 
 
-def load_or_build(config: dict[str, Any], dataset: str | None) -> tuple[list[TripletRecord], dict[str, Any]]:
+def load_or_build(
+    config: dict[str, Any], dataset: str | None, allow_key_mismatch: bool = False,
+) -> tuple[list[TripletRecord], dict[str, Any]]:
     if dataset:
-        return load_dataset(config, dataset)
+        return load_dataset(config, dataset, allow_key_mismatch)
     from build_triplets import build_training_triplets
 
     return build_training_triplets(config)

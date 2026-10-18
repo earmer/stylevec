@@ -530,10 +530,12 @@ bash expandtraining/2606/scripts/sync_from_remote.sh --instance pro-xxxx curricu
 bash expandtraining/2606/scripts/sync_from_remote.sh root@host:/root/stylevec <run_name>
 ```
 
-Names are run names or spec names (every `<spec>__*` run). It pulls results only: validation, configs,
-schedule, logs and `checkpoints/latest/weights.pt`. It never pulls `training_state.pt`; `WITH_ADAPTER=1`
-adds the adapter and the `step_NNNNN/` snapshots, and `WITH_TB=1`
-the TensorBoard logs. `--instance` starts a stopped Pro box for the pull and stops it afterwards.
+Names are run names or spec names (every `<spec>__*` run). By default it pulls metrics only, about
+1 MB per run: validation and snapshot validation results without `embeddings.npy`, configs, schedule
+and logs. The AutoDL ssh proxy has run at ~50 KB/s, where one run's weights take over an hour, so the
+large files are opt-in: `WITH_EMBEDDINGS=1` (embeddings and UMAP, ~20 MB per run), `WITH_WEIGHTS=1`
+(`checkpoints/latest/weights.pt`, ~280 MB, enough to re-validate), `WITH_ADAPTER=1` (adapter and
+`step_NNNNN/` snapshots), `WITH_SWANLOG=1` and `WITH_TB=1`. It never pulls `training_state.pt`. `--instance` starts a stopped Pro box for the pull and stops it afterwards.
 
 ## Experiments
 

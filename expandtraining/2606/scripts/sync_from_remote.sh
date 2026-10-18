@@ -5,10 +5,14 @@
 #   sync_from_remote.sh --instance pro-xxxx <run-or-spec> ...
 #
 # Each name is a run name or an ablation spec name (pulls every <spec>__* run and the queue status).
-# Pulled: validation/, config.yaml, data_manifest.json, curriculum_schedule.json, queue logs, and
-# checkpoints/latest/weights.pt (every trained parameter; enough to re-validate).
-# Never pulled: training_state.pt (optimizer state). WITH_ADAPTER=1 also pulls checkpoints/latest/adapter
-# and the step_NNNNN/ snapshots; WITH_TB=1 also pulls /root/tf-logs/<run>.
+# Pulled by default: the metrics only (validation*/ without embeddings.npy, config.yaml,
+# data_manifest.json, curriculum_schedule.json, queue logs), ~1 MB per run. The AutoDL ssh proxy has
+# run at ~50 KB/s, so the large files are opt-in: WITH_EMBEDDINGS=1 adds validation*/embeddings.npy
+# and umap.csv (~20 MB per run; compare recomputes diagnostics from them for runs validated before
+# the diagnostics were saved), WITH_WEIGHTS=1 adds checkpoints/latest/weights.pt (~280 MB per run;
+# enough to re-validate), WITH_ADAPTER=1 adds checkpoints/latest/adapter and the step_NNNNN/
+# snapshots, WITH_SWANLOG=1 the local SwanLab files, WITH_TB=1 /root/tf-logs/<run>.
+# Never pulled: training_state.pt (optimizer state).
 #
 # --instance resolves host and port with the autodl CLI. A stopped instance is started for the pull
 # (retrying every 15 s while no GPU is free; billing while it runs) and stopped again afterwards; a
@@ -62,10 +66,15 @@ ssh_cmd=(ssh -o ServerAliveInterval=30 -o ServerAliveCountMax=6)
 for _ in 1 2 3 4 5 6; do "${ssh_cmd[@]}" -o ConnectTimeout=10 "$HOST" true 2>/dev/null && break; sleep 10; done
 
 filters=(--exclude 'training_state.pt' --exclude '.rsync-partial/' --exclude '*.partial')
+if [[ "${WITH_EMBEDDINGS:-0}" != 1 ]]; then
+  filters+=(--exclude 'embeddings.npy' --exclude 'umap.csv')
+fi
+[[ "${WITH_SWANLOG:-0}" == 1 ]] || filters+=(--exclude 'swanlog/')
 if [[ "${WITH_ADAPTER:-0}" != 1 ]]; then
-  # The final weights (LoRA + projection head) are always pulled; adapters and step snapshots on request.
-  filters+=(--include 'checkpoints/' --include 'checkpoints/latest/' --include 'checkpoints/latest/weights.pt'
-            --exclude 'checkpoints/**')
+  if [[ "${WITH_WEIGHTS:-0}" == 1 ]]; then
+    filters+=(--include 'checkpoints/' --include 'checkpoints/latest/' --include 'checkpoints/latest/weights.pt')
+  fi
+  filters+=(--exclude 'checkpoints/**' --exclude 'checkpoints/')
 fi
 for name in "$@"; do
   filters+=(--include "/${name}/***" --include "/${name}__*/***")

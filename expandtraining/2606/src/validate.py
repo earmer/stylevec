@@ -304,16 +304,21 @@ def run_validation(
     resume: str | None = None,
     dataset: str | None = None,
     untrained: bool = False,
+    out_name: str = "validation",
+    allow_old_dataset: bool = False,
 ) -> Path:
+    """Validate one checkpoint into outputs/runs/<run>/<out_name>. Only the default out_name (the
+    final weights) writes UMAP and logs final metrics; snapshot validations write the metrics alone."""
     from transformers import AutoTokenizer
 
     config = load_config(config_path)
     run_dir = workspace_dir() / "outputs" / "runs" / run_name
     checkpoint_dir = Path(resume) if resume else run_dir / "checkpoints" / "latest"
-    out_dir = run_dir / "validation"
+    final = out_name == "validation"
+    out_dir = run_dir / out_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    triplets, _manifest = load_or_build(config, dataset)
+    triplets, _manifest = load_or_build(config, dataset, allow_old_dataset)
     tokenizer = AutoTokenizer.from_pretrained(config["model"]["base_model_path"], local_files_only=True, trust_remote_code=True)
     if tokenizer.pad_token is None:
         if tokenizer.eos_token is None:
@@ -349,7 +354,8 @@ def run_validation(
     rows.to_parquet(out_dir / "rows.parquet", index=False)
     np.save(out_dir / "embeddings.npy", embeddings)
     (out_dir / "cosine_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    write_umap_outputs(rows, embeddings, out_dir)
+    if final:
+        write_umap_outputs(rows, embeddings, out_dir)
     table = per_rule_table(rows, embeddings)
     retrieval = {
         "heldout speakers": speaker_retrieval(rows, embeddings, heldout=True),
@@ -378,7 +384,8 @@ def run_validation(
     ]
     report += [""] + render_report(table, retrieval, probe, extra)
     (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
-    log_final_metrics(config, run_name, run_dir)
+    if final:
+        log_final_metrics(config, run_name, run_dir)
     return out_dir
 
 
@@ -399,8 +406,14 @@ def main() -> None:
     parser.add_argument("--resume", default=None)
     parser.add_argument("--dataset", default=None, help="prebuilt dataset name or path; default: build from raw")
     parser.add_argument("--untrained", action="store_true", help="score the base model (no checkpoint) as a baseline")
+    parser.add_argument("--out-name", default="validation",
+                        help="output dir under the run; a snapshot uses validation_step_NNNNN (no UMAP, no SwanLab)")
+    parser.add_argument("--allow-old-dataset", action="store_true",
+                        help="accept a --dataset whose data key no longer matches the code: re-validating an old "
+                             "run on the dataset it trained on")
     args = parser.parse_args()
-    out_dir = run_validation(args.config, args.run_name, args.resume, args.dataset, args.untrained)
+    out_dir = run_validation(args.config, args.run_name, args.resume, args.dataset, args.untrained, args.out_name,
+                             args.allow_old_dataset)
     print(f"validation outputs: {out_dir}")
 
 

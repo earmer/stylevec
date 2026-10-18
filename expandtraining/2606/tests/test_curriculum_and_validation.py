@@ -127,3 +127,71 @@ def test_validation_selection_interleaves_buckets_and_speaker_of_covers_paratarg
     assert speaker_of(meta, "anchor") == "甲" and speaker_of(meta, "negative") == "乙"
     assert speaker_of({**meta, "negative_target": "丙"}, "negative") == "丙"
     assert speaker_of({"feature": "f"}, "anchor") == ""
+
+
+def speaker_lines(speakers: dict[str, int], heldout: bool, rng: np.random.Generator, dim: int = 8):
+    """Anchor lines per speaker, each speaker's vectors clustered around its own direction."""
+    recs, vecs = [], []
+    for s, (speaker, count) in enumerate(speakers.items()):
+        center = rng.normal(size=dim) * 3
+        for i in range(count):
+            recs.append({"triplet_id": f"{speaker}{i}", "role": "anchor", "rule": "same_speaker_real",
+                         "heldout": heldout, "speaker": speaker, "text_preview": f"{speaker}-{i}"})
+            vecs.append(center + rng.normal(size=dim))
+    return recs, vecs
+
+
+def test_speaker_level_retrieval_and_matched_seen() -> None:
+    from report import diagnostics, heldout_top1_by_speaker, seen_top1_matched
+
+    rng = np.random.default_rng(3)
+    held_recs, held_vecs = speaker_lines({f"h{i}": 6 for i in range(4)}, True, rng)
+    seen_recs, seen_vecs = speaker_lines({f"s{i}": 10 for i in range(12)}, False, rng)
+    rows = pd.DataFrame(held_recs + seen_recs)
+    emb = np.stack(held_vecs + seen_vecs)
+    by_speaker = heldout_top1_by_speaker(rows, emb)
+    assert set(by_speaker) == {f"h{i}" for i in range(4)}
+    # The per-speaker hits average (lines are equal per speaker) to the pooled held-out top-1.
+    assert np.isclose(np.mean(list(by_speaker.values())), speaker_retrieval(rows, emb, heldout=True)["top1"])
+    # Matched seen retrieval is 4-way like the held-out task, not 12-way: well separated clusters score ~1.
+    assert seen_top1_matched(rows, emb) > 0.9
+    out = diagnostics(rows, emb, frozenset())
+    assert {"heldout_top1_macro", "seen_top1_matched", "memory_gap_matched", "heldout_top1_d32"} - set(out) == {"heldout_top1_d32"}
+    assert isinstance(out["heldout_top1_by_speaker"], dict)
+
+
+def test_speaker_paired_effect_counts_speakers() -> None:
+    from ablation import speaker_paired, verdict
+
+    arm = {42: {"a": 0.5, "b": 0.6, "c": 0.4, "d": 0.5}}
+    against = {42: {"a": 0.4, "b": 0.5, "c": 0.3, "d": 0.4, "e": 0.9}}
+    effect = speaker_paired(arm, against)
+    assert effect["n"] == 4 and effect["seeds"] == 1 and np.isclose(effect["mean"], 0.1)
+    assert verdict("heldout_top1_macro", effect) == "better"
+    assert speaker_paired({42: {"a": 0.1}}, {43: {"a": 0.2}}) is None
+
+
+def test_compare_reads_snapshot_trajectory(tmp_path: Path) -> None:
+    import json
+
+    import yaml
+
+    from ablation import compare
+
+    spec = {"name": "traj", "base": "configs/remote_5090x2.yaml", "seeds": [42],
+            "arms": {"a": {}, "b": {}}, "comparisons": [{"arm": "b", "against": "a", "isolates": "x"}]}
+    spec_path = tmp_path / "traj.yaml"
+    spec_path.write_text(yaml.safe_dump(spec), encoding="utf-8")
+    for arm, top1 in (("a", 0.10), ("b", 0.20)):
+        for name, scale in (("validation", 1.0), ("validation_step_01050", 0.5)):
+            out = tmp_path / "runs" / f"traj__{arm}__s42" / name
+            out.mkdir(parents=True)
+            pd.DataFrame([{"rule": "same_speaker_real", "heldout": True, "n": 4, "gap": 0.1, "violation": 0.2}]).to_csv(
+                out / "per_rule.csv", index=False)
+            probe = {"retrieval": {"heldout speakers": {"top1": top1 * scale, "chance_top1": 0.05, "top5": 0.5}},
+                     "provenance": {}, "diagnostics": {"heldout_top1_by_speaker": {"x": top1, "y": top1 * 2}}}
+            (out / "retrieval_probe.json").write_text(json.dumps(probe), encoding="utf-8")
+    result = compare(spec_path, runs_root=tmp_path / "runs", write=False)
+    assert result["trajectory"]["b"]["step_01050"]["heldout_top1"]["mean"] == 0.10
+    effect = result["comparisons"][0]["effects"]["heldout_top1_macro (paired by speaker)"]
+    assert effect["n"] == 2 and np.isclose(effect["mean"], 0.15)

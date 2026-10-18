@@ -395,8 +395,8 @@ def _weighted(sub: pd.DataFrame, column: str) -> float:
     return float((sub[column] * sub["n"]).sum() / sub["n"].sum())
 
 
-def run_metrics(run_dir: Path, focus_rules: list[str]) -> dict[str, float] | None:
-    validation = run_dir / "validation"
+def run_metrics(run_dir: Path, focus_rules: list[str], validation_name: str = "validation") -> dict[str, float] | None:
+    validation = run_dir / validation_name
     per_rule, probe_path = validation / "per_rule.csv", validation / "retrieval_probe.json"
     if not per_rule.exists() or not probe_path.exists():
         return None
@@ -443,23 +443,62 @@ def run_metrics(run_dir: Path, focus_rules: list[str]) -> dict[str, float] | Non
 
 
 DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout_neg", "real_gap_seen_neg",
-                   "heldout_top1_cross_scene", "whitened_top1", "whitened_gap_origin_vs_para")
+                   "heldout_top1_cross_scene", "whitened_top1", "whitened_gap_origin_vs_para",
+                   "heldout_top1_macro", "seen_top1_matched", "memory_gap_matched",
+                   "heldout_top1_d32", "heldout_top1_d64")
+SPEAKER_PAIRED = "heldout_top1_macro (paired by speaker)"
 
 
-def run_diagnostics(validation: Path, probe: dict[str, Any]) -> dict[str, float]:
-    """report.diagnostics from the probe file, or recomputed from rows + embeddings for older runs."""
+def load_diagnostics(validation: Path, probe: dict[str, Any]) -> dict[str, Any]:
+    """report.diagnostics from the probe file, or recomputed from rows + embeddings for runs validated
+    before a diagnostic existed. Empty when neither is available."""
     extra = probe.get("diagnostics")
-    if extra is None:
+    if extra is None or "heldout_top1_by_speaker" not in extra:
         rows_path, embeddings_path = validation / "rows.parquet", validation / "embeddings.npy"
         if not rows_path.exists() or not embeddings_path.exists():
-            return {}
+            return extra or {}
         import numpy as np
 
         from import_genshin import HUB_SPEAKERS
         from report import diagnostics
 
         extra = diagnostics(pd.read_parquet(rows_path), np.load(embeddings_path), frozenset(HUB_SPEAKERS))
+    return extra
+
+
+def run_diagnostics(validation: Path, probe: dict[str, Any]) -> dict[str, float]:
+    extra = load_diagnostics(validation, probe)
     return {key: float(extra[key]) for key in DIAGNOSTIC_KEYS if key in extra}
+
+
+def speaker_hits(run_dir: Path, validation_name: str = "validation") -> dict[str, float]:
+    """Held-out top-1 per speaker for one run (report.heldout_top1_by_speaker)."""
+    validation = run_dir / validation_name
+    probe_path = validation / "retrieval_probe.json"
+    if not probe_path.exists():
+        return {}
+    probe = json.loads(probe_path.read_text(encoding="utf-8"))
+    return dict(load_diagnostics(validation, probe).get("heldout_top1_by_speaker", {}))
+
+
+def speaker_paired(arm_hits: dict[int, dict[str, float]], against_hits: dict[int, dict[str, float]]) -> dict[str, float] | None:
+    """arm − against on per-speaker held-out top-1: average each speaker's difference over the shared
+    seeds, then mean and sd across speakers (n = speakers). Valid with one seed, and it carries the
+    held-out-speaker sampling noise that seed pairing misses."""
+    seeds = sorted(set(arm_hits) & set(against_hits))
+    per_speaker: dict[str, list[float]] = {}
+    for seed in seeds:
+        a, b = arm_hits[seed], against_hits[seed]
+        for speaker in set(a) & set(b):
+            per_speaker.setdefault(speaker, []).append(a[speaker] - b[speaker])
+    if len(per_speaker) < 2:
+        return None
+    return {**_stats([sum(v) / len(v) for v in per_speaker.values()]), "seeds": len(seeds)}
+
+
+def snapshot_names(run_dir: Path) -> list[str]:
+    """validation_step_NNNNN dirs (run_queue validates the train.keep_weights_at snapshots), by step."""
+    return sorted(p.name for p in run_dir.glob("validation_step_*") if (p / "retrieval_probe.json").exists())
 
 
 def _stats(values: list[float]) -> dict[str, float]:
@@ -489,6 +528,8 @@ def compare(spec_path: str | Path, runs_root: Path | None = None, write: bool = 
     headline = spec.get("headline", DEFAULT_HEADLINE)
     kill = {**DEFAULT_KILL, **spec.get("kill", {})}
     per_run: dict[str, dict[int, dict[str, float]]] = {arm: {} for arm in spec["arms"]}
+    hits: dict[str, dict[int, dict[str, float]]] = {arm: {} for arm in spec["arms"]}
+    trajectory: dict[str, dict[str, dict[int, dict[str, float]]]] = {arm: {} for arm in spec["arms"]}
     missing: list[str] = []
     for arm in spec["arms"]:
         for seed in spec["seeds"]:
@@ -498,6 +539,11 @@ def compare(spec_path: str | Path, runs_root: Path | None = None, write: bool = 
                 missing.append(name)
             else:
                 per_run[arm][int(seed)] = metrics
+                hits[arm][int(seed)] = speaker_hits(runs_root / name)
+                for snapshot in snapshot_names(runs_root / name):
+                    snap = run_metrics(runs_root / name, focus, snapshot)
+                    if snap is not None:
+                        trajectory[arm].setdefault(snapshot.removeprefix("validation_"), {})[int(seed)] = snap
     arms: dict[str, dict[str, dict[str, float]]] = {}
     for arm, by_seed in per_run.items():
         names = sorted({m for metrics in by_seed.values() for m in metrics})
@@ -516,6 +562,9 @@ def compare(spec_path: str | Path, runs_root: Path | None = None, write: bool = 
         by_seed = deltas[c["name"]]
         names = sorted({m for d in by_seed.values() for m in d})
         effects = {m: _stats([d[m] for d in by_seed.values() if m in d]) for m in names}
+        by_speaker = speaker_paired(hits[c["arm"]], hits[c["against"]])
+        if by_speaker is not None:
+            effects[SPEAKER_PAIRED] = by_speaker
         comparisons.append({**c, "effects": {m: {**s, "verdict": verdict(m, s)} for m, s in effects.items()}})
     interactions = []
     for interaction in spec["interactions"]:
@@ -531,7 +580,11 @@ def compare(spec_path: str | Path, runs_root: Path | None = None, write: bool = 
         and stats["heldout_top1_lift"]["mean"] < kill["retrieval_lift_max"]
         and stats["provenance_acc"]["mean"] > kill["provenance_min"]
     )
-    result = {"name": spec["name"], "headline": headline, "missing_runs": missing, "arms": arms,
+    steps = {arm: {step: {m: _stats([s[m] for s in by_seed.values() if m in s])
+                          for m in sorted({m for s in by_seed.values() for m in s})}
+                   for step, by_seed in sorted(snaps.items())}
+             for arm, snaps in trajectory.items() if snaps}
+    result = {"name": spec["name"], "headline": headline, "missing_runs": missing, "arms": arms, "trajectory": steps,
               "comparisons": comparisons, "interactions": interactions, "kill": kill, "kill_flagged": flagged}
     if write:
         out = output_dir(spec["name"])
@@ -560,10 +613,22 @@ def render_compare(result: dict[str, Any]) -> str:
     lines += ["", "## Comparisons (arm − against, paired by seed; call needs |Δ| > 2 SE)", "",
               "| comparison | isolates | metric | Δ | verdict |", "|---|---|---|---|---|"]
     for c in result["comparisons"]:
-        for metric in headline:
+        for metric in headline + [SPEAKER_PAIRED]:
             effect = c["effects"].get(metric)
+            if metric == SPEAKER_PAIRED and not effect:
+                continue
             lines.append(f"| {c['name']} | {c.get('isolates', '')} | {metric} | {_cell(effect)} | "
                          f"{effect['verdict'] if effect else '-'} |")
+    if any(SPEAKER_PAIRED in c["effects"] for c in result["comparisons"]):
+        lines += ["", f"`{SPEAKER_PAIRED}`: n counts held-out speakers, not seeds, so it makes a call on one seed.",
+                  "When it and the seed-paired top-1 disagree, the held-out speaker sample is the limit."]
+    if result.get("trajectory"):
+        lines += ["", "## Trajectory (validated train.keep_weights_at snapshots, then the final weights)", "",
+                  "| arm | checkpoint | " + " | ".join(headline) + " |", "|---|---|" + "---|" * len(headline)]
+        for arm, snaps in result["trajectory"].items():
+            for step, stats in snaps.items():
+                lines.append(f"| {arm} | {step} | " + " | ".join(_cell(stats.get(m)) for m in headline) + " |")
+            lines.append(f"| {arm} | final | " + " | ".join(_cell(result["arms"][arm].get(m)) for m in headline) + " |")
     if result["interactions"]:
         lines += ["", "## Interactions (difference of paired deltas)", "", "| interaction | metric | Δ | verdict |",
                   "|---|---|---|---|"]

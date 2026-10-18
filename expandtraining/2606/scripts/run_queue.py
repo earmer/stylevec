@@ -4,7 +4,10 @@
 
 The box powers off when the queue ends (billing stops); pass --keep-up to leave it running.
 
-Stage 0b runs once, 0c before each run. A run is skipped when its validation is complete, resumed from
+Stage 0b runs once, 0c before each run. After the final weights, each train.keep_weights_at snapshot
+(checkpoints/step_NNNNN) is validated into validation_step_NNNNN/ (metrics only, a few minutes each; also for runs already
+done, so re-running a finished spec fills them in), so
+compare can show the trajectory; a failed snapshot validation is logged and does not fail the run. A run is skipped when its validation is complete, resumed from
 checkpoints/latest when training was cut off, otherwise started fresh. Per-run logs are written to
 outputs/runs/<run>/queue_{train,validate}.log and the queue's own status to outputs/queue/<spec>.json.
 """
@@ -58,6 +61,14 @@ def step(command: list[str], env: dict[str, str], log: Path) -> int:
                               stdout=handle, stderr=subprocess.STDOUT).returncode
 
 
+def pending_snapshots(name: str) -> list[Path]:
+    """Kept step_NNNNN checkpoints whose validation_step_NNNNN/ is not complete yet."""
+    checkpoints = run_dir(name) / "checkpoints"
+    return [step for step in sorted(checkpoints.glob("step_*"))
+            if (step / "weights.pt").is_file()
+            and not all((run_dir(name) / f"validation_{step.name}" / Path(f).name).is_file() for f in VALIDATION_DONE)]
+
+
 def prune(name: str) -> None:
     """Drop optimizer/scheduler state once validated. Only when weights.pt (LoRA plus projection head)
     sits beside it: adapter/ alone cannot rebuild the model, so without it nothing is deleted."""
@@ -107,11 +118,26 @@ def main() -> None:
     env["PATH"] = os.pathsep.join(p for p in ("/root/miniconda3/bin", env.get("PATH", "")) if p)
     failures = 0
     interrupted = False
+
+    def validate_snapshots(name: str, r: dict, entry: dict) -> None:
+        """Validate kept step_NNNNN snapshots not validated yet (also for runs finished before this
+        existed). A failure is recorded as a warning and does not fail the run."""
+        for snapshot in pending_snapshots(name):
+            print(f"{time.strftime('%T')} validate {snapshot.name}: {name}", flush=True)
+            code = step(["bash", str(SCRIPTS / "validate.sh"), name, str(snapshot)],
+                        {**env, "CONFIG": r["eval_config"], "DATASET": r["eval_dataset"],
+                         "OUT_NAME": f"validation_{snapshot.name}"},
+                        run_dir(name) / "queue_validate.log")
+            if code != 0:
+                entry.setdefault("warnings", []).append(f"{snapshot.name} validate exit {code}")
+                print(f"snapshot validation failed for {name} {snapshot.name}; see queue_validate.log", flush=True)
     try:
         for r in runs:
             name, entry = r["run"], status[r["run"]]
             entry["state"] = state_of(name)
             if entry["state"] == "done":
+                validate_snapshots(name, r, entry)
+                save()
                 continue
             problems = run_checks(r)
             if problems:
@@ -152,6 +178,7 @@ def main() -> None:
                 failures += 1
                 save()
                 continue
+            validate_snapshots(name, r, entry)
             if args.prune:
                 prune(name)
             entry.update(state="done", minutes=round((time.time() - started) / 60, 1))
@@ -164,7 +191,11 @@ def main() -> None:
         print(f"{time.strftime('%T')} queue ended: {done}/{len(runs)} done, {failures} failed; {status_path}", flush=True)
         if not args.keep_up and not args.dry_run and not interrupted:
             print("shutting down", flush=True)
-            subprocess.run(["/usr/bin/shutdown"], check=False)
+            # AutoDL's /usr/bin/shutdown is a shell script without a #! line: exec'ing it directly fails
+            # with ENOEXEC (Exec format error) and the box stays up, billing. Run it through bash.
+            code = subprocess.run(["bash", "/usr/bin/shutdown"], check=False).returncode
+            if code != 0:
+                print(f"shutdown exited {code}; the box may still be running (billing)", file=sys.stderr, flush=True)
 
 
 if __name__ == "__main__":
