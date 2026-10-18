@@ -97,6 +97,8 @@ expandtraining/2606/
     validate.sh
     sync_to_remote.sh
     sync_from_remote.sh
+    launch_queue.sh
+    autodl_lib.sh
     tensorboard.sh
   tests/
     test_imports.py
@@ -363,6 +365,8 @@ A new box needs the environment once: `bash expandtraining/2606/scripts/remote_s
 `.venv` from `uv.lock` through the region's pip mirror, with the uv cache on autodl-fs so the next
 box in the region installs from it. For ablation specs, `scripts/run_queue.sh <spec>` (inside tmux)
 runs Stage 0b, then trains and validates each run with resume; see `CURRICULUM.md`, Run protocol.
+`scripts/launch_queue.sh <pro-id> <spec>` does the whole launch from the Mac: it starts the box
+(retrying every 15 s while no GPU is free), syncs, and starts the queue in tmux.
 `DATASET=<name>` makes `remote_train.sh` and `validate.sh` load a prebuilt dataset
 (`scripts/build_dataset.py`) instead of rebuilding triplets from raw. `NUM_PROCESSES` sets the GPU count.
 
@@ -493,8 +497,8 @@ base model and any named prebuilt datasets from `outputs/datasets/` to `DATA_ROO
 `DATA_ROOT=<remote root>` keeps everything on the instance disk. Re-runs skip
 unchanged files and resume interrupted ones. `BOOKRAW=1` adds the volume's `books_cleaned.parquet`
 as `data/bookraw/books_cleaned.parquet`. Files are skipped on matching size and mtime, and rsync checks
-each transfer it makes; `CHECKSUM=1` compares contents instead (repairs a corrupt remote copy), and
-`VERIFY=1` adds a sha256 pass over every data file on the remote (~15 s for 3 GB).
+each transfer it makes; `CHECKSUM=1` compares contents instead (repairs a corrupt remote copy). Both
+use xxh128 when the two rsyncs support it (3.2+ with xxhash), md5 otherwise.
 
 From remote:
 

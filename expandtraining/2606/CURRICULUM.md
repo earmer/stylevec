@@ -204,6 +204,17 @@ bash expandtraining/2606/scripts/remote_setup.sh
 tmux new -s queue 'bash expandtraining/2606/scripts/run_queue.sh expandtraining/2606/configs/ablations/curriculum_a_order.yaml --prune'
 ```
 
+Or all of it from the Mac in one command, once the box has its `.venv`:
+
+```bash
+bash expandtraining/2606/scripts/launch_queue.sh <pro-id> expandtraining/2606/configs/ablations/curriculum_a_order.yaml --prune
+```
+
+`launch_queue.sh` runs Stage 0a, starts the box (retrying every 15 s for as long as no GPU is free on
+its host), pushes the code and the plan's datasets, runs the queue's dry run (Stage 0b) and starts the
+queue in tmux, logging to `/root/queue_<spec>.log`. If anything fails after it started the box, it
+stops the box again.
+
 The queue starts with Stage 0b: the code matches the 0a fingerprint, the GPU count equals
 `world_size`, bf16 kernels exist for the card, and the base model, datasets and disk headroom are in
 place. Before each run it does 0c (configs present, datasets match their configs, no

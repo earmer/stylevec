@@ -11,7 +11,8 @@
 # and the step_NNNNN/ snapshots; WITH_TB=1 also pulls /root/tf-logs/<run>.
 #
 # --instance resolves host and port with the autodl CLI. A stopped instance is started for the pull
-# (billing while it runs) and stopped again afterwards; a running one is left running.
+# (retrying every 15 s while no GPU is free; billing while it runs) and stopped again afterwards; a
+# running one is left running.
 # Env: SSH_PORT (with user@host form), ROOT (with --instance; default /root/stylevec).
 set -euo pipefail
 
@@ -20,17 +21,7 @@ cd "$(dirname "$0")/../../.."
 usage="usage: sync_from_remote.sh (user@host:/root/stylevec | --instance <id>) <run-or-spec> ..."
 [[ $# -ge 2 ]] || { echo "$usage" >&2; exit 2; }
 
-autodl_cli() {
-  # The CLI reads AUTODL_TOKEN; it is set for this one process only, from .env, and never printed.
-  local token
-  token="$(sed -n 's/^AUTODL_DEV_TOK=//p' .env | head -1 | sed -e 's/^"//' -e 's/"$//')"
-  [[ -n "$token" ]] || { echo "AUTODL_DEV_TOK missing from .env" >&2; return 1; }
-  PATH="$HOME/Library/pnpm/bin:$PATH" AUTODL_TOKEN="$token" autodl "$@"
-}
-
-instance_field() {
-  python3 -c 'import json,sys; d=json.load(sys.stdin)["data"]; print(eval(sys.argv[1], {}, {"d": d}))' "$1"
-}
+source expandtraining/2606/scripts/autodl_lib.sh
 
 INSTANCE=""
 started_here=0
@@ -38,15 +29,13 @@ if [[ "$1" == "--instance" ]]; then
   INSTANCE="$2"
   shift 2
   [[ $# -ge 1 ]] || { echo "$usage" >&2; exit 2; }
-  status="$(autodl_cli info "$INSTANCE" --json | instance_field 'd["instance"]["status"]')"
+  status="$(instance_status "$INSTANCE")"
   if [[ "$status" != "running" ]]; then
-    echo "== starting $INSTANCE (was $status; billing until it is stopped again)"
-    autodl_cli start "$INSTANCE" --wait >/dev/null
+    echo "== starting $INSTANCE (was $status)"
+    start_with_retry "$INSTANCE"
     started_here=1
   fi
-  info="$(autodl_cli info "$INSTANCE" --json)"
-  HOST="$(instance_field 'd["snapshot"]["ssh"]["user"] + "@" + d["snapshot"]["ssh"]["host"]' <<<"$info")"
-  SSH_PORT="$(instance_field 'd["snapshot"]["ssh"]["port"]' <<<"$info")"
+  resolve_ssh "$INSTANCE"
   REMOTE_ROOT="${ROOT:-/root/stylevec}"
 else
   REMOTE="$1"
