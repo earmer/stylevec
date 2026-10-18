@@ -162,10 +162,11 @@ Findings:
 | `curriculum_a_order.yaml` | 15 | exposure vs order vs direction vs pacing | `curriculum_a2_1gpu` read |
 | `curriculum_b_rules.yaml` | 15 | which rules earn their place; length-course share | round A done; set `common.curriculum.mode` to its winner |
 | `curriculum_b_bookraw.yaml` | 9 | keep / drop / demote `bookraw_same_work` | `BOOKRAW=1` sync; build dataset `d-60e5adb1cb07` |
-| `methods_c.yaml` | 12 | spread reg, matryoshka, max_length 384 | round A control chosen |
+| `methods_c.yaml` | 12 | spread reg, matryoshka, max_length 384 | round A control chosen; `no_spread` mostly tests the variance floor (see `spread_a_1gpu`) |
 | `curriculum_d_factorial.yaml` | 12 | does ordering scale with late hard share | round A shows an order effect |
 | `curriculum_a_1gpu.yaml` | 3 | round A's exposure and order steps, 1 seed, 1×5090 (`grad_accum` 8, same row budget); pinned to the old 64-line base | done 2026-10-18; trained heads lost to `--prune` |
 | `curriculum_a2_1gpu.yaml` | 6 | the same on the refined base, 2 seeds, stage-boundary weight snapshots | none; ~10 h |
+| `spread_a_1gpu.yaml` | 4 | do decorrelation (standardised), uniformity, or a 5× head lr widen the embedding and help retrieval | `curriculum_a2_1gpu` read; set `common.curriculum.mode` to its winner; ~6.5 h |
 | `smoke_1gpu.yaml` | 2 | pipeline check: 40 steps, both arms, train→validate→pull→compare | none; ~4 min |
 
 Stop rule: if any round-A arm meets the kill criterion of `FINDINGS.md` §6, B–D do not run.
@@ -174,7 +175,8 @@ per arm, as top-1 lift over chance < 0.05 (adjust under `kill:` in a spec). A sc
 
 Headline metric per spec is set in its `headline:` list. All metrics are in `compare.json`:
 `heldout_top1(_lift)`, `heldout_top5`, `seen_top1`, `memory_gap` (seen − held-out),
-`provenance_acc/lift`, `macro_violation`, and `gap:<rule>` / `violation:<rule>` for focus rules.
+`provenance_acc/lift`, `macro_violation`, `gap:<rule>` / `violation:<rule>` for focus rules, and the
+validation geometry: `effective_rank`, `top_component_ratio` and `length_r2` (from `cosine_summary.json`).
 Per-rule values use held-out-speaker rows where a rule has them.
 
 ### Run protocol
@@ -291,6 +293,17 @@ noisy at a 0.10 loss weight. Audit before promoting them.
   judged on, is the thinnest of the three.
 - Use `remote_5090x2.yaml` as the base. The `remote_1hour*` and colab configs have time caps and
   fail the planner.
+
+- **The embedding uses ~4 of 256 directions** (2026-10-18). `curriculum_a_1gpu` uniform s42: validation
+  effective rank 3.97, top component 49%, and length predictable from the embedding (linear R² 0.59).
+  The covariance penalty works on raw covariances; unit vectors have per-dimension std ~0.05, so it is
+  ~1e-6 and, at weight 0.005, in effect off. `regularization.decorrelation: correlation` standardises
+  dimensions first (mean squared correlation: 0.31 on those embeddings, 0.01 isotropic);
+  `regularization.uniformity_weight` adds a uniformity loss within anchors, positives and negatives;
+  `train.head_lr` gives the projection head (and fusion) its own learning rate. All default off, so
+  existing specs are unchanged. `spread_a_1gpu.yaml` screens them.
+- Margins are per rule already: `same_speaker_topic_matched` and `origin_vs_para` use the largest (0.18).
+  A violation rate depends on its margin, so compare rules by `gap`, not by violation rate.
 
 ## References
 

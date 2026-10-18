@@ -21,7 +21,12 @@ import tracking
 from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from curriculum import curriculum_order, schedule_summary
-from losses import embedding_spread_loss, matryoshka_triplet_margin_loss, weighted_triplet_margin_loss
+from losses import (
+    embedding_spread_loss,
+    matryoshka_triplet_margin_loss,
+    uniformity_loss,
+    weighted_triplet_margin_loss,
+)
 from model import (
     build_qwen_style_encoder,
     encode_triplet,
@@ -291,8 +296,30 @@ def dataloader_worker_kwargs(section: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
+HEAD_MODULES = ("projection.", "fusion.")
+
+
+def optimizer_parameter_groups(model: torch.nn.Module, config: dict[str, Any]) -> list[dict[str, Any]]:
+    """One group at train.lr, or two when train.head_lr is set: the randomly initialised projection head
+    (and fusion weights) at head_lr, the LoRA adapters at lr. The cosine schedule scales both alike."""
+    named = [(name, parameter) for name, parameter in model.named_parameters() if parameter.requires_grad]
+    if not named:
+        raise ValueError("model has no trainable parameters")
+    head_lr = config["train"].get("head_lr")
+    if head_lr is None:
+        return [{"params": [parameter for _, parameter in named]}]
+    head = [parameter for name, parameter in named if name.startswith(HEAD_MODULES)]
+    body = [parameter for name, parameter in named if not name.startswith(HEAD_MODULES)]
+    if not head:
+        raise ValueError("train.head_lr is set but the model has no projection/fusion parameters")
+    groups = [{"params": head, "lr": float(head_lr), "name": "head"}]
+    if body:
+        groups.insert(0, {"params": body, "name": "body"})
+    return groups
+
+
 def build_optimizer(
-    parameters: list[torch.nn.Parameter],
+    parameters: list[torch.nn.Parameter] | list[dict[str, Any]],
     config: dict[str, Any],
 ) -> torch.optim.Optimizer:
     kwargs: dict[str, Any] = {
@@ -353,10 +380,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     if not use_accelerate:
         model = model.to(device)
     summary = parameter_summary(model)
-    trainable = [parameter for parameter in model.parameters() if parameter.requires_grad]
-    if not trainable:
-        raise ValueError("model has no trainable parameters")
-    optimizer = build_optimizer(trainable, config)
+    optimizer = build_optimizer(optimizer_parameter_groups(model, config), config)
     total_steps = int(config["train"]["max_steps"])
     scheduler = make_scheduler(optimizer, float(config["train"].get("warmup_ratio", 0.0)), total_steps)
 
@@ -403,9 +427,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     checkpoint_every_steps = int(config["train"].get("checkpoint_every_steps", 0))
     keep_steps = snapshot_steps(config, total_steps)
     regularization = config.get("regularization", {})
-    spread_variance_weight = float(regularization.get("variance_weight", 0.0))
-    spread_covariance_weight = float(regularization.get("covariance_weight", 0.0))
-    spread_min_dim_std = float(regularization.get("min_dim_std", 0.0))
+    spread_settings = spread_settings_from_config(config)
     matryoshka_weight = float(regularization.get("matryoshka_weight", 0.0))
     matryoshka_dims = configured_matryoshka_dims(config)
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
@@ -442,13 +464,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         matryoshka_dims,
                         matryoshka_weight,
                     )
-                    embeddings = torch.cat([anchor, positive, negative], dim=0)
-                    spread_loss, spread_stats = embedding_spread_loss(
-                        embeddings,
-                        spread_min_dim_std,
-                        spread_variance_weight,
-                        spread_covariance_weight,
-                    )
+                    spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     loss = loss + spread_loss + matryoshka_loss
                     if grad_accum > 1:
                         window_size = accumulation_window(batch_index, total_batches, grad_accum)
@@ -510,13 +526,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         matryoshka_dims,
                         matryoshka_weight,
                     )
-                    embeddings = torch.cat([anchor, positive, negative], dim=0)
-                    spread_loss, spread_stats = embedding_spread_loss(
-                        embeddings,
-                        spread_min_dim_std,
-                        spread_variance_weight,
-                        spread_covariance_weight,
-                    )
+                    spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     loss = loss + spread_loss + matryoshka_loss
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
                     scaled_loss = loss / float(window_size)
@@ -637,6 +647,39 @@ def accumulation_window(batch_index: int, total_batches: int, accumulation: int)
     return max(1, min(accumulation, total_batches - window_start))
 
 
+def spread_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    regularization = config.get("regularization", {})
+    return {
+        "min_dim_std": float(regularization.get("min_dim_std", 0.0)),
+        "variance_weight": float(regularization.get("variance_weight", 0.0)),
+        "covariance_weight": float(regularization.get("covariance_weight", 0.0)),
+        "decorrelation": str(regularization.get("decorrelation", "covariance")),
+        "uniformity_weight": float(regularization.get("uniformity_weight", 0.0)),
+        "uniformity_t": float(regularization.get("uniformity_t", 2.0)),
+    }
+
+
+def spread_step_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    settings: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Variance floor and decorrelation on the whole batch, plus uniformity within each role."""
+    total, stats = embedding_spread_loss(
+        torch.cat([anchor, positive, negative], dim=0),
+        settings["min_dim_std"],
+        settings["variance_weight"],
+        settings["covariance_weight"],
+        settings["decorrelation"],
+    )
+    uniformity = uniformity_loss([anchor, positive, negative], settings["uniformity_t"])
+    stats["uniformity_loss"] = uniformity.detach()
+    if settings["uniformity_weight"] > 0.0:
+        total = total + uniformity * settings["uniformity_weight"]
+    return total, stats
+
+
 def matryoshka_step_loss(
     anchor: torch.Tensor,
     positive: torch.Tensor,
@@ -681,6 +724,8 @@ def log_train_step(
     writer.add_scalar("spread/dim_std_mean", float(spread_stats["dim_std_mean"].float().cpu().item()), global_step)
     writer.add_scalar("spread/variance_loss", float(spread_stats["variance_loss"].float().cpu().item()), global_step)
     writer.add_scalar("spread/covariance_loss", float(spread_stats["covariance_loss"].float().cpu().item()), global_step)
+    writer.add_scalar("spread/correlation_loss", float(spread_stats["correlation_loss"].float().cpu().item()), global_step)
+    writer.add_scalar("spread/uniformity_loss", float(spread_stats["uniformity_loss"].float().cpu().item()), global_step)
     writer.add_scalar("spread/top_eigen_ratio", float(spread_stats["top_eigen_ratio"].float().cpu().item()), global_step)
     writer.add_scalar("spread/effective_rank", float(spread_stats["effective_rank"].float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():
@@ -688,6 +733,8 @@ def log_train_step(
     writer.add_scalar("embedding/pre_norm_mean", float(norms.detach().float().mean().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_std", float(norms.detach().float().std(unbiased=False).cpu().item()), global_step)
     writer.add_scalar("optim/lr", float(optimizer.param_groups[0]["lr"]), global_step)
+    for group in optimizer.param_groups[1:]:
+        writer.add_scalar(f"optim/lr_{group.get('name', 'group')}", float(group["lr"]), global_step)
     grad_value = grad_norm.detach().float().cpu().item() if isinstance(grad_norm, torch.Tensor) else float(grad_norm)
     writer.add_scalar("optim/grad_norm", grad_value, global_step)
     log_rule_batch_stats(writer, stats, batch, global_step)

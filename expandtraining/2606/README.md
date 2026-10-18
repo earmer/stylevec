@@ -298,6 +298,19 @@ objective, then add narrow auxiliary pressure:
 - Matryoshka prefix triplet loss for smaller usable vector prefixes
 - low-weight length/paratarget course rules for length-invariance probes
 
+Spread options under `regularization:` (all default to the old behaviour):
+
+- `decorrelation: covariance | correlation`: what `covariance_weight` penalises. `covariance` uses raw
+  off-diagonal covariances, which are ~1e-6 on unit vectors, so it is in effect off; `correlation`
+  standardises each dimension first (mean squared correlation, 0..1).
+- `uniformity_weight` (default 0), `uniformity_t` (default 2): Wang & Isola uniformity,
+  log E[exp(-t·‖zᵢ−zⱼ‖²)], within anchors, positives and negatives separately.
+- `train.head_lr`: its own learning rate for the projection head and fusion weights; the LoRA adapters
+  keep `train.lr`. Both follow the same warmup/cosine schedule.
+
+`spread/correlation_loss` and `spread/uniformity_loss` are logged in every run, used or not, and
+`optim/lr_head` when `head_lr` is set.
+
 ## Logging
 
 TensorBoard must log:

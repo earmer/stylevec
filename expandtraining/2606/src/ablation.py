@@ -34,7 +34,7 @@ DEFAULT_FOCUS_RULES = [
     "generated_to_target",
     "bookraw_same_author_cross_work",
 ]
-LOWER_IS_BETTER = ("provenance_", "violation:", "macro_violation", "memory_gap")
+LOWER_IS_BETTER = ("provenance_", "violation:", "macro_violation", "memory_gap", "top_component_ratio", "length_r2")
 DEFAULT_KILL = {"retrieval_lift_max": 0.05, "provenance_min": 0.85}
 
 
@@ -416,6 +416,17 @@ def run_metrics(run_dir: Path, focus_rules: list[str]) -> dict[str, float] | Non
     if "accuracy" in provenance:
         metrics["provenance_acc"] = provenance["accuracy"]
         metrics["provenance_lift"] = provenance["accuracy"] - provenance["chance"]
+    summary_path = validation / "cosine_summary.json"
+    if summary_path.exists():
+        # Geometry of the validation embeddings: how many directions they use, and how much length leaks.
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        for source, key in (("vector_effective_rank", "effective_rank"),
+                            ("pca_top_component_ratio", "top_component_ratio"),
+                            ("length_linear_r2", "length_r2"),
+                            ("length_r2_within_group", "length_r2_group"),
+                            ("length_r2_within_speaker", "length_r2_speaker")):
+            if source in summary:
+                metrics[key] = float(summary[source])
     table = pd.read_csv(per_rule)
     if not table.empty:
         metrics["macro_violation"] = float(
@@ -547,7 +558,8 @@ def render_compare(result: dict[str, Any]) -> str:
                      "or objective, not the sampling schedule.")
     else:
         lines.append("No arm meets it.")
-    lines += ["", "Lower is better for provenance, violation and memory_gap; higher for retrieval and gap.",
+    lines += ["", "Lower is better for provenance, violation, memory_gap, top_component_ratio and length_r2; higher for",
+              "retrieval, gap and effective_rank.",
               "All metrics per arm are in `compare.json`."]
     return "\n".join(lines) + "\n"
 

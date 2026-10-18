@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
 
@@ -90,12 +92,25 @@ def scalar_stats(values: torch.Tensor, prefix: str) -> dict[str, float]:
     }
 
 
+DECORRELATION_MODES = ("covariance", "correlation")
+
+
 def embedding_spread_loss(
     embeddings: torch.Tensor,
     min_dim_std: float,
     variance_weight: float,
     covariance_weight: float,
+    decorrelation: str = "covariance",
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Variance floor plus an off-diagonal penalty, weighted by `covariance_weight`.
+
+    decorrelation="covariance" penalises raw covariances. On unit vectors each dimension's std is ~0.05,
+    so they are ~1e-3 and the squared penalty ~1e-6: in effect off. "correlation" standardises each
+    dimension first (VICReg/Barlow style), so the penalty is a mean squared correlation in [0, 1] and
+    its gradient does not shrink with the dimension scale. Both values are always reported.
+    """
+    if decorrelation not in DECORRELATION_MODES:
+        raise ValueError(f"decorrelation must be one of {DECORRELATION_MODES}, got {decorrelation!r}")
     if embeddings.ndim != 2:
         raise ValueError(f"embeddings must be [batch, dim], got {embeddings.shape}")
     if embeddings.shape[0] < 2:
@@ -104,6 +119,7 @@ def embedding_spread_loss(
             "dim_std_mean": zero.detach(),
             "variance_loss": zero.detach(),
             "covariance_loss": zero.detach(),
+            "correlation_loss": zero.detach(),
             "top_eigen_ratio": zero.detach(),
             "effective_rank": zero.detach(),
         }
@@ -113,13 +129,16 @@ def embedding_spread_loss(
     dim_std = centered.std(dim=0, unbiased=False)
     variance_loss = F.relu(float(min_dim_std) - dim_std).mean()
 
+    pairs = float(embeddings.shape[1] * max(1, embeddings.shape[1] - 1))
     covariance = centered.T @ centered / float(max(1, embeddings.shape[0] - 1))
     diagonal = torch.diagonal(covariance)
-    covariance_loss = (covariance - torch.diag(diagonal)).square().sum() / float(
-        embeddings.shape[1] * max(1, embeddings.shape[1] - 1)
-    )
+    covariance_loss = (covariance - torch.diag(diagonal)).square().sum() / pairs
+    standardized = centered / dim_std.clamp_min(1e-4)
+    correlation = standardized.T @ standardized / float(embeddings.shape[0])
+    correlation_loss = (correlation - torch.diag(torch.diagonal(correlation))).square().sum() / pairs
 
-    total = variance_loss * float(variance_weight) + covariance_loss * float(covariance_weight)
+    off_diagonal = correlation_loss if decorrelation == "correlation" else covariance_loss
+    total = variance_loss * float(variance_weight) + off_diagonal * float(covariance_weight)
     if embeddings.shape[0] < 3:
         zero = embeddings.new_tensor(0.0)
         diagnostics = {"top_eigen_ratio": zero.detach(), "effective_rank": zero.detach()}
@@ -130,9 +149,34 @@ def embedding_spread_loss(
             "dim_std_mean": dim_std.detach().mean(),
             "variance_loss": variance_loss.detach(),
             "covariance_loss": covariance_loss.detach(),
+            "correlation_loss": correlation_loss.detach(),
         }
     )
     return total, diagnostics
+
+
+def uniformity_loss(groups: list[torch.Tensor], t: float = 2.0) -> torch.Tensor:
+    """Wang & Isola (2020): log E[exp(-t ||z_i - z_j||^2)] over pairs within each group, averaged.
+
+    Pass anchors, positives and negatives as separate groups so a positive is never pushed away from its
+    own anchor. Expects L2-normalised rows; lower is more uniform on the sphere.
+    """
+    values = []
+    for group in groups:
+        if group.ndim != 2:
+            raise ValueError(f"embeddings must be [batch, dim], got {group.shape}")
+        if group.shape[0] < 2:
+            continue
+        # Matrix form instead of torch.pdist, which MPS lacks.
+        rows = group.float()
+        norms = rows.square().sum(dim=-1)
+        pairwise = (norms[:, None] + norms[None, :] - 2.0 * rows @ rows.T).clamp_min(0.0)
+        upper = torch.triu_indices(rows.shape[0], rows.shape[0], offset=1, device=rows.device)
+        squared = pairwise[upper[0], upper[1]]
+        values.append(torch.logsumexp(-float(t) * squared, dim=0) - math.log(squared.numel()))
+    if not values:
+        return groups[0].new_tensor(0.0) if groups else torch.tensor(0.0)
+    return torch.stack(values).mean()
 
 
 def _eigen_diagnostics(covariance: torch.Tensor) -> dict[str, torch.Tensor]:

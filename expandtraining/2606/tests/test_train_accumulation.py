@@ -59,3 +59,35 @@ def test_untrained_baseline_projection_is_fixed_and_bias_free() -> None:
     untrained_projection(model)
     assert torch.equal(first, model.projection.weight)
     assert torch.count_nonzero(model.projection.bias) == 0
+
+
+def test_head_lr_splits_projection_from_body() -> None:
+    from train import optimizer_parameter_groups
+
+    class Toy(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.backbone = torch.nn.Linear(4, 4)
+            self.projection = torch.nn.Linear(4, 2)
+
+    model = Toy()
+    config = {"train": {"lr": 2e-4}}
+    assert len(optimizer_parameter_groups(model, config)) == 1
+    config["train"]["head_lr"] = 1e-3
+    groups = optimizer_parameter_groups(model, config)
+    assert [g["name"] for g in groups] == ["body", "head"]
+    assert groups[1]["lr"] == 1e-3 and "lr" not in groups[0]
+    assert {id(p) for p in groups[1]["params"]} == {id(p) for p in model.projection.parameters()}
+
+
+def test_spread_step_loss_adds_uniformity_only_when_weighted() -> None:
+    from train import spread_step_loss
+
+    torch.manual_seed(0)
+    rows = [torch.nn.functional.normalize(torch.randn(8, 16), dim=-1) for _ in range(3)]
+    settings = {"min_dim_std": 0.0, "variance_weight": 0.0, "covariance_weight": 0.0,
+                "decorrelation": "covariance", "uniformity_weight": 0.0, "uniformity_t": 2.0}
+    off, stats = spread_step_loss(*rows, settings)
+    assert off.item() == 0.0 and stats["uniformity_loss"].item() < 0.0
+    on, _ = spread_step_loss(*rows, {**settings, "uniformity_weight": 0.5})
+    assert torch.allclose(on, stats["uniformity_loss"] * 0.5)

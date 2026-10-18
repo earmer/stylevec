@@ -1,0 +1,45 @@
+# Spread A: does decorrelating the embedding help retrieval? One seed on one 5090, ~6.5 h for 4 runs.
+# The curriculum_a runs used ~4 of 256 directions (validation effective rank 3.97, top component 49%):
+# the covariance penalty is ~1e-6 on unit vectors, so at weight 0.005 it is in effect off (CURRICULUM.md §5).
+# Dataset d-fe32ff5dc617: the a2 base with identical origin_vs_para paraphrases dropped, target_hard_negative
+# negatives varied, and length_course negatives length-matched to the anchor. Only loss and optimizer
+# settings change against its own control.
+#
+# Before launching: set common `curriculum.mode` to the curriculum_a2_1gpu winner (staged is the s42 lead).
+# Weights are screening values sized from the a_1gpu validation embeddings: mean squared correlation
+# 0.31 (isotropic 0.01), uniformity -1.54 (isotropic -3.97), against a triplet loss of 0.08 -> 0.008.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/spread_a_1gpu.yaml
+name: spread_a_1gpu
+description: >
+  Screens embedding-spread fixes on the curriculum_a2 base. decorr standardises dimensions before the
+  off-diagonal penalty (mean squared correlation, VICReg-style); uniformity adds a Wang & Isola uniformity
+  loss within anchors, positives and negatives; decorr_headlr also trains the projection head at 5x lr.
+  Judge by held-out retrieval and the same-speaker gaps; a higher effective rank alone is not a win.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - regularization.decorrelation
+  - regularization.uniformity_weight
+  - train.head_lr
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+arms:
+  control: {}
+  decorr:
+    regularization.decorrelation: correlation
+    regularization.covariance_weight: 0.02
+  uniformity:
+    regularization.uniformity_weight: 0.005
+  decorr_headlr:
+    regularization.decorrelation: correlation
+    regularization.covariance_weight: 0.02
+    train.head_lr: 1.0e-3
+comparisons:
+  # The penalty's scale changes with its mode, so mode and weight move together.
+  - {arm: decorr, against: control, isolates: decorrelation,
+     keys: [regularization.decorrelation, regularization.covariance_weight]}
+  - {arm: uniformity, against: control, isolates: uniformity}
+  - {arm: decorr_headlr, against: decorr, isolates: head_lr}
+headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para, effective_rank]
