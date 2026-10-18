@@ -195,7 +195,7 @@ pip mirror, using a uv cache on autodl-fs), then the queue inside tmux:
 
 ```bash
 bash expandtraining/2606/scripts/remote_setup.sh
-tmux new -s queue 'bash expandtraining/2606/scripts/run_queue.sh expandtraining/2606/configs/ablations/curriculum_a_order.yaml --prune --shutdown'
+tmux new -s queue 'bash expandtraining/2606/scripts/run_queue.sh expandtraining/2606/configs/ablations/curriculum_a_order.yaml --prune'
 ```
 
 The queue starts with Stage 0b: the code matches the 0a fingerprint, the GPU count equals
@@ -203,9 +203,10 @@ The queue starts with Stage 0b: the code matches the 0a fingerprint, the GPU cou
 place. Before each run it does 0c (configs present, datasets match their configs, no
 `allow_manifest_mismatch_on_resume`). Then it trains (resuming from `checkpoints/latest` if a run was
 cut off), validates on the eval config, and with `--prune` deletes `training_state.pt`. Finished runs
-are skipped, so re-running the queue continues where it stopped. With `--shutdown` the box powers off at
-the end, unless the queue was interrupted by hand. SwanLab mirrors each run's TensorBoard scalars live
-and logs the final `compare` metrics under `final/`, grouped by spec and tagged by arm and seed.
+are skipped, so re-running the queue continues where it stopped. The box powers off at the end, so
+billing stops (`--keep-up` leaves it running, and so does stopping the queue by hand). SwanLab mirrors
+each run's TensorBoard scalars live and logs the final `compare` metrics under `final/`, grouped by
+spec and tagged by arm and seed.
 
 Back on the Mac:
 

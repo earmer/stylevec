@@ -1,6 +1,8 @@
 """Run every (arm, seed) of a planned spec on this instance, resumably. Start it inside tmux:
 
-    tmux new -s queue 'bash expandtraining/2606/scripts/run_queue.sh <spec> [--shutdown] [--prune]'
+    tmux new -s queue 'bash expandtraining/2606/scripts/run_queue.sh <spec> [--prune] [--keep-up]'
+
+The box powers off when the queue ends (billing stops); pass --keep-up to leave it running.
 
 Stage 0b runs once, 0c before each run. A run is skipped when its validation is complete, resumed from
 checkpoints/latest when training was cut off, otherwise started fresh. Per-run logs are written to
@@ -68,7 +70,8 @@ def main() -> None:
     parser.add_argument("spec")
     parser.add_argument("--only", nargs="*", default=None, help="run names (or arm names) to restrict to")
     parser.add_argument("--prune", action="store_true", help="delete training_state.pt after validation")
-    parser.add_argument("--shutdown", action="store_true", help="power off when the queue ends (stops billing)")
+    parser.add_argument("--keep-up", action="store_true",
+                        help="do not power off when the queue ends (by default it does, to stop billing)")
     parser.add_argument("--dry-run", action="store_true", help="print what would run, then exit")
     args = parser.parse_args()
     try:
@@ -155,7 +158,7 @@ def main() -> None:
         save()
         done = sum(v["state"] == "done" for v in status.values())
         print(f"{time.strftime('%T')} queue ended: {done}/{len(runs)} done, {failures} failed; {status_path}", flush=True)
-        if args.shutdown and not interrupted:
+        if not args.keep_up and not args.dry_run and not interrupted:
             print("shutting down", flush=True)
             subprocess.run(["/usr/bin/shutdown"], check=False)
 
