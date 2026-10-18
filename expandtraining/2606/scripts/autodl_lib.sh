@@ -28,11 +28,14 @@ start_with_retry() {
       return 0
     fi
     if grep -qiE 'token|unauthori[sz]ed|401|403|not found|不存在|无权|登录' <<<"$out"; then
-      echo "start $id failed, not retrying: $(tail -1 <<<"$out")" >&2
+      echo "start $id failed, not retrying: $(grep -m1 '✖' <<<"$out" || tail -1 <<<"$out")" >&2
       return 1
     fi
     [[ "$(instance_status "$id" 2>/dev/null)" == running ]] && { echo "== $id is running (try $tries)"; return 0; }
-    echo "$(date +%T) start $id: $(tail -1 <<<"$out" | cut -c1-160); retrying in ${interval}s (try $tries)"
+    # The CLI marks the reason with ✖ (e.g. 当前算力规格暂无库存: no stock); a request_id follows it.
+    local reason
+    reason="$(grep -m1 '✖' <<<"$out" || tail -1 <<<"$out")"
+    echo "$(date +%T) start $id: $(cut -c1-160 <<<"$reason"); retrying in ${interval}s (try $tries)"
     sleep "$interval"
   done
 }
