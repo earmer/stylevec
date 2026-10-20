@@ -12,6 +12,12 @@
 # Before launching: set common `curriculum.mode` to the curriculum_a2_1gpu winner (staged is the s42 lead).
 # Weights are screening values sized from the a_1gpu validation embeddings: mean squared correlation
 # 0.31 (isotropic 0.01), uniformity -1.54 (isotropic -3.97), against a triplet loss of 0.08 -> 0.008.
+#
+# 2026-10-19: on this data control never left the narrow cone (every train cosine 0.85-0.96, violations
+# 0.6-0.95 against a2 staged's 0.1; the a2 data had 68 memorisable target_hard_negative negatives that
+# opened the space early, this data has 23k). decorr escaped until step ~950, then blew up. center
+# subtracts a running mean of the pooled hidden states before the projection (model.center); the queue
+# ran control and decorr, then `--only center center_decorr` instead of uniformity and decorr_headlr.
 # uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/spread_a_1gpu.yaml
 name: spread_a_1gpu
 description: >
@@ -26,6 +32,7 @@ new_keys:
   - regularization.decorrelation
   - regularization.uniformity_weight
   - train.head_lr
+  - model.center
 common:
   train.grad_accum: 8
   curriculum.mode: staged
@@ -40,11 +47,21 @@ arms:
     regularization.decorrelation: correlation
     regularization.covariance_weight: 0.02
     train.head_lr: 1.0e-3
+  center:
+    model.center: running
+  center_decorr:
+    model.center: running
+    regularization.decorrelation: correlation
+    regularization.covariance_weight: 0.02
 comparisons:
   # The penalty's scale changes with its mode, so mode and weight move together.
   - {arm: decorr, against: control, isolates: decorrelation,
      keys: [regularization.decorrelation, regularization.covariance_weight]}
   - {arm: uniformity, against: control, isolates: uniformity}
   - {arm: decorr_headlr, against: decorr, isolates: head_lr}
+  - {arm: center, against: control, isolates: centering}
+  - {arm: center_decorr, against: decorr, isolates: centering under decorrelation}
+  - {arm: center_decorr, against: center, isolates: decorrelation once centered,
+     keys: [regularization.decorrelation, regularization.covariance_weight]}
 headline: [heldout_top1_lift, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para, effective_rank,
            length_r2_speaker]

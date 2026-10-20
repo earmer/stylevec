@@ -124,3 +124,28 @@ def test_queue_lists_only_unvalidated_snapshots(tmp_path, monkeypatch) -> None:
     for name in ("per_rule.csv", "retrieval_probe.json"):
         (done / name).write_text("x")
     assert [p.name for p in run_queue.pending_snapshots("r")] == ["step_02100"]
+
+
+def test_running_center_tracks_mean_and_round_trips() -> None:
+    from model import RunningCenter, load_trainable_state_dict, trainable_state_dict
+
+    class Holder(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.center = RunningCenter(4, momentum=0.5)
+            self.projection = torch.nn.Linear(4, 2)
+
+    holder = Holder().train()
+    x = torch.ones(3, 4) * 10
+    assert torch.allclose(holder.center(x), torch.zeros(3, 4))  # first batch initialises the mean
+    holder.center(torch.zeros(3, 4))
+    assert torch.allclose(holder.center.mean, torch.full((4,), 5.0))
+    holder.eval()
+    before = holder.center.mean.clone()
+    holder.center(torch.zeros(3, 4))
+    assert torch.equal(holder.center.mean, before)  # frozen in eval
+    state = trainable_state_dict(holder)
+    assert "center.mean" in state and "center.initialized" in state
+    fresh = Holder()
+    load_trainable_state_dict(fresh, state)
+    assert torch.equal(fresh.center.mean, before) and bool(fresh.center.initialized)

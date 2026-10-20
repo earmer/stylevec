@@ -20,6 +20,8 @@ class EncoderSettings:
     lora_alpha: int
     lora_dropout: float
     lora_targets: tuple[str, ...]
+    center: str = "none"
+    center_momentum: float = 0.01
 
 
 class MeanPool(nn.Module):
@@ -32,6 +34,39 @@ class MeanPool(nn.Module):
         summed = (hidden * mask).sum(dim=1)
         denom = mask.sum(dim=1).clamp_min(1.0)
         return summed / denom
+
+
+CENTER_MODES = ("none", "running")
+CENTER_BUFFERS = ("center.mean", "center.initialized")
+
+
+class RunningCenter(nn.Module):
+    """Subtracts a running mean of the pooled hidden states before the projection.
+
+    Mean-pooled LLM hidden states share one large common direction, so every embedding starts
+    in a narrow cone (cosine ~0.9 between any two lines) and the triplet hinge has little to push on.
+    The mean is an EMA updated without gradient in training mode and frozen in eval, so anchors,
+    positives and negatives (encoded in separate forwards) and validation all use the same shift. Its
+    buffers are saved with the trained weights (model.trainable_state_dict)."""
+
+    def __init__(self, dim: int, momentum: float) -> None:
+        super().__init__()
+        if not 0.0 < momentum <= 1.0:
+            raise ValueError(f"center momentum must be in (0, 1], got {momentum}")
+        self.momentum = momentum
+        self.register_buffer("mean", torch.zeros(dim))
+        self.register_buffer("initialized", torch.zeros((), dtype=torch.bool))
+
+    def forward(self, pooled: torch.Tensor) -> torch.Tensor:
+        if self.training:
+            with torch.no_grad():
+                batch_mean = pooled.detach().float().mean(dim=0)
+                if bool(self.initialized):
+                    self.mean.lerp_(batch_mean, self.momentum)
+                else:
+                    self.mean.copy_(batch_mean)
+                    self.initialized.fill_(True)
+        return pooled - self.mean.to(dtype=pooled.dtype)
 
 
 class LayerFusion(nn.Module):
@@ -75,6 +110,9 @@ class QwenStyleEncoder(nn.Module):
         projection_in = hidden_size * self.fusion.output_multiplier()
         self.pool = MeanPool()
         self.dropout = nn.Dropout(settings.dropout)
+        if settings.center not in CENTER_MODES:
+            raise ValueError(f"model.center must be one of {CENTER_MODES}, got {settings.center!r}")
+        self.center = RunningCenter(projection_in, settings.center_momentum) if settings.center == "running" else None
         self.projection = nn.Linear(projection_in, settings.projection_dim)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -88,6 +126,8 @@ class QwenStyleEncoder(nn.Module):
         token_hidden = self.fusion(outputs.last_hidden_state, outputs.hidden_states if need_hidden else None)
         pooled = self.pool(token_hidden, attention_mask)
         pooled = pooled.to(dtype=self.projection.weight.dtype)
+        if self.center is not None:
+            pooled = self.center(pooled)
         projected = self.projection(self.dropout(pooled))
         pre_norm = projected.norm(dim=-1)
         embeddings = F.normalize(projected, p=2, dim=-1, eps=1e-8)
@@ -109,6 +149,8 @@ def build_encoder_settings(config: dict[str, Any]) -> EncoderSettings:
         lora_alpha=int(lora_cfg.get("alpha", 64)),
         lora_dropout=float(lora_cfg.get("dropout", 0.05)),
         lora_targets=tuple(str(value) for value in lora_cfg.get("targets", ["q_proj", "k_proj", "v_proj", "o_proj"])),
+        center=str(model_cfg.get("center", "none")),
+        center_momentum=float(model_cfg.get("center_momentum", 0.01)),
     )
 
 
@@ -221,15 +263,19 @@ def parameter_summary(module: nn.Module) -> dict[str, float]:
 
 
 def trainable_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
-    return {
+    """Trained parameters plus the learned (non-gradient) state the forward depends on: the running
+    center's buffers."""
+    state = {
         name: parameter.detach().cpu()
         for name, parameter in module.named_parameters()
         if parameter.requires_grad
     }
+    state.update({name: buffer.detach().cpu() for name, buffer in module.named_buffers() if name.endswith(CENTER_BUFFERS)})
+    return state
 
 
 def load_trainable_state_dict(module: nn.Module, state: dict[str, torch.Tensor]) -> None:
-    current = dict(module.named_parameters())
+    current = {**dict(module.named_parameters()), **dict(module.named_buffers())}
     missing = [name for name in state if name not in current]
     if missing:
         raise ValueError(f"checkpoint has unknown trainable parameters: {missing[:5]}")

@@ -165,3 +165,13 @@ When editing any of these, keep the surrounding experimental narrative intact. I
 - The CLI does not load `.env` itself. Map `AUTODL_DEV_TOK` to `AUTODL_TOKEN` for each subprocess; do not use the CLI's `--token` option for secrets.
 - Common commands: `autodl ls --json`, `autodl info <id>`, `autodl start <id> --wait`, and `autodl stop <id>`. `autodl rm <id>` permanently deletes the instance and its data; use only when explicitly requested.
 - Only AutoDL Pro instances are API-managed. Starting an instance begins billing. There is no restart command: stop it, wait for shutdown, then start it again.
+
+### expandtraining/2606 box scripts
+
+Run from the repo root; they source `expandtraining/2606/scripts/autodl_lib.sh`, which maps the token per process.
+
+- `start_with_retry <id>` (in `autodl_lib.sh`): a Pro box with no free GPU fails `autodl start` with `当前算力规格暂无库存`. This retries every `START_RETRY_SECONDS` (15) until it starts, and stops on errors waiting cannot fix. Use it, or a script built on it, instead of a bare `autodl start`.
+- `launch_queue.sh <id> <spec.yaml> [--only arm ...] [--prune]`: starts the box (with retry), syncs code and data, runs preflight Stage 0b, and launches `run_queue.py` in tmux session `queue`. The queue validates each run and its step snapshots, then powers the box off with `bash /usr/bin/shutdown` (AutoDL's script has no shebang, so exec'ing it fails with ENOEXEC). Ctrl-C in the queue does not power off.
+- `sync_from_remote.sh --instance <id> <run-or-spec> ...`: starts a stopped box (with retry), pulls metrics only by default, and stops the box again if it started it. Opt in to large files with `WITH_EMBEDDINGS=1` (needed for the speaker-paired compare), `WITH_WEIGHTS=1`, `WITH_ADAPTER=1`, `WITH_SWANLOG=1`, `WITH_TB=1`. The `user@host:/path` form needs `SSH_PORT`.
+- `uv run python expandtraining/2606/scripts/ablation.py compare <spec.yaml>` after a sync writes `compare.json` and the report.
+- Final metrics without starting the box: every run logs `final/*` and `validation/*` scalars to SwanLab project `earmercarey/stylevec-2606`. Read them with `swanlab.Api(api_key=...).runs("earmercarey/stylevec-2606")` and `exp.summary()`. The key is `TOK=` in `swanlab.env` (gitignored); pass it via env only and never print it.
