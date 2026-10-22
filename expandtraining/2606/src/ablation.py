@@ -159,9 +159,11 @@ def eval_config(shared: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     """Score every arm on the shared data/validation set; only the model-shaping keys follow the arm."""
     config = copy.deepcopy(shared)
     config["model"] = copy.deepcopy(arm["model"])
-    config.setdefault("regularization", {})["matryoshka_dims"] = copy.deepcopy(
-        arm.get("regularization", {}).get("matryoshka_dims", [])
-    )
+    # Training prefixes pick the reported ones only without validation.matryoshka_dims (shared by every arm).
+    if config.get("validation", {}).get("matryoshka_dims") is None:
+        config.setdefault("regularization", {})["matryoshka_dims"] = copy.deepcopy(
+            arm.get("regularization", {}).get("matryoshka_dims", [])
+        )
     config["train"]["combine_triplet_forward"] = arm["train"].get("combine_triplet_forward", False)
     return config
 
@@ -445,7 +447,7 @@ def run_metrics(run_dir: Path, focus_rules: list[str], validation_name: str = "v
 DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout_neg", "real_gap_seen_neg",
                    "heldout_top1_cross_scene", "whitened_top1", "whitened_gap_origin_vs_para",
                    "heldout_top1_macro", "seen_top1_matched", "memory_gap_matched",
-                   "heldout_top1_d32", "heldout_top1_d64")
+                   "heldout_top1_d32", "heldout_top1_d64", "heldout_top1_d128")
 SPEAKER_PAIRED = "heldout_top1_macro (paired by speaker)"
 
 

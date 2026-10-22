@@ -18,12 +18,19 @@ from torch.utils.tensorboard import SummaryWriter
 
 from prebuilt import load_or_build
 import tracking
-from config import config_hash, config_snapshot, configured_matryoshka_dims, load_config, workspace_dir
+from config import (
+    config_snapshot,
+    configured_matryoshka_dims,
+    load_config,
+    validation_matryoshka_dims,
+    workspace_dir,
+)
 from dataset import TripletTextDataset, make_triplet_collate
 from curriculum import curriculum_order, schedule_summary
 from losses import (
     embedding_spread_loss,
-    matryoshka_triplet_margin_loss,
+    info_nce_loss,
+    matryoshka_prefix_loss,
     uniformity_loss,
     weighted_triplet_margin_loss,
 )
@@ -434,6 +441,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     spread_settings = spread_settings_from_config(config)
     matryoshka_weight = float(regularization.get("matryoshka_weight", 0.0))
     matryoshka_dims = configured_matryoshka_dims(config)
+    objective = objective_settings_from_config(config)
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
     log_every_steps = max(1, int(config.get("logging", {}).get("train_every_steps", 1)))
@@ -452,21 +460,17 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             if use_accelerate:
                 with accelerator.accumulate(model):
                     anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
-                    loss, stats = weighted_triplet_margin_loss(
-                        anchor,
-                        positive,
-                        negative,
-                        batch["margin"],
-                        batch["weight"],
-                    )
+                    groups = style_group_ids(batch, anchor.device) if objective["loss"] == "infonce" else None
+                    loss, stats = objective_loss(anchor, positive, negative, batch, objective, groups)
                     matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
                         anchor,
                         positive,
                         negative,
-                        batch["margin"],
-                        batch["weight"],
+                        batch,
                         matryoshka_dims,
                         matryoshka_weight,
+                        objective,
+                        groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     loss = loss + spread_loss + matryoshka_loss
@@ -514,21 +518,17 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             else:
                 with autocast_context(device, precision):
                     anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
-                    loss, stats = weighted_triplet_margin_loss(
-                        anchor,
-                        positive,
-                        negative,
-                        batch["margin"],
-                        batch["weight"],
-                    )
+                    groups = style_group_ids(batch, anchor.device) if objective["loss"] == "infonce" else None
+                    loss, stats = objective_loss(anchor, positive, negative, batch, objective, groups)
                     matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
                         anchor,
                         positive,
                         negative,
-                        batch["margin"],
-                        batch["weight"],
+                        batch,
                         matryoshka_dims,
                         matryoshka_weight,
+                        objective,
+                        groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     loss = loss + spread_loss + matryoshka_loss
@@ -586,7 +586,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             eval_val_loader,
             device,
             max_batches=int(config["validation"].get("max_batches", 4)),
-            prefix_dims=matryoshka_dims,
+            prefix_dims=validation_matryoshka_dims(config),
             combine_forward=combine_forward,
             non_blocking=non_blocking,
         )
@@ -688,25 +688,81 @@ def spread_step_loss(
     return total, stats
 
 
+def objective_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    """train.loss picks the main objective: `triplet` (the hinge on 1 - cos, default) or `infonce`.
+    Under infonce, train.infonce_triplet_weight adds the hinge on top (0 = InfoNCE alone)."""
+    train = config["train"]
+    return {
+        "loss": str(train.get("loss", "triplet")),
+        "temperature": float(train.get("infonce_temperature", 0.05)),
+        "triplet_weight": float(train.get("infonce_triplet_weight", 0.0)),
+    }
+
+
+def style_group_ids(batch: dict[str, Any], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+    """Integer ids for the collate's anchor_style/negative_style labels. Each unknown (None) gets its own
+    negative id, so it never matches anything and is never masked."""
+    ids: dict[str, int] = {}
+
+    def encode(labels: list[str | None], offset: int) -> torch.Tensor:
+        values = [-(2 * index + offset) if label is None else ids.setdefault(label, len(ids))
+                  for index, label in enumerate(labels)]
+        return torch.tensor(values, dtype=torch.long, device=device)
+
+    return encode(batch["anchor_style"], 1), encode(batch["negative_style"], 2)
+
+
+def objective_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    batch: dict[str, Any],
+    settings: dict[str, Any],
+    groups: tuple[torch.Tensor, torch.Tensor] | None = None,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    if settings["loss"] == "triplet":
+        return weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], batch["weight"])
+    if settings["loss"] != "infonce":
+        raise ValueError(f"unknown train.loss: {settings['loss']!r}")
+    anchor_groups, negative_groups = groups if groups is not None else style_group_ids(batch, anchor.device)
+    loss, stats = info_nce_loss(
+        anchor,
+        positive,
+        negative,
+        batch["margin"],
+        batch["weight"],
+        anchor_groups,
+        negative_groups,
+        settings["temperature"],
+    )
+    stats["infonce_loss"] = loss.detach()
+    if settings["triplet_weight"] > 0.0:
+        triplet, _ = weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], batch["weight"])
+        stats["triplet_loss"] = triplet.detach()
+        loss = loss + triplet * settings["triplet_weight"]
+    return loss, stats
+
+
 def matryoshka_step_loss(
     anchor: torch.Tensor,
     positive: torch.Tensor,
     negative: torch.Tensor,
-    margins: torch.Tensor,
-    weights: torch.Tensor,
+    batch: dict[str, Any],
     prefix_dims: list[int],
     loss_weight: float,
+    settings: dict[str, Any],
+    groups: tuple[torch.Tensor, torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """The main objective again on each training prefix (re-normalised), weighted by matryoshka_weight."""
     if loss_weight <= 0.0 or not prefix_dims:
         zero = anchor.new_tensor(0.0)
         return zero, {"loss": zero.detach()}
-    loss, stats = matryoshka_triplet_margin_loss(
+    loss, stats = matryoshka_prefix_loss(
         anchor,
         positive,
         negative,
-        margins,
-        weights,
         prefix_dims,
+        lambda a, p, n: objective_loss(a, p, n, batch, settings, groups),
     )
     weighted = loss * float(loss_weight)
     stats["weighted_loss"] = weighted.detach()
@@ -736,6 +792,9 @@ def log_train_step(
     writer.add_scalar("spread/uniformity_loss", float(spread_stats["uniformity_loss"].float().cpu().item()), global_step)
     writer.add_scalar("spread/top_eigen_ratio", float(spread_stats["top_eigen_ratio"].float().cpu().item()), global_step)
     writer.add_scalar("spread/effective_rank", float(spread_stats["effective_rank"].float().cpu().item()), global_step)
+    for key in ("masked_fraction", "accuracy", "infonce_loss", "triplet_loss"):
+        if key in stats:
+            writer.add_scalar(f"infonce/{key}", float(stats[key].float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():
         writer.add_scalar(f"matryoshka/{key}", float(value.float().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_mean", float(norms.detach().float().mean().cpu().item()), global_step)

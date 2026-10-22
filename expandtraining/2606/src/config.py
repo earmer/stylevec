@@ -8,6 +8,9 @@ from typing import Any
 import yaml
 
 
+LOSS_TYPES = ("triplet", "infonce")
+
+
 def workspace_dir() -> Path:
     return Path(__file__).resolve().parents[1]
 
@@ -80,6 +83,17 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("train.max_steps must be positive")
     if int(config["data"]["max_triplets"]) <= 0:
         raise ValueError("data.max_triplets must be positive")
+    validate_loss_config(config)
+
+
+def validate_loss_config(config: dict[str, Any]) -> None:
+    loss_type = str(config["train"].get("loss", "triplet"))
+    if loss_type not in LOSS_TYPES:
+        raise ValueError(f"train.loss must be one of {LOSS_TYPES}, got {loss_type!r}")
+    if float(config["train"].get("infonce_temperature", 0.05)) <= 0.0:
+        raise ValueError("train.infonce_temperature must be positive")
+    if float(config["train"].get("infonce_triplet_weight", 0.0)) < 0.0:
+        raise ValueError("train.infonce_triplet_weight must be non-negative")
 
 
 def config_hash(config: dict[str, Any]) -> str:
@@ -94,6 +108,20 @@ def config_snapshot(config: dict[str, Any]) -> str:
 
 
 def configured_matryoshka_dims(config: dict[str, Any]) -> list[int]:
+    """Prefixes the training loss covers (`regularization.matryoshka_dims`); the full dimension is implied."""
     projection_dim = int(config["model"]["projection_dim"])
     configured = config.get("regularization", {}).get("matryoshka_dims", [])
     return sorted({int(value) for value in configured if 0 < int(value) < projection_dim})
+
+
+def validation_matryoshka_dims(config: dict[str, Any]) -> list[int]:
+    """Prefixes validation and the probes report: `validation.matryoshka_dims`, else the training ones.
+
+    Separate so an arm can train fewer prefixes (e.g. [64]) and still be scored at 32/64/128 like the rest.
+    """
+    configured = config.get("validation", {}).get("matryoshka_dims")
+    if configured is None:
+        return configured_matryoshka_dims(config)
+    projection_dim = int(config["model"]["projection_dim"])
+    return sorted({int(value) for value in configured if 0 < int(value) < projection_dim})
+

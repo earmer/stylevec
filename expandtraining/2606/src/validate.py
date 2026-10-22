@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +13,7 @@ from torch.utils.data import DataLoader
 
 from prebuilt import load_or_build
 import tracking
-from config import configured_matryoshka_dims, load_config, workspace_dir
+from config import load_config, validation_matryoshka_dims, workspace_dir
 from dataset import TripletTextDataset, make_triplet_collate
 from losses import embedding_spread_diagnostics, scalar_stats, weighted_triplet_margin_loss
 from model import build_qwen_style_encoder, encode_triplet, load_trainable_state_dict
@@ -347,7 +346,7 @@ def run_validation(
         val_loader,
         device,
         max_samples=None,
-        prefix_dims=configured_matryoshka_dims(config),
+        prefix_dims=validation_matryoshka_dims(config),
         combine_forward=bool(config["train"].get("combine_triplet_forward", False)),
         non_blocking=False,
     )

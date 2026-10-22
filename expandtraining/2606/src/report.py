@@ -189,7 +189,7 @@ def prefix_top1(rows: pd.DataFrame, embeddings: np.ndarray, dims: int) -> float 
 
 CROSS_SCENE_GAP = 150  # = data.genshin_min_id_gap: what the builder counts as a different scene
 WHITEN_DIMS = 128
-PREFIX_DIMS = (32, 64)
+PREFIX_DIMS = (32, 64, 128)
 
 
 def topic_gap_by_negative(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]) -> dict[str, float]:

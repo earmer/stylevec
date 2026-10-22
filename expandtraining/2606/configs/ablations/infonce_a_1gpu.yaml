@@ -1,0 +1,49 @@
+# InfoNCE A: does an in-batch contrastive loss spread speaker information that the hinge leaves in
+# low-variance directions? One seed on one 5090, ~3.5 h for 3 runs (spread_a: ~70 min per run).
+# center (spread_a_1gpu) reached held-out top-1 0.108, but soft whitening of its validation embeddings
+# lifts that to 0.279 (cross-scene 0.098 -> 0.242): the hinge stops pushing once its margin is met, so
+# speaker directions keep a small variance (effective rank 3.65, PC1+PC2 87%). InfoNCE keeps pushing every
+# in-batch candidate (other rows' positives, anchors and mined negatives, plus the row's own hard negative),
+# with candidates of the anchor's own style masked out of the denominator, not pushed (issue #1).
+# Same data as spread_a_1gpu (d-cfa298ce2f92: validation.matryoshka_dims is not in the data key), same
+# seed and budget, so `center` here reruns spread_a's center arm and anchors the comparison.
+#
+# m64 trains the prefix loss at 64 only (plus the full 256); validation.matryoshka_dims keeps every arm
+# scored at 32/64/128/256. Content-leak guard: whitening drives gap:origin_vs_para to -0.34 and
+# gap:same_speaker_topic_matched to 0; an InfoNCE win must keep both positive (center: 0.189 / 0.133).
+# Target: un-whitened heldout_top1 well above 0.108, toward 0.279; compare against whitened_top1.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/infonce_a_1gpu.yaml
+name: infonce_a_1gpu
+description: >
+  Screens in-batch InfoNCE (temperature 0.05, same-style candidates masked) against the triplet hinge on
+  the centered model, and Matryoshka training at [64] only. Judge by un-whitened held-out retrieval with
+  the origin_vs_para and same_speaker_topic_matched gaps still positive.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  # Read only under train.loss: infonce; common so each comparison isolates one key.
+  train.infonce_temperature: 0.05
+  validation.matryoshka_dims: [32, 64, 128]
+arms:
+  center: {}
+  center_infonce:
+    train.loss: infonce
+  center_infonce_m64:
+    train.loss: infonce
+    regularization.matryoshka_dims: [64]
+comparisons:
+  - {arm: center_infonce, against: center, isolates: infonce}
+  - {arm: center_infonce_m64, against: center, isolates: infonce with matryoshka at 64 only,
+     keys: [train.loss, regularization.matryoshka_dims]}
+  - {arm: center_infonce_m64, against: center_infonce, isolates: matryoshka at 64 only under infonce}
+headline: [heldout_top1_lift, whitened_top1, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para,
+           effective_rank, length_r2_speaker]

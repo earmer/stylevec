@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Callable
 
 import torch
 import torch.nn.functional as F
@@ -38,14 +39,80 @@ def weighted_triplet_margin_loss(
     return loss, stats
 
 
-def matryoshka_triplet_margin_loss(
+def info_nce_loss(
     anchor: torch.Tensor,
     positive: torch.Tensor,
     negative: torch.Tensor,
     margins: torch.Tensor,
     weights: torch.Tensor,
-    prefix_dims: list[int] | tuple[int, ...],
+    anchor_groups: torch.Tensor,
+    negative_groups: torch.Tensor,
+    temperature: float = 0.05,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """In-batch InfoNCE on cosine / temperature. Row i's candidates: every positive (its own is the target),
+    every other anchor, and every mined negative (its own always kept).
+
+    anchor_groups[j] is the style of anchor j and positive j, negative_groups[j] that of negative j. Another
+    row's candidate with anchor i's style is a false negative and is dropped from the denominator, not
+    pushed away. Distinct ids that never match (e.g. negative values per row) mean "unknown, keep".
+    Margins only feed the hinge-style `violations` diagnostic, so logs stay comparable with the triplet loss.
+    """
+    if anchor.shape != positive.shape or anchor.shape != negative.shape:
+        raise ValueError(
+            f"embedding shape mismatch: anchor={anchor.shape}, "
+            f"positive={positive.shape}, negative={negative.shape}"
+        )
+    batch = anchor.shape[0]
+    for name, values in (("margins", margins), ("weights", weights), ("anchor_groups", anchor_groups),
+                         ("negative_groups", negative_groups)):
+        if values.ndim != 1 or values.shape[0] != batch:
+            raise ValueError(f"{name} must be a 1D tensor of batch size {batch}, got {tuple(values.shape)}")
+    if float(temperature) <= 0.0:
+        raise ValueError(f"temperature must be positive, got {temperature}")
+
+    # float32 even under autocast: bf16 logits at temperature 0.05 lose most of the cosine resolution.
+    with torch.autocast(device_type=anchor.device.type, enabled=False):
+        a = F.normalize(anchor.float(), p=2, dim=-1, eps=1e-8)
+        p = F.normalize(positive.float(), p=2, dim=-1, eps=1e-8)
+        n = F.normalize(negative.float(), p=2, dim=-1, eps=1e-8)
+        sim_p, sim_a, sim_n = a @ p.T, a @ a.T, a @ n.T
+
+    eye = torch.eye(batch, dtype=torch.bool, device=anchor.device)
+    same_style = anchor_groups[:, None] == anchor_groups[None, :]
+    same_negative = anchor_groups[:, None] == negative_groups[None, :]
+    # Positives share their anchor's style, so one mask covers both the positive and the anchor block.
+    mask_style = same_style & ~eye
+    mask_n = same_negative & ~eye
+    blocked = torch.cat([mask_style, mask_style | eye, mask_n], dim=1)
+    logits = torch.cat([sim_p, sim_a, sim_n], dim=1) / float(temperature)
+    logits = logits.masked_fill(blocked, torch.finfo(logits.dtype).min)
+    targets = torch.arange(batch, device=anchor.device)
+    raw = F.cross_entropy(logits, targets, reduction="none")
+    loss = (raw * weights.float()).mean()
+
+    pos_cos = torch.diagonal(sim_p)
+    neg_cos = torch.diagonal(sim_n)
+    others = max(1, 3 * (batch - 1))
+    masked = (2 * mask_style.sum(dim=1) + mask_n.sum(dim=1)).float() / float(others)
+    stats = {
+        "pos_cos": pos_cos.detach(),
+        "neg_cos": neg_cos.detach(),
+        "violations": (((1.0 - pos_cos) - (1.0 - neg_cos) + margins.float()) > 0).float().detach(),
+        "raw_loss": raw.detach(),
+        "masked_fraction": masked.mean().detach(),
+        "accuracy": (logits.argmax(dim=1) == targets).float().mean().detach(),
+    }
+    return loss, stats
+
+
+def matryoshka_prefix_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    prefix_dims: list[int] | tuple[int, ...],
+    loss_fn: Callable[[torch.Tensor, torch.Tensor, torch.Tensor], tuple[torch.Tensor, dict[str, torch.Tensor]]],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """`loss_fn` on each prefix below the full dimension, every prefix re-normalised first; the mean."""
     if anchor.shape != positive.shape or anchor.shape != negative.shape:
         raise ValueError(
             f"embedding shape mismatch: anchor={anchor.shape}, "
@@ -63,13 +130,7 @@ def matryoshka_triplet_margin_loss(
         prefix_anchor = F.normalize(anchor[..., :dim], p=2, dim=-1, eps=1e-8)
         prefix_positive = F.normalize(positive[..., :dim], p=2, dim=-1, eps=1e-8)
         prefix_negative = F.normalize(negative[..., :dim], p=2, dim=-1, eps=1e-8)
-        dim_loss, dim_stats = weighted_triplet_margin_loss(
-            prefix_anchor,
-            prefix_positive,
-            prefix_negative,
-            margins,
-            weights,
-        )
+        dim_loss, dim_stats = loss_fn(prefix_anchor, prefix_positive, prefix_negative)
         losses.append(dim_loss)
         stats[f"loss_dim_{dim}"] = dim_loss.detach()
         stats[f"violation_dim_{dim}"] = dim_stats["violations"].mean().detach()
@@ -78,6 +139,23 @@ def matryoshka_triplet_margin_loss(
     loss = torch.stack(losses).mean()
     stats["loss"] = loss.detach()
     return loss, stats
+
+
+def matryoshka_triplet_margin_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    margins: torch.Tensor,
+    weights: torch.Tensor,
+    prefix_dims: list[int] | tuple[int, ...],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    return matryoshka_prefix_loss(
+        anchor,
+        positive,
+        negative,
+        prefix_dims,
+        lambda a, p, n: weighted_triplet_margin_loss(a, p, n, margins, weights),
+    )
 
 
 def scalar_stats(values: torch.Tensor, prefix: str) -> dict[str, float]:

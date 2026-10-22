@@ -15,7 +15,8 @@ from typing import Any
 from config import config_hash, workspace_dir
 from records import TripletRecord, stable_id, write_jsonl
 
-# Sections build_training_triplets reads. base_model is a path the builder never opens.
+# Sections build_training_triplets reads. base_model is a path the builder never opens, and
+# validation.matryoshka_dims a setting it never reads.
 DATA_SECTIONS = ("paths", "data", "weights", "margins", "validation")
 BUILDER_SOURCES = (
     "build_triplets.py",
@@ -36,6 +37,8 @@ def builder_fingerprint() -> str:
 def data_key(config: dict[str, Any]) -> str:
     sections = {name: config.get(name, {}) for name in DATA_SECTIONS}
     sections["paths"] = {k: v for k, v in sections["paths"].items() if k != "base_model"}
+    # Which prefixes validation reports changes no triplet, so it must not rename the dataset.
+    sections["validation"] = {k: v for k, v in sections["validation"].items() if k != "matryoshka_dims"}
     return stable_id(sections, builder_fingerprint(), size=24)
 
 
