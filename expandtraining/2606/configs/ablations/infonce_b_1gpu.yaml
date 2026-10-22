@@ -1,0 +1,52 @@
+# InfoNCE B: does adding the triplet hinge back to InfoNCE restore the content gaps it lost? One seed on one
+# 5090, ~70 min per run. infonce_a's center_infonce lifted held-out top-1 from 0.108 to 0.235 but drove
+# gap:origin_vs_para to -0.262 and gap:same_speaker_topic_matched to 0.017: a row's own paraphrase negative is
+# 1 of ~95 InfoNCE candidates, so nothing enforces its margin. The hinge on each row's own triplet does.
+# Same data, seed and budget as infonce_a_1gpu; its runs are the reference (compare across specs by hand).
+# Target: keep heldout_top1 near 0.235 with both gaps positive (center: 0.189 / 0.133).
+#
+# chead adds an 8-dim content head beside the 256-d style embedding (validation never reads it), trained by
+# InfoNCE on rows whose anchor and negative share content (origin_vs_para, paratarget_original_push: ~31% of
+# rows), with same-speaker positives as its negatives. content_leak_weight pushes the style embedding away from
+# linear correlation with the (detached) content head; independent noise sits near 256 / 96 = 2.7.
+# A head alone would only add dims: the leak penalty is what pulls content out of the style vector.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/infonce_b_1gpu.yaml
+name: infonce_b_1gpu
+description: >
+  InfoNCE (temperature 0.05, same-style masked) plus the per-row triplet hinge at weight 1.0, on the centered
+  model, then the same with an 8-dim content head and a style/content leak penalty. Judge by held-out retrieval
+  against center_infonce with origin_vs_para and topic_matched gaps positive.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - model.content_dim
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 1.0
+  validation.matryoshka_dims: [32, 64, 128]
+arms:
+  center_infonce_hinge: {}
+  center_infonce_hinge_chead:
+    model.content_dim: 8
+    regularization.content_weight: 0.5
+    regularization.content_temperature: 0.1
+    regularization.content_leak_weight: 0.05
+comparisons:
+  - {arm: center_infonce_hinge_chead, against: center_infonce_hinge, isolates: content head with leak penalty,
+     keys: [model.content_dim, regularization.content_weight, regularization.content_temperature,
+            regularization.content_leak_weight]}
+headline: [heldout_top1_lift, whitened_top1, provenance_acc, gap:same_speaker_topic_matched, gap:origin_vs_para,
+           effective_rank, length_r2_speaker]

@@ -22,6 +22,7 @@ class EncoderSettings:
     lora_targets: tuple[str, ...]
     center: str = "none"
     center_momentum: float = 0.01
+    content_dim: int = 0
 
 
 class MeanPool(nn.Module):
@@ -114,6 +115,11 @@ class QwenStyleEncoder(nn.Module):
             raise ValueError(f"model.center must be one of {CENTER_MODES}, got {settings.center!r}")
         self.center = RunningCenter(projection_in, settings.center_momentum) if settings.center == "running" else None
         self.projection = nn.Linear(projection_in, settings.projection_dim)
+        if settings.content_dim < 0:
+            raise ValueError(f"model.content_dim must be non-negative, got {settings.content_dim}")
+        # A small separate head trained to hold content (issue #1): the style embedding stays projection_dim
+        # wide, and validation, retrieval and export never read this head.
+        self.content_head = nn.Linear(projection_in, settings.content_dim) if settings.content_dim > 0 else None
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
         need_hidden = self.settings.layer_mode != "last"
@@ -128,10 +134,14 @@ class QwenStyleEncoder(nn.Module):
         pooled = pooled.to(dtype=self.projection.weight.dtype)
         if self.center is not None:
             pooled = self.center(pooled)
-        projected = self.projection(self.dropout(pooled))
+        pooled = self.dropout(pooled)
+        projected = self.projection(pooled)
         pre_norm = projected.norm(dim=-1)
         embeddings = F.normalize(projected, p=2, dim=-1, eps=1e-8)
-        return {"embeddings": embeddings, "pre_norm": pre_norm}
+        output = {"embeddings": embeddings, "pre_norm": pre_norm}
+        if self.content_head is not None:
+            output["content"] = F.normalize(self.content_head(pooled), p=2, dim=-1, eps=1e-8)
+        return output
 
 
 def build_encoder_settings(config: dict[str, Any]) -> EncoderSettings:
@@ -151,6 +161,7 @@ def build_encoder_settings(config: dict[str, Any]) -> EncoderSettings:
         lora_targets=tuple(str(value) for value in lora_cfg.get("targets", ["q_proj", "k_proj", "v_proj", "o_proj"])),
         center=str(model_cfg.get("center", "none")),
         center_momentum=float(model_cfg.get("center_momentum", 0.01)),
+        content_dim=int(model_cfg.get("content_dim", 0)),
     )
 
 
@@ -201,19 +212,29 @@ def encode_triplet(
     batch: dict[str, Any],
     combine_forward: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    outputs = encode_triplet_outputs(model, batch, combine_forward)
+    anchor, positive, negative = outputs["embeddings"]
+    return anchor, positive, negative, outputs["pre_norm"]
+
+
+def encode_triplet_outputs(
+    model: QwenStyleEncoder,
+    batch: dict[str, Any],
+    combine_forward: bool = False,
+) -> dict[str, Any]:
+    """Each output key as an (anchor, positive, negative) tuple, except pre_norm, which is concatenated."""
     if combine_forward:
         return encode_triplet_combined(model, batch)
-    anchor = model(**batch["anchor"])
-    positive = model(**batch["positive"])
-    negative = model(**batch["negative"])
-    pre_norms = torch.cat([anchor["pre_norm"], positive["pre_norm"], negative["pre_norm"]])
-    return anchor["embeddings"], positive["embeddings"], negative["embeddings"], pre_norms
+    roles = [model(**batch[role]) for role in ("anchor", "positive", "negative")]
+    outputs: dict[str, Any] = {key: tuple(role[key] for role in roles) for key in roles[0] if key != "pre_norm"}
+    outputs["pre_norm"] = torch.cat([role["pre_norm"] for role in roles])
+    return outputs
 
 
 def encode_triplet_combined(
     model: QwenStyleEncoder,
     batch: dict[str, Any],
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+) -> dict[str, Any]:
     anchor_batch = batch["anchor"]
     positive_batch = batch["positive"]
     negative_batch = batch["negative"]
@@ -240,9 +261,9 @@ def encode_triplet_combined(
     )
     output = model(input_ids=input_ids, attention_mask=attention_mask)
     batch_size = anchor_batch["input_ids"].shape[0]
-    anchor, positive, negative = output["embeddings"].split(batch_size, dim=0)
-    pre_norms = output["pre_norm"]
-    return anchor, positive, negative, pre_norms
+    outputs: dict[str, Any] = {key: tuple(value.split(batch_size, dim=0)) for key, value in output.items() if key != "pre_norm"}
+    outputs["pre_norm"] = output["pre_norm"]
+    return outputs
 
 
 def _pad_tokens(values: torch.Tensor, length: int, pad_value: int) -> torch.Tensor:

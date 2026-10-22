@@ -28,6 +28,8 @@ from config import (
 from dataset import TripletTextDataset, make_triplet_collate
 from curriculum import curriculum_order, schedule_summary
 from losses import (
+    content_pair_loss,
+    cross_correlation_penalty,
     embedding_spread_loss,
     info_nce_loss,
     matryoshka_prefix_loss,
@@ -36,7 +38,7 @@ from losses import (
 )
 from model import (
     build_qwen_style_encoder,
-    encode_triplet,
+    encode_triplet_outputs,
     load_trainable_state_dict,
     parameter_summary,
     trainable_state_dict,
@@ -303,7 +305,7 @@ def dataloader_worker_kwargs(section: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
-HEAD_MODULES = ("projection.", "fusion.")
+HEAD_MODULES = ("projection.", "fusion.", "content_head.")
 
 
 def optimizer_parameter_groups(model: torch.nn.Module, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -442,6 +444,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     matryoshka_weight = float(regularization.get("matryoshka_weight", 0.0))
     matryoshka_dims = configured_matryoshka_dims(config)
     objective = objective_settings_from_config(config)
+    content_settings = content_settings_from_config(config)
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
     log_every_steps = max(1, int(config.get("logging", {}).get("train_every_steps", 1)))
@@ -459,7 +462,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             batch = move_batch_to_device(batch, device, non_blocking=non_blocking)
             if use_accelerate:
                 with accelerator.accumulate(model):
-                    anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
+                    outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward)
+                    anchor, positive, negative = outputs["embeddings"]
+                    norms = outputs["pre_norm"]
                     groups = style_group_ids(batch, anchor.device) if objective["loss"] == "infonce" else None
                     loss, stats = objective_loss(anchor, positive, negative, batch, objective, groups)
                     matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
@@ -473,7 +478,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
-                    loss = loss + spread_loss + matryoshka_loss
+                    content_loss, content_stats = content_step_loss(outputs, batch, content_settings)
+                    loss = loss + spread_loss + matryoshka_loss + content_loss
                     if grad_accum > 1:
                         window_size = accumulation_window(batch_index, total_batches, grad_accum)
                         loss = loss * (float(grad_accum) / float(window_size))
@@ -509,6 +515,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                                 stats,
                                 spread_stats,
                                 matryoshka_stats,
+                                content_stats,
                                 norms,
                                 optimizer,
                                 grad_norm,
@@ -517,7 +524,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                             )
             else:
                 with autocast_context(device, precision):
-                    anchor, positive, negative, norms = encode_triplet(model, batch, combine_forward=combine_forward)
+                    outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward)
+                    anchor, positive, negative = outputs["embeddings"]
+                    norms = outputs["pre_norm"]
                     groups = style_group_ids(batch, anchor.device) if objective["loss"] == "infonce" else None
                     loss, stats = objective_loss(anchor, positive, negative, batch, objective, groups)
                     matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
@@ -531,7 +540,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
-                    loss = loss + spread_loss + matryoshka_loss
+                    content_loss, content_stats = content_step_loss(outputs, batch, content_settings)
+                    loss = loss + spread_loss + matryoshka_loss + content_loss
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
                     scaled_loss = loss / float(window_size)
                 scaled_loss.backward()
@@ -563,6 +573,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                             stats,
                             spread_stats,
                             matryoshka_stats,
+                            content_stats,
                             norms,
                             optimizer,
                             grad_norm,
@@ -769,12 +780,64 @@ def matryoshka_step_loss(
     return weighted, stats
 
 
+# Rules whose anchor and negative share content: a line and its paraphrase, or a rewrite and its source.
+CONTENT_PAIR_RULES = frozenset({"origin_vs_para", "paratarget_original_push", "same_content_diff_style"})
+
+
+def content_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
+    """model.content_dim > 0 adds the content head. regularization.content_weight trains it on content pairs;
+    content_leak_weight pushes the style embedding away from linear correlation with it."""
+    regularization = config.get("regularization", {})
+    return {
+        "enabled": int(config["model"].get("content_dim", 0)) > 0,
+        "weight": float(regularization.get("content_weight", 0.5)),
+        "temperature": float(regularization.get("content_temperature", 0.1)),
+        "leak_weight": float(regularization.get("content_leak_weight", 0.0)),
+    }
+
+
+def content_duplicates(batch: dict[str, Any], device: torch.device) -> torch.Tensor:
+    """[batch, 3 * batch]: candidate text j (negatives, positives, anchors) equals row i's anchor or negative."""
+    candidates = list(batch["negative_text"]) + list(batch["positive_text"]) + list(batch["anchor_text"])
+    rows = [
+        [text in (anchor_text, negative_text) for text in candidates]
+        for anchor_text, negative_text in zip(batch["anchor_text"], batch["negative_text"])
+    ]
+    return torch.tensor(rows, dtype=torch.bool, device=device)
+
+
+def content_step_loss(
+    outputs: dict[str, Any],
+    batch: dict[str, Any],
+    settings: dict[str, Any],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Content-head InfoNCE on CONTENT_PAIR_RULES rows, plus the style/content leakage penalty."""
+    if not settings["enabled"]:
+        return outputs["embeddings"][0].new_tensor(0.0), {}
+    anchor, positive, negative = outputs["content"]
+    device = anchor.device
+    is_pair = torch.tensor([rule in CONTENT_PAIR_RULES for rule in batch["rule"]], dtype=torch.bool, device=device)
+    loss, stats = content_pair_loss(
+        anchor, positive, negative, is_pair, content_duplicates(batch, device), settings["temperature"]
+    )
+    style = torch.cat(outputs["embeddings"], dim=0)
+    leak = cross_correlation_penalty(style, torch.cat([anchor, positive, negative], dim=0).detach())
+    stats["pair_loss"] = loss.detach()
+    stats["leak"] = leak.detach()
+    stats["leak_noise_floor"] = style.new_tensor(style.shape[1] / style.shape[0]).detach()
+    total = loss * settings["weight"]
+    if settings["leak_weight"] > 0.0:
+        total = total + leak * settings["leak_weight"]
+    return total, stats
+
+
 def log_train_step(
     writer: SummaryWriter,
     loss: torch.Tensor,
     stats: dict[str, torch.Tensor],
     spread_stats: dict[str, torch.Tensor],
     matryoshka_stats: dict[str, torch.Tensor],
+    content_stats: dict[str, torch.Tensor],
     norms: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     grad_norm: torch.Tensor | float,
@@ -797,6 +860,8 @@ def log_train_step(
             writer.add_scalar(f"infonce/{key}", float(stats[key].float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():
         writer.add_scalar(f"matryoshka/{key}", float(value.float().cpu().item()), global_step)
+    for key, value in content_stats.items():
+        writer.add_scalar(f"content/{key}", float(value.float().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_mean", float(norms.detach().float().mean().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_std", float(norms.detach().float().std(unbiased=False).cpu().item()), global_step)
     writer.add_scalar("optim/lr", float(optimizer.param_groups[0]["lr"]), global_step)

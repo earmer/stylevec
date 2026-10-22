@@ -19,11 +19,13 @@ instance_status() {
 # Start an instance, retrying every START_RETRY_SECONDS (default 15) for as long as it takes: a Pro box
 # with no free GPU on its host refuses to start until one frees up. Errors that waiting cannot fix (bad
 # token, unknown instance) stop it. Billing begins when a start succeeds.
+# Every start sends a no-op start command: AutoDL keeps the last one it was given and runs it on every later
+# boot, so one `autodl start --ttl 1h` (even a refused one) would power off every later run after an hour.
 start_with_retry() {
   local id="$1" interval="${START_RETRY_SECONDS:-15}" tries=0 out
   while true; do
     tries=$((tries + 1))
-    if out="$(autodl_cli start "$id" --wait 2>&1)"; then
+    if out="$(autodl_cli start "$id" --wait --start-command true 2>&1)"; then
       echo "== $id started (try $tries; billing until it is stopped)"
       return 0
     fi
@@ -56,4 +58,21 @@ wait_for_ssh() {
   done
   echo "ssh to $HOST:$SSH_PORT did not come up" >&2
   return 1
+}
+
+# Kill any timed shutdown left on the box: the CLI's --ttl timer (pid in /tmp/.autodl-cli-ttl.pid) or a
+# `sleep N && shutdown -h now` from an old start command. The queue's own shutdown at the end is not one.
+disarm_shutdown_timers() {
+  # The pattern is split so this command's own shell (and its subshells) never match it.
+  ssh -o BatchMode=yes -p "$SSH_PORT" "$HOST" '
+    pat="shutdown"" -h now"; found=0
+    for pid in $(pgrep -f "$pat" || true); do
+      args="$(tr "\0" " " < /proc/$pid/cmdline 2>/dev/null)" || continue
+      [ -n "$args" ] || continue
+      echo "   killing timed shutdown (pid $pid): $args"
+      pkill -P "$pid" sleep 2>/dev/null; kill "$pid" 2>/dev/null; found=1
+    done
+    rm -f /tmp/.autodl-cli-ttl.pid
+    [ "$found" = 1 ] || echo "   no timed shutdown found"
+  '
 }

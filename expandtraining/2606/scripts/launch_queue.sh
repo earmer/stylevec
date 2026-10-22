@@ -51,6 +51,8 @@ if [[ "$(instance_status "$INSTANCE")" != running ]]; then
 fi
 resolve_ssh "$INSTANCE"
 wait_for_ssh
+echo "== timed shutdowns"
+disarm_shutdown_timers
 
 # Waiting for stock can take long; if the code changed meanwhile, Stage 0b on the box would refuse it.
 if [[ "${SKIP_PREFLIGHT:-0}" != 1 ]] && ! uv run python - "$NAME" <<'PY'

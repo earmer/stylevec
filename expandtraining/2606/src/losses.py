@@ -105,6 +105,69 @@ def info_nce_loss(
     return loss, stats
 
 
+def content_pair_loss(
+    anchor: torch.Tensor,
+    positive: torch.Tensor,
+    negative: torch.Tensor,
+    is_pair: torch.Tensor,
+    duplicate: torch.Tensor,
+    temperature: float = 0.1,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """InfoNCE on the content head, for rows whose anchor and negative share content (a line and its
+    paraphrase). Row i's target is its own negative; its candidates are every negative, every positive and
+    every other anchor. Positives are the same speaker with different content, so the head is pushed to
+    ignore speaker. duplicate[i, j] marks candidate text j (in [negatives, positives, anchors] order) as
+    identical to row i's anchor or negative text; those are dropped from the denominator, not pushed.
+    Rows with is_pair False are not queries but stay candidates. Returns 0 when the batch has no pair.
+    """
+    batch = anchor.shape[0]
+    if is_pair.shape != (batch,) or duplicate.shape != (batch, 3 * batch):
+        raise ValueError(f"is_pair must be ({batch},) and duplicate ({batch}, {3 * batch}), "
+                         f"got {tuple(is_pair.shape)} and {tuple(duplicate.shape)}")
+    if float(temperature) <= 0.0:
+        raise ValueError(f"temperature must be positive, got {temperature}")
+    with torch.autocast(device_type=anchor.device.type, enabled=False):
+        a, p, n = (F.normalize(x.float(), p=2, dim=-1, eps=1e-8) for x in (anchor, positive, negative))
+        sims = torch.cat([a @ n.T, a @ p.T, a @ a.T], dim=1)
+    eye = torch.eye(batch, dtype=torch.bool, device=anchor.device)
+    no_eye = torch.zeros_like(eye)
+    # Keep the target (own negative) and drop the anchor itself.
+    blocked = (duplicate & ~torch.cat([eye, no_eye, no_eye], dim=1)) | torch.cat([no_eye, no_eye, eye], dim=1)
+    logits = (sims / float(temperature)).masked_fill(blocked, torch.finfo(sims.dtype).min)
+    targets = torch.arange(batch, device=anchor.device)
+    raw = F.cross_entropy(logits, targets, reduction="none")
+    pairs = is_pair.bool()
+    count = pairs.sum()
+    if int(count) == 0:
+        # Still tied to the graph, so every rank sees the head's parameters used.
+        return (sims * 0.0).sum(), {"pairs": count.float().detach()}
+    loss = raw[pairs].mean()
+    stats = {
+        "pairs": count.float().detach(),
+        "accuracy": (logits.argmax(dim=1) == targets)[pairs].float().mean().detach(),
+        "pair_cos": torch.diagonal(sims[:, :batch])[pairs].mean().detach(),
+        # Same speaker, different content: should fall well below pair_cos.
+        "speaker_cos": torch.diagonal(sims[:, batch:2 * batch])[pairs].mean().detach(),
+    }
+    return loss, stats
+
+
+def cross_correlation_penalty(style: torch.Tensor, content: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    """How linearly visible each content dimension is in the style embedding: per content dimension, the
+    sum over style dimensions of their squared batch correlation, averaged over content dimensions. With
+    whitened style dimensions this is the R^2 of a linear readout; independent noise gives about
+    style_dim / batch. The caller detaches content so only the style side is pushed away."""
+    if style.ndim != 2 or content.ndim != 2 or style.shape[0] != content.shape[0]:
+        raise ValueError(f"style and content must be [batch, dim] with one batch, got {style.shape}, {content.shape}")
+    with torch.autocast(device_type=style.device.type, enabled=False):
+        s = style.float() - style.float().mean(dim=0, keepdim=True)
+        c = content.float() - content.float().mean(dim=0, keepdim=True)
+        s = s / (s.pow(2).mean(dim=0, keepdim=True).sqrt() + eps)
+        c = c / (c.pow(2).mean(dim=0, keepdim=True).sqrt() + eps)
+        correlation = s.T @ c / float(style.shape[0])
+    return correlation.pow(2).sum(dim=0).mean()
+
+
 def matryoshka_prefix_loss(
     anchor: torch.Tensor,
     positive: torch.Tensor,
