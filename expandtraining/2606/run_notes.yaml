@@ -1,0 +1,52 @@
+# One concise note per run: what it tests, its result, its status. It becomes the SwanLab description
+# (set at init; push edits with scripts/swanlab_notes.py). Preflight refuses a spec whose runs have no note.
+# Add the note before launching; update it when the run ends, is stopped or is superseded.
+
+curriculum_a_1gpu__uniform__s42: >
+  Round A (old 64-line base), exposure baseline: every rule equally likely. Held-out top-1 lift +0.052; gaps
+  topic_matched 0.178, origin_vs_para 0.165. Done; trained head lost to --prune.
+curriculum_a_1gpu__mixed__s42: >
+  Round A: staged's time-averaged tier mix, no order. Lift +0.067; origin_vs_para gap fell to 0.053. Done; head pruned.
+curriculum_a_1gpu__staged__s42: >
+  Round A: easy-to-hard staged curriculum. Best lift +0.086 but weakest same-speaker gaps (0.126 / 0.135), which
+  moved the base to 256 lines per speaker and a 150k cap. Done; head pruned.
+
+curriculum_a2_1gpu__uniform__s42: &a2_uniform >
+  Round A2 (256-line base, 2 seeds): uniform rule mix. Lift +0.059; origin_vs_para gap 0.087, the best of the
+  three; topic_matched 0.148. Done.
+curriculum_a2_1gpu__uniform__s43: *a2_uniform
+curriculum_a2_1gpu__mixed__s42: &a2_mixed >
+  Round A2: mixed. Lift +0.061, within noise of uniform; origin_vs_para gap 0.009 (worse). Done.
+curriculum_a2_1gpu__mixed__s43: *a2_mixed
+curriculum_a2_1gpu__staged__s42: &a2_staged >
+  Round A2: staged. Lift +0.052, worse than mixed on 2 seeds; every arm peaks at step 1050 and then slips. Done.
+curriculum_a2_1gpu__staged__s43: *a2_staged
+
+spread_a_1gpu__control__s42: >
+  Spread A (audited data d-cfa298ce2f92, staged): no change. Never left a narrow cone (train cos 0.85-0.96);
+  top-1 0.095, effective rank 5.6. Done.
+spread_a_1gpu__decorr__s42: >
+  Spread A: correlation decorrelation, weight 0.02. Escaped the cone until step ~950, then blew up; stopped at
+  ~1800, not validated.
+spread_a_1gpu__center__s42: >
+  Spread A: running-mean centering before the projection. top-1 0.108, gaps topic_matched 0.133 / origin_vs_para
+  0.189, effective rank 3.7, length_r2 0.77. Kept as the base. Done.
+spread_a_1gpu__center_decorr__s42: >
+  Spread A: center + decorr. top-1 0.100, no rank gain, origin_vs_para gap down to 0.071. Decorr dropped. Done.
+
+infonce_a_1gpu__center__s42: >
+  InfoNCE A: rerun of spread_a's center as the reference. Stopped on purpose; spread_a_1gpu__center__s42 stands in.
+infonce_a_1gpu__center_infonce__s42: >
+  InfoNCE A: in-batch InfoNCE (T 0.05, same-style masked). top-1 0.108 -> 0.235 (cross-scene 0.231, paired +0.124,
+  better), effective rank 33. But content leaks: origin_vs_para gap -0.262, topic_matched 0.017, provenance 0.741. Done.
+infonce_a_1gpu__center_infonce_m64__s42: >
+  InfoNCE A: InfoNCE + Matryoshka at [64] only. Same as center_infonce at steps 1050/2100 (macro top-1 0.249 vs
+  0.243, same content leak). Stopped at ~step 2100 of 3000; no final validation.
+
+infonce_b_1gpu__center_infonce_hinge__s42: >
+  InfoNCE B: InfoNCE + the per-row triplet hinge at weight 10, to bring the content gaps back. Steps 0-405 of this
+  experiment are a stopped weight-1 run (hinge ~4% of the loss, tracked center_infonce exactly); the weight-10
+  run restarted from step 0 at 23:09 on 2026-10-22 and logs into the same experiment. Running.
+infonce_b_1gpu__center_infonce_hinge_chead__s42: >
+  InfoNCE B: hinge run + an 8-dim content head (InfoNCE on line/paraphrase pairs, same-speaker lines as
+  negatives) and a style/content leak penalty at 0.05. Queued after the hinge run.

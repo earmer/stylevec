@@ -5,20 +5,27 @@ comes from `swanlab login` on the box or SWANLAB_API_KEY, never from a config. T
 run: if online init fails (no login, no network) it falls back to offline logs under the run directory,
 which `swanlab sync <dir>` uploads later.
 
-One SwanLab experiment per run name, with a stable id, so a resumed run and its later validation land in
-the same experiment. Ablation runs (`<spec>__<arm>__s<seed>`) are grouped by spec and tagged arm/seed.
+One SwanLab experiment per run directory: its id is kept in `<run_dir>/swanlab_id`, so a resumed run and its
+later validation land in the same experiment, while a fresh run under a reused name (the old directory moved
+aside) gets a new one instead of appending to the old curves. Ablation runs (`<spec>__<arm>__s<seed>`) are grouped by spec and tagged arm/seed.
 """
 
 from __future__ import annotations
 
 import os
 import re
+import uuid
 import warnings
 from pathlib import Path
 from typing import Any
 
+import yaml
+
+from config import workspace_dir
 from records import stable_id
 
+ID_FILE = "swanlab_id"
+NOTES_FILE = "run_notes.yaml"
 RUN_RE = re.compile(r"^(?P<spec>.+)__(?P<arm>.+)__s(?P<seed>\d+)$")
 
 
@@ -28,6 +35,29 @@ def settings(config: dict[str, Any]) -> dict[str, Any] | None:
     if not section.get("enabled", False) or mode == "disabled" or config["runtime"].get("mode") == "dryrun":
         return None
     return {"project": section.get("project", "stylevec-2606"), "mode": mode}
+
+
+def load_notes(path: Path | None = None) -> dict[str, str]:
+    """{run name: note}. A missing file is no notes."""
+    path = workspace_dir() / NOTES_FILE if path is None else path
+    if not path.is_file():
+        return {}
+    notes = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return {str(name): " ".join(str(note).split()) for name, note in notes.items()}
+
+
+def experiment_id(run_name: str, run_dir: Path) -> str:
+    path = run_dir / ID_FILE
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip()
+    # Runs started before the id file used the name's stable id; keep them in their experiment.
+    if (run_dir / "swanlog").is_dir():
+        ident = stable_id("swanlab", run_name, size=21)
+    else:
+        ident = uuid.uuid4().hex[:21]
+    run_dir.mkdir(parents=True, exist_ok=True)
+    path.write_text(ident + "\n", encoding="utf-8")
+    return ident
 
 
 def start(config: dict[str, Any], run_name: str, run_dir: Path, job_type: str) -> Any | None:
@@ -44,9 +74,10 @@ def start(config: dict[str, Any], run_name: str, run_dir: Path, job_type: str) -
     kwargs = {
         "project": chosen["project"],
         "name": run_name,
-        "id": stable_id("swanlab", run_name, size=21),
+        "id": experiment_id(run_name, run_dir),
         "resume": "allow",
         "job_type": job_type,
+        "description": load_notes().get(run_name),
         "log_dir": str(run_dir / "swanlog"),
         "config": {k: v for k, v in config.items() if not k.startswith("_")},
     }

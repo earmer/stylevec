@@ -52,6 +52,28 @@ def test_ablation_runs_are_grouped_and_ids_are_stable(monkeypatch: pytest.Monkey
     assert "_config_path" not in first["config"]
 
 
+def test_fresh_run_dir_under_a_reused_name_gets_a_new_experiment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeSwanlab()
+    monkeypatch.setitem(sys.modules, "swanlab", fake)
+    monkeypatch.delenv("SWANLAB_MODE", raising=False)
+    name = "infonce_b__hinge__s42"
+    tracking.start(config(enabled=True), name, tmp_path / "old", "train")
+    (tmp_path / "old").rename(tmp_path / "old.stopped")
+    tracking.start(config(enabled=True), name, tmp_path / "old", "train")
+    tracking.start(config(enabled=True), name, tmp_path / "old", "validate")
+    first, fresh, validate = (init["id"] for init in fake.inits)
+    assert fresh != first and validate == fresh
+
+
+def test_run_dir_from_before_the_id_file_keeps_its_stable_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    fake = FakeSwanlab()
+    monkeypatch.setitem(sys.modules, "swanlab", fake)
+    monkeypatch.delenv("SWANLAB_MODE", raising=False)
+    (tmp_path / "swanlog").mkdir()
+    tracking.start(config(enabled=True), "legacy__arm__s42", tmp_path, "validate")
+    assert fake.inits[0]["id"] == tracking.stable_id("swanlab", "legacy__arm__s42", size=21)
+
+
 def test_online_failure_falls_back_to_offline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = FakeSwanlab(fail_modes={"online"})
     monkeypatch.setitem(sys.modules, "swanlab", fake)

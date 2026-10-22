@@ -1,7 +1,7 @@
 """Stage 0: checks that fail in seconds instead of hours into a queue.
 
 0a `local_checks` runs on the Mac before sync: the spec plans with real paths, every dataset it needs
-is built with a matching data key, the tests pass, and the code fingerprint is recorded next to the
+is built with a matching data key, every run has a note in run_notes.yaml, the tests pass, and the code fingerprint is recorded next to the
 generated configs (which sync carries to the instance).
 0b `instance_checks` runs once on the instance before the queue: same code as 0a recorded, GPUs and
 bf16 match the spec's world size, environment, base model, datasets and disk headroom.
@@ -21,6 +21,7 @@ from typing import Any
 
 from config import load_config, repo_root, resolve_repo_path, workspace_dir
 from prebuilt import data_key, dataset_dir, read_manifest
+from tracking import NOTES_FILE, load_notes
 
 # Mirrors the code rsync in scripts/sync_to_remote.sh: what it skips is not part of the fingerprint.
 SKIP_DIRS = {"outputs", "tf-logs", "__pycache__", ".venv", ".pytest_cache", ".ruff_cache", ".rsync-partial"}
@@ -74,6 +75,10 @@ def local_checks(result: dict[str, Any], generated: Path, run_tests: bool = True
         if not entry["built"]:
             problems.append(f"dataset {name} not built; run: uv run python expandtraining/2606/scripts/"
                             f"build_dataset.py --config {entry['config']}")
+    notes = load_notes()
+    missing = [run["run"] for run in result["runs"] if not notes.get(run["run"])]
+    if missing:
+        problems.append(f"no note in {NOTES_FILE} for: {', '.join(missing)} (what it tests; add the result when it ends)")
     if run_tests:
         tests = subprocess.run(["uv", "run", "pytest", "-q", str(workspace_dir() / "tests")],
                                cwd=repo_root(), capture_output=True, text=True)

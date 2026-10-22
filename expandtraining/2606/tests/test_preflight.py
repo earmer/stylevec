@@ -82,3 +82,18 @@ def test_queue_states(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_queue.prune("r")
     assert not (latest / "training_state.pt").exists()
     assert (latest / "weights.pt").exists()
+
+
+def test_local_checks_refuse_runs_without_a_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(preflight, "load_notes", lambda: {"spec__a__s42": "tests a"})
+    result = {"name": "spec", "world_size": 1, "datasets": {},
+              "runs": [{"run": "spec__a__s42"}, {"run": "spec__b__s42"}]}
+    problems = preflight.local_checks(result, tmp_path, run_tests=False)
+    assert len(problems) == 1 and "spec__b__s42" in problems[0] and "spec__a__s42" not in problems[0]
+
+
+def test_every_note_is_one_line_of_text() -> None:
+    from tracking import load_notes
+
+    notes = load_notes()
+    assert notes and all(isinstance(note, str) and note and "\n" not in note for note in notes.values())
