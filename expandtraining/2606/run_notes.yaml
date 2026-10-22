@@ -46,7 +46,12 @@ infonce_a_1gpu__center_infonce_m64__s42: >
 infonce_b_1gpu__center_infonce_hinge__s42: >
   InfoNCE B: InfoNCE + the per-row triplet hinge at weight 10, to bring the content gaps back. Steps 0-405 of this
   experiment are a stopped weight-1 run (hinge ~4% of the loss, tracked center_infonce exactly); the weight-10
-  run restarted from step 0 at 23:09 on 2026-10-22 and logs into the same experiment. Running.
+  run restarted from step 0 at 23:09 on 2026-10-22 and logs into the same experiment. Macro top-1 / origin_vs_para
+  gap: step 1050 0.196 / +0.029, step 2100 0.187 / +0.003, final 0.176 / -0.134 (center_infonce final ~0.235 /
+  -0.262). Halves the leak but does not stop it; step 2100 is the best balance. Done.
 infonce_b_1gpu__center_infonce_hinge_chead__s42: >
   InfoNCE B: hinge run + an 8-dim content head (InfoNCE on line/paraphrase pairs, same-speaker lines as
-  negatives) and a style/content leak penalty at 0.05. Queued after the hinge run.
+  negatives) and a style/content leak penalty at 0.05. Final macro top-1 0.194 (hinge 0.176, within noise over 20
+  speakers), whitened 0.353, rank 18.8; origin_vs_para gap -0.178 (hinge -0.134), topic_matched 0.069. Head
+  learns content (pair acc ~0.95, pair cos 0.94 vs speaker 0.12) and leak sits near its floor (3.2 vs 2.7), yet
+  the style side still drifts to content late. Done.
