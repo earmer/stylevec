@@ -3,6 +3,8 @@
 # gap:origin_vs_para to -0.262 and gap:same_speaker_topic_matched to 0.017: a row's own paraphrase negative is
 # 1 of ~95 InfoNCE candidates, so nothing enforces its margin. The hinge on each row's own triplet does.
 # Same data, seed and budget as infonce_a_1gpu; its runs are the reference (compare across specs by hand).
+# Weight 10, not 1: at 1.0 the hinge was ~4% of the loss (0.06 against InfoNCE's 1.4, whose gradient is scaled
+# by 1/T = 20) and the run tracked center_infonce exactly to step 400 (origin_vs_para violations 1.00); stopped.
 # Target: keep heldout_top1 near 0.235 with both gaps positive (center: 0.189 / 0.133).
 #
 # chead adds an 8-dim content head beside the 256-d style embedding (validation never reads it), trained by
@@ -13,7 +15,7 @@
 # uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/infonce_b_1gpu.yaml
 name: infonce_b_1gpu
 description: >
-  InfoNCE (temperature 0.05, same-style masked) plus the per-row triplet hinge at weight 1.0, on the centered
+  InfoNCE (temperature 0.05, same-style masked) plus the per-row triplet hinge at weight 10, on the centered
   model, then the same with an 8-dim content head and a style/content leak penalty. Judge by held-out retrieval
   against center_infonce with origin_vs_para and topic_matched gaps positive.
 base: configs/remote_5090x2.yaml
@@ -35,7 +37,7 @@ common:
   model.center: running
   train.loss: infonce
   train.infonce_temperature: 0.05
-  train.infonce_triplet_weight: 1.0
+  train.infonce_triplet_weight: 10.0
   validation.matryoshka_dims: [32, 64, 128]
 arms:
   center_infonce_hinge: {}
