@@ -31,7 +31,8 @@ def main() -> None:
 
     api = Api(api_key=os.environ["SWANLAB_API_KEY"])
     client = api._ctx.client  # no public setter for descriptions or state
-    experiments = {e.name: e for e in api.runs(PROJECT)}
+    # A rerun of a crashed run shares its name; the note belongs to the newest.
+    experiments = {e.name: e for e in sorted(api.runs(PROJECT), key=lambda e: e.created_at_ts)}
     notes = load_notes()
     for name, note in notes.items():
         experiment = experiments.get(name)
