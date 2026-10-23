@@ -63,9 +63,18 @@ infonce_c_1gpu__lc_clean__s42: >
   lines 0.660 -> 0.652 (unchanged), top-1 0.196 -> 0.187 (noise), rank 12.3 -> 10.0. Done.
 infonce_c_1gpu__twin__s42: >
   InfoNCE C (stops at 1050): hinge recipe + every row's content twin (paraphrase / rewrite source) as an extra
-  InfoNCE candidate at T 0.03. Tests whether full twin coverage holds the origin_vs_para ordering. Queued.
+  InfoNCE candidate at T 0.03. Tests whether full twin coverage holds the origin_vs_para ordering. First
+  attempt ran out of GPU memory at step ~30 (SwanLab CRASHED); rerun with gradient checkpointing. Step 1050 vs
+  hinge: centered origin_vs_para gap -0.085 -> +0.103, paraphrase beats own lines 0.660 -> 0.489 (chance), but
+  top-1 0.196 -> 0.120, whitened 0.284 -> 0.202, rank 12.3 -> 8.8; train InfoNCE loss 2.6 (hinge ~1.1), grad
+  norm ~20. Leak gone, retrieval paid for it: T 0.03 too hard. Done.
 infonce_c_1gpu__twin_lc_clean__s42: >
-  InfoNCE C (stops at 1050): twin + lc_clean together. Queued.
+  InfoNCE C (stops at 1050): twin + lc_clean together. First attempt ran out of GPU memory (CRASHED); rerun
+  with gradient checkpointing. Step 1050: centered origin_vs_para gap +0.189, paraphrase beats own 0.470, but
+  top-1 0.127, whitened 0.138, rank 4.1, top component 0.57, grad norm ~41: collapsing. Done.
 infonce_c_1gpu__nce_stage1__s42: >
   InfoNCE C (stops at 2100; compare with infonce_b hinge's step 2100): InfoNCE + hinge for stage 1 (steps
-  0-1050), then the plain hinge. Tests whether the spread survives while the ordering recovers. Queued.
+  0-1050), then the plain hinge. Tests whether the spread survives while the ordering recovers. Step 2100 vs
+  hinge's 2100: centered origin_vs_para gap -0.158 -> -0.021, raw -0.025 -> +0.117, topic_matched cgap 0.071
+  -> 0.125, top-1 0.187 -> 0.157, whitened 0.269 -> 0.257, rank 10.6 -> 7.4; paraphrase beats own 0.505. Best
+  balance of the four; candidate for the full 3000. Done.
