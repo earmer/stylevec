@@ -29,11 +29,12 @@ class TripletTextDataset(Dataset[TripletRecord]):
 
 
 class TripletCollate:
-    def __init__(self, tokenizer: Any, max_length: int) -> None:
+    def __init__(self, tokenizer: Any, max_length: int, twins: bool = False) -> None:
         if max_length <= 0:
             raise ValueError(f"max_length must be positive, got {max_length}")
         self.tokenizer = tokenizer
         self.max_length = max_length
+        self.twins = twins
 
     def encode(self, texts: list[str]) -> dict[str, torch.Tensor]:
         return self.tokenizer(
@@ -63,7 +64,22 @@ class TripletCollate:
         styles = [triplet_styles(row.rule, row.meta) for row in rows]
         batch["anchor_style"] = [anchor for anchor, _negative in styles]
         batch["negative_style"] = [negative for _anchor, negative in styles]
+        if self.twins:
+            batch.update(twin_columns(rows, self.encode))
         return batch
+
+
+def twin_columns(rows: list[TripletRecord], encode: Any) -> dict[str, Any]:
+    """Each row's content twin (meta twin_text) and whether it counts. A row without one, or whose twin is
+    already its own negative (origin_vs_para, paratarget_original_push), encodes its anchor as a
+    placeholder and has_twin False, so the loss drops it."""
+    texts, has_twin = [], []
+    for row in rows:
+        twin = normalize_text(str(row.meta.get("twin_text") or ""))
+        usable = bool(twin) and twin != normalize_text(row.negative_text)
+        texts.append(twin if usable else row.anchor_text)
+        has_twin.append(usable)
+    return {"twin": encode(texts), "has_twin": torch.tensor(has_twin, dtype=torch.bool)}
 
 
 def triplet_styles(rule: str, meta: dict[str, Any]) -> tuple[str | None, str | None]:
@@ -101,5 +117,5 @@ def _style(domain: str, value: Any) -> str | None:
     return None if value is None else f"{domain}:{value}"
 
 
-def make_triplet_collate(tokenizer: Any, max_length: int) -> TripletCollate:
-    return TripletCollate(tokenizer, max_length)
+def make_triplet_collate(tokenizer: Any, max_length: int, twins: bool = False) -> TripletCollate:
+    return TripletCollate(tokenizer, max_length, twins)

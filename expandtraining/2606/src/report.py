@@ -255,6 +255,65 @@ def whitened(rows: pd.DataFrame, embeddings: np.ndarray, dims: int = WHITEN_DIMS
     return _unit((embeddings.astype(np.float64) - mean) @ vt[:k].T / singular[:k])
 
 
+def paraphrase_rank(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool = True) -> dict[str, float]:
+    """For each origin_vs_para anchor, the share of its speaker's other real lines that its own paraphrase
+    is closer to than they are (raw cosine). 0 = the paraphrase is farther than every own line (style
+    wins), 0.5 = no better than a random own line, 1 = closer than all of them (content wins). Also the
+    share of anchors whose paraphrase beats every own line. A rank view of gap:origin_vs_para that a few
+    extreme cosines cannot move."""
+    frame = triplet_frame(rows, embeddings)
+    if frame.empty:
+        return {}
+    frame = frame[(frame["rule"] == "origin_vs_para") & (frame["heldout"] == heldout)]
+    lines = _retrieval_lines(rows, heldout)
+    if frame.empty or lines.empty:
+        return {}
+    unit = _unit(embeddings.astype(np.float64))
+    by_speaker = {speaker: group for speaker, group in lines.groupby("speaker")}
+    index = {(tid, role): i for i, (tid, role) in enumerate(zip(rows["triplet_id"], rows["role"]))}
+    beats, tops = [], []
+    for tid in frame["triplet_id"]:
+        a, n = index[(tid, "anchor")], index[(tid, "negative")]
+        own = by_speaker.get(rows.at[a, "speaker"])
+        if own is None:
+            continue
+        own = own[own["text_preview"] != rows.at[a, "text_preview"]]
+        if own.empty:
+            continue
+        own_cos = unit[own.index.to_numpy()] @ unit[a]
+        para_cos = float(unit[n] @ unit[a])
+        beats.append(float((own_cos < para_cos).mean()))
+        tops.append(float(para_cos > own_cos.max()))
+    if not beats:
+        return {}
+    tag = "heldout" if heldout else "seen"
+    return {f"para_beats_own_{tag}": float(np.mean(beats)), f"para_top1_{tag}": float(np.mean(tops)),
+            f"n_para_rank_{tag}": float(len(beats))}
+
+
+NULLSPACE_DIMS = (8, 32)
+
+
+def within_speaker_nullspace(rows: pd.DataFrame, embeddings: np.ndarray, dims: int) -> np.ndarray | None:
+    """Embeddings with the top `dims` within-speaker directions projected out, fitted on seen speakers'
+    real lines: the directions a speaker's own lines vary along most, i.e. content rather than voice.
+    A post-hoc test of how much content removal alone buys. (Not anchor - paraphrase: that difference
+    is the style signal itself.)"""
+    seen = _retrieval_lines(rows, heldout=False)
+    seen = seen[~seen["speaker"].isin(heldout_speaker_set(rows))]
+    if seen["speaker"].nunique() < 2:
+        return None
+    unit = _unit(embeddings.astype(np.float64))
+    fit = unit[seen.index.to_numpy()]
+    labels = seen["speaker"].to_numpy()
+    for speaker in set(labels):
+        mask = labels == speaker
+        fit[mask] -= fit[mask].mean(axis=0)
+    _u, _s, vt = np.linalg.svd(fit, full_matrices=False)
+    basis = vt[: min(dims, len(vt))]
+    return _unit(unit - (unit @ basis.T) @ basis)
+
+
 def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]) -> dict[str, Any]:
     """Scalars for compare (topic gap by negative type, cross-scene, matched-seen, prefix and whitened
     retrieval) plus `heldout_top1_by_speaker`, the per-speaker hits compare pairs arms on."""
@@ -289,6 +348,16 @@ def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]
         ovp = frame[frame["rule"] == "origin_vs_para"] if not frame.empty else frame
         if len(ovp):
             out["whitened_gap_origin_vs_para"] = float((ovp["pos"] - ovp["neg"]).mean())
+    out.update(paraphrase_rank(rows, embeddings))
+    for dims in NULLSPACE_DIMS:
+        projected = within_speaker_nullspace(rows, embeddings, dims)
+        if projected is None:
+            continue
+        retrieval = speaker_retrieval(rows, projected, heldout=True)
+        if "top1" in retrieval:
+            out[f"null{dims}_top1"] = retrieval["top1"]
+        out.update({f"null{dims}_{key}": value for key, value in paraphrase_rank(rows, projected).items()
+                    if key.startswith("para_beats")})
     return out
 
 

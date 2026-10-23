@@ -1,0 +1,62 @@
+# InfoNCE C: why InfoNCE leaks content, as short screening runs. One seed on one 5090. See RESULTS_infonce.md.
+# infonce_b's hinge run (InfoNCE T 0.05 + hinge x10) is the reference; it is not rerun here. Compare these
+# runs' final validation with its validation_step_01050 (validation_step_02100 for nce_stage1) by hand.
+#
+# Short: train.stop_at_step ends each run at 1050 (2100 for nce_stage1) with lr and curriculum still laid out
+# over max_steps 3000, so a run is exactly the first 1050 steps of a full one. The centered origin_vs_para gap
+# at step 1050 ranked every earlier arm in its final order (center +0.07, hinge -0.09, chead -0.19,
+# center_infonce -0.23), so 1050 steps screens; only the winner gets the full 3000.
+#
+# lc_clean: the length_course positive starts with the anchor's own text (char-bigram Jaccard 0.48 Genshin /
+#   0.80 msynthstel, each repeated ~65x); InfoNCE keeps rewarding that overlap after the hinge saturates.
+#   The positive here is the source's next lines only.
+# twin: every row whose anchor has a content twin (a Genshin line's paraphrase, a rewrite's source) gets it as
+#   one more InfoNCE candidate at T 0.03 (harder than the 0.05 of the rest); today only origin_vs_para and
+#   paratarget_original_push rows (~14%) carry one, as their negative. One extra forward per row (~+33% time).
+# nce_stage1: InfoNCE (with the hinge) for stage 1 only, then the plain hinge (center's objective): does the
+#   spread survive while the ordering recovers?
+# Judge by cgap:origin_vs_para and para_beats_own_heldout (both are content leak) against heldout_top1_macro.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/infonce_c_1gpu.yaml
+name: infonce_c_1gpu
+description: >
+  Short screening runs on infonce_b's hinge recipe: a length_course positive without the anchor's text,
+  every row's content twin as an extra InfoNCE candidate, both, and InfoNCE for stage 1 only. Judge by the
+  centered origin_vs_para gap and paraphrase rank against held-out retrieval, at step 1050.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_twin_temperature
+  - train.infonce_until_step
+  - train.stop_at_step
+  - data.length_course_positive_excludes_anchor
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.stop_at_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+arms:
+  lc_clean:
+    data.length_course_positive_excludes_anchor: true
+  twin:
+    train.infonce_twin_temperature: 0.03
+  twin_lc_clean:
+    data.length_course_positive_excludes_anchor: true
+    train.infonce_twin_temperature: 0.03
+  nce_stage1:
+    train.infonce_until_step: 1050
+    train.stop_at_step: 2100
+comparisons:
+  - {arm: twin_lc_clean, against: lc_clean, isolates: content twins in InfoNCE}
+  - {arm: twin_lc_clean, against: twin, isolates: length_course positive without the anchor}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

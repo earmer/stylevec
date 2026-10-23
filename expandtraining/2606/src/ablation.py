@@ -34,7 +34,8 @@ DEFAULT_FOCUS_RULES = [
     "generated_to_target",
     "bookraw_same_author_cross_work",
 ]
-LOWER_IS_BETTER = ("provenance_", "violation:", "macro_violation", "memory_gap", "top_component_ratio", "length_r2")
+LOWER_IS_BETTER = ("provenance_", "violation:", "macro_violation", "memory_gap", "top_component_ratio", "length_r2",
+                   "para_beats", "para_top1", "null8_para", "null32_para")
 DEFAULT_KILL = {"retrieval_lift_max": 0.05, "provenance_min": 0.85}
 
 
@@ -440,6 +441,8 @@ def run_metrics(run_dir: Path, focus_rules: list[str], validation_name: str = "v
             sub = _rule_rows(table, rule)
             if len(sub):
                 metrics[f"gap:{rule}"] = _weighted(sub, "gap")
+                if "cgap" in sub:
+                    metrics[f"cgap:{rule}"] = _weighted(sub, "cgap")
                 metrics[f"violation:{rule}"] = _weighted(sub, "violation")
     return metrics
 
@@ -447,7 +450,9 @@ def run_metrics(run_dir: Path, focus_rules: list[str], validation_name: str = "v
 DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout_neg", "real_gap_seen_neg",
                    "heldout_top1_cross_scene", "whitened_top1", "whitened_gap_origin_vs_para",
                    "heldout_top1_macro", "seen_top1_matched", "memory_gap_matched",
-                   "heldout_top1_d32", "heldout_top1_d64", "heldout_top1_d128")
+                   "heldout_top1_d32", "heldout_top1_d64", "heldout_top1_d128",
+                   "para_beats_own_heldout", "para_top1_heldout", "null8_top1", "null8_para_beats_own_heldout",
+                   "null32_top1", "null32_para_beats_own_heldout")
 SPEAKER_PAIRED = "heldout_top1_macro (paired by speaker)"
 
 

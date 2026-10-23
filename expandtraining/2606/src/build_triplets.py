@@ -170,6 +170,7 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                 "speaker": speaker,
                 "heldout": bool(anchor.meta.get("heldout", False)),
                 "anchor_db_id": int(anchor.meta.get("db_id", -1)),
+                **twin_meta(anchor.text, anchor.meta.get("para_text")),
             }
             if others:
                 easy_negative = min(others[:candidates], key=lambda row: abs(sample_length(row) - sample_length(anchor)))
@@ -206,13 +207,22 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                         },
                     )
             para_text = anchor.meta.get("para_text")
-            if isinstance(para_text, str) and para_text and para_text.strip() != anchor.text.strip():
+            if "twin_text" in meta:
                 add_triplet(
                     triplets, anchor.text, real_positive.text, para_text,
                     "origin_vs_para", split, float(weights["genshin_real"]), float(margins["hard"]),
                     {**meta, "positive_db_id": int(real_positive.meta.get("db_id", -1))},
                 )
     return triplets
+
+
+def twin_meta(anchor_text: str, twin: Any) -> dict[str, str]:
+    """{"twin_text": ...} when the anchor has a content twin (same content, another voice: a Genshin line's
+    paraphrase, a rewrite's source line) that differs from it. train.infonce_twin_temperature adds each
+    row's twin to its InfoNCE candidates; nothing else reads it."""
+    if isinstance(twin, str) and twin.strip() and twin.strip() != anchor_text.strip():
+        return {"twin_text": twin}
+    return {}
 
 
 # origin_vs_para needs a paraphrase that differs from the origin: an identical one cannot satisfy the
@@ -281,6 +291,7 @@ def build_paratarget_triplets(
         source_text = str(generated.meta["source_text"])
         # Jobs touching a held-out speaker are val-only; marking them lets validation report them apart.
         heldout = {"heldout": bool(generated.meta.get("heldout", False))}
+        twin = twin_meta(generated.text, source_text)
         add_triplet(
             triplets,
             generated.text,
@@ -290,7 +301,7 @@ def build_paratarget_triplets(
             split,
             float(weights["paratarget"]),
             float(margins["hard"]),
-            {"target_speaker": target, "source_speaker": source, **heldout},
+            {"target_speaker": target, "source_speaker": source, **heldout, **twin},
         )
         if bool(config["data"].get("paratarget_original_push_enabled", False)):
             add_triplet(
@@ -308,6 +319,7 @@ def build_paratarget_triplets(
                     "source_length": len(source_text),
                     "generated_length": len(generated.text),
                     **heldout,
+                    **twin,
                 },
             )
         if bool(config["data"].get("same_content_diff_style_enabled", True)):
@@ -321,7 +333,8 @@ def build_paratarget_triplets(
                 split,
                 float(weights["paratarget"]),
                 float(margins["adversarial"]),
-                {"target_speaker": target, "source_speaker": source, **heldout},
+                {"target_speaker": target, "source_speaker": source, **heldout,
+                 **twin_meta(source_text, generated.text)},
             )
         targets = [name for name in generated_by_target if name != target and generated_by_target[name]]
         if targets:
@@ -339,7 +352,7 @@ def build_paratarget_triplets(
                     split,
                     float(weights["paratarget"]),
                     float(margins["hard"]),
-                    {"target_speaker": target, "negative_target": other_target, **heldout},
+                    {"target_speaker": target, "negative_target": other_target, **heldout, **twin},
                 )
     return triplets
 
@@ -432,6 +445,10 @@ def build_length_course_triplets(
     if negative_length not in ("anchor", "positive"):
         raise ValueError(f"data.length_course_negative_length must be anchor or positive, got {negative_length!r}")
     match_anchor = negative_length == "anchor"
+    # The default positive starts with the anchor itself, so it shares the anchor's text (char-bigram
+    # Jaccard 0.48 Genshin / 0.80 msynthstel): InfoNCE keeps rewarding that overlap long after the hinge
+    # saturates. True builds it from the source's next lines only.
+    skip_anchor = bool(config["data"].get("length_course_positive_excludes_anchor", False))
 
     grouped: defaultdict[tuple[str, str], list[SampleRecord]] = defaultdict(list)
     domain_rows: defaultdict[str, list[SampleRecord]] = defaultdict(list)
@@ -466,7 +483,7 @@ def build_length_course_triplets(
                 continue
             index = visit[turn]
             anchor = rows[index]
-            positive_text = combine_same_source_texts(rows, index, max_parts, max_chars)
+            positive_text = combine_same_source_texts(rows, index, max_parts, max_chars, skip_anchor)
             if positive_text is None:
                 continue
             negative = pick_similar_length_negative(
@@ -494,6 +511,7 @@ def build_length_course_triplets(
                     "anchor_length": len(anchor.text),
                     "positive_length": len(positive_text),
                     "negative_length": len(negative.text),
+                    **twin_meta(anchor.text, anchor.meta.get("para_text")),
                 },
             )
             counts[domain] += 1
@@ -526,9 +544,11 @@ def combine_same_source_texts(
     index: int,
     max_parts: int,
     max_chars: int,
+    skip_anchor: bool = False,
 ) -> str | None:
     parts: list[str] = []
-    for offset in range(min(max_parts, len(rows))):
+    first = 1 if skip_anchor else 0
+    for offset in range(first, min(max_parts + first, len(rows))):
         candidate = rows[(index + offset) % len(rows)].text
         combined = normalize_text(" ".join(parts + [candidate]))
         if parts and len(combined) > max_chars:

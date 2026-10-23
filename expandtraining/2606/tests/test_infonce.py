@@ -174,7 +174,8 @@ def test_objective_defaults_to_the_triplet_hinge_and_mixes_on_request() -> None:
     from losses import weighted_triplet_margin_loss
     from train import objective_loss, objective_settings_from_config
 
-    assert objective_settings_from_config({"train": {}}) == {"loss": "triplet", "temperature": 0.05, "triplet_weight": 0.0}
+    assert objective_settings_from_config({"train": {}}) == {"loss": "triplet", "temperature": 0.05, "triplet_weight": 0.0,
+                                                               "twin_temperature": 0.0, "until_step": 0}
     anchor, positive, negative = toy_batch()
     batch = {"margin": torch.full((3,), 0.1), "weight": torch.ones(3),
              "anchor_style": ["a", "b", "c"], "negative_style": [None, None, None]}
@@ -211,7 +212,7 @@ def test_infonce_spec_keys_round_trip_through_the_run_config(tmp_path: Path) -> 
         assert validation_matryoshka_dims(config) == [32, 64, 128]
     assert objective_settings_from_config(loaded["center"])["loss"] == "triplet"
     assert objective_settings_from_config(loaded["center_infonce"]) == {
-        "loss": "infonce", "temperature": 0.05, "triplet_weight": 0.0}
+        "loss": "infonce", "temperature": 0.05, "triplet_weight": 0.0, "twin_temperature": 0.0, "until_step": 0}
     assert configured_matryoshka_dims(loaded["center_infonce"]) == [32, 64, 128]
     assert configured_matryoshka_dims(loaded["center_infonce_m64"]) == [64]
     # The reported prefixes are not part of the data key, so every arm reuses the base's dataset.

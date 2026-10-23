@@ -207,6 +207,9 @@ def build_qwen_style_encoder(config: dict[str, Any]) -> QwenStyleEncoder:
     return QwenStyleEncoder(backbone=backbone, hidden_size=hidden_size, settings=settings)
 
 
+TRIPLET_ROLES = ("anchor", "positive", "negative")
+
+
 def encode_triplet(
     model: QwenStyleEncoder,
     batch: dict[str, Any],
@@ -222,12 +225,23 @@ def encode_triplet_outputs(
     batch: dict[str, Any],
     combine_forward: bool = False,
 ) -> dict[str, Any]:
-    """Each output key as an (anchor, positive, negative) tuple, except pre_norm, which is concatenated."""
+    """Each output key as an (anchor, positive, negative) tuple, except pre_norm, which is concatenated.
+    A batch with a "twin" role (the collate's content twins) also gets outputs["twin"], its embeddings."""
     if combine_forward:
         return encode_triplet_combined(model, batch)
-    roles = [model(**batch[role]) for role in ("anchor", "positive", "negative")]
-    outputs: dict[str, Any] = {key: tuple(role[key] for role in roles) for key in roles[0] if key != "pre_norm"}
-    outputs["pre_norm"] = torch.cat([role["pre_norm"] for role in roles])
+    roles = [model(**batch[role]) for role in batch_roles(batch)]
+    return split_roles(roles)
+
+
+def batch_roles(batch: dict[str, Any]) -> tuple[str, ...]:
+    return TRIPLET_ROLES + (("twin",) if "twin" in batch else ())
+
+
+def split_roles(roles: list[dict[str, torch.Tensor]]) -> dict[str, Any]:
+    outputs: dict[str, Any] = {key: tuple(role[key] for role in roles[:3]) for key in roles[0] if key != "pre_norm"}
+    outputs["pre_norm"] = torch.cat([role["pre_norm"] for role in roles[:3]])
+    if len(roles) > 3:
+        outputs["twin"] = roles[3]["embeddings"]
     return outputs
 
 
@@ -235,35 +249,14 @@ def encode_triplet_combined(
     model: QwenStyleEncoder,
     batch: dict[str, Any],
 ) -> dict[str, Any]:
-    anchor_batch = batch["anchor"]
-    positive_batch = batch["positive"]
-    negative_batch = batch["negative"]
-    max_length = max(
-        anchor_batch["input_ids"].shape[1],
-        positive_batch["input_ids"].shape[1],
-        negative_batch["input_ids"].shape[1],
-    )
-    input_ids = torch.cat(
-        [
-            _pad_tokens(anchor_batch["input_ids"], max_length, pad_value=0),
-            _pad_tokens(positive_batch["input_ids"], max_length, pad_value=0),
-            _pad_tokens(negative_batch["input_ids"], max_length, pad_value=0),
-        ],
-        dim=0,
-    )
-    attention_mask = torch.cat(
-        [
-            _pad_tokens(anchor_batch["attention_mask"], max_length, pad_value=0),
-            _pad_tokens(positive_batch["attention_mask"], max_length, pad_value=0),
-            _pad_tokens(negative_batch["attention_mask"], max_length, pad_value=0),
-        ],
-        dim=0,
-    )
+    parts = [batch[role] for role in batch_roles(batch)]
+    max_length = max(part["input_ids"].shape[1] for part in parts)
+    input_ids = torch.cat([_pad_tokens(part["input_ids"], max_length, pad_value=0) for part in parts], dim=0)
+    attention_mask = torch.cat([_pad_tokens(part["attention_mask"], max_length, pad_value=0) for part in parts], dim=0)
     output = model(input_ids=input_ids, attention_mask=attention_mask)
-    batch_size = anchor_batch["input_ids"].shape[0]
-    outputs: dict[str, Any] = {key: tuple(value.split(batch_size, dim=0)) for key, value in output.items() if key != "pre_norm"}
-    outputs["pre_norm"] = output["pre_norm"]
-    return outputs
+    batch_size = parts[0]["input_ids"].shape[0]
+    roles = [{key: value[i * batch_size:(i + 1) * batch_size] for key, value in output.items()} for i in range(len(parts))]
+    return split_roles(roles)
 
 
 def _pad_tokens(values: torch.Tensor, length: int, pad_value: int) -> torch.Tensor:

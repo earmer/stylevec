@@ -94,6 +94,13 @@ def validate_loss_config(config: dict[str, Any]) -> None:
         raise ValueError("train.infonce_temperature must be positive")
     if float(config["train"].get("infonce_triplet_weight", 0.0)) < 0.0:
         raise ValueError("train.infonce_triplet_weight must be non-negative")
+    if float(config["train"].get("infonce_twin_temperature", 0.0)) < 0.0:
+        raise ValueError("train.infonce_twin_temperature must be non-negative (0 = off)")
+    max_steps = int(config["train"].get("max_steps", 0))
+    for key in ("infonce_until_step", "stop_at_step"):
+        value = int(config["train"].get(key, 0))
+        if value < 0 or (value > 0 and value > max_steps):
+            raise ValueError(f"train.{key} must be in [0, train.max_steps] (0 = off)")
     if int(config["model"].get("content_dim", 0)) < 0:
         raise ValueError("model.content_dim must be non-negative")
     regularization = config.get("regularization", {})

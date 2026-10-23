@@ -48,9 +48,15 @@ def info_nce_loss(
     anchor_groups: torch.Tensor,
     negative_groups: torch.Tensor,
     temperature: float = 0.05,
+    twin: torch.Tensor | None = None,
+    has_twin: torch.Tensor | None = None,
+    twin_temperature: float = 0.0,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """In-batch InfoNCE on cosine / temperature. Row i's candidates: every positive (its own is the target),
     every other anchor, and every mined negative (its own always kept).
+
+    twin (with has_twin, twin_temperature > 0) adds one more candidate per row: its own content twin, the
+    same content in another voice, at its own (lower = harder) temperature. Rows with has_twin False skip it.
 
     anchor_groups[j] is the style of anchor j and positive j, negative_groups[j] that of negative j. Another
     row's candidate with anchor i's style is a false negative and is dropped from the denominator, not
@@ -69,6 +75,9 @@ def info_nce_loss(
             raise ValueError(f"{name} must be a 1D tensor of batch size {batch}, got {tuple(values.shape)}")
     if float(temperature) <= 0.0:
         raise ValueError(f"temperature must be positive, got {temperature}")
+    use_twin = twin is not None and float(twin_temperature) > 0.0
+    if use_twin and (twin.shape != anchor.shape or has_twin is None or has_twin.shape != (batch,)):
+        raise ValueError(f"twin must match anchor {tuple(anchor.shape)} and has_twin be ({batch},)")
 
     # float32 even under autocast: bf16 logits at temperature 0.05 lose most of the cosine resolution.
     with torch.autocast(device_type=anchor.device.type, enabled=False):
@@ -85,6 +94,11 @@ def info_nce_loss(
     mask_n = same_negative & ~eye
     blocked = torch.cat([mask_style, mask_style | eye, mask_n], dim=1)
     logits = torch.cat([sim_p, sim_a, sim_n], dim=1) / float(temperature)
+    if use_twin:
+        with torch.autocast(device_type=anchor.device.type, enabled=False):
+            twin_cos = (a * F.normalize(twin.float(), p=2, dim=-1, eps=1e-8)).sum(dim=-1)
+        logits = torch.cat([logits, (twin_cos / float(twin_temperature))[:, None]], dim=1)
+        blocked = torch.cat([blocked, ~has_twin[:, None]], dim=1)
     logits = logits.masked_fill(blocked, torch.finfo(logits.dtype).min)
     targets = torch.arange(batch, device=anchor.device)
     raw = F.cross_entropy(logits, targets, reduction="none")
@@ -102,6 +116,11 @@ def info_nce_loss(
         "masked_fraction": masked.mean().detach(),
         "accuracy": (logits.argmax(dim=1) == targets).float().mean().detach(),
     }
+    if use_twin and bool(has_twin.any()):
+        rows = has_twin
+        stats["twin_cos"] = twin_cos[rows].mean().detach()
+        stats["twin_violation"] = (twin_cos[rows] >= pos_cos[rows]).float().mean().detach()
+        stats["twin_fraction"] = rows.float().mean().detach()
     return loss, stats
 
 

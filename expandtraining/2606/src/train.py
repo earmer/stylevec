@@ -264,7 +264,9 @@ def build_loaders(
     tokenizer: Any,
     triplets: list[Any],
 ) -> tuple[TripletTextDataset, DataLoader, DataLoader]:
-    collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]))
+    objective = objective_settings_from_config(config)
+    twins = objective["loss"] == "infonce" and objective["twin_temperature"] > 0.0
+    collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]), twins=twins)
     train_triplets = [row for row in triplets if row.split == "train"]
     train_dataset = TripletTextDataset(order_train_triplets(config, train_triplets, epoch=0), "train")
     val_dataset = TripletTextDataset(
@@ -286,7 +288,7 @@ def build_loaders(
         batch_size=int(config["validation"]["batch_size"]),
         shuffle=False,
         num_workers=0,
-        collate_fn=collate,
+        collate_fn=make_triplet_collate(tokenizer, int(config["model"]["max_length"])),
     )
     return train_dataset, train_loader, val_loader
 
@@ -395,6 +397,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     summary = parameter_summary(model)
     optimizer = build_optimizer(optimizer_parameter_groups(model, config), config)
     total_steps = int(config["train"]["max_steps"])
+    # train.stop_at_step ends the run early with the schedule (lr, curriculum stages) still laid out over
+    # max_steps, so a short run matches the first stop_at_step steps of a full one.
+    stop_steps = int(config["train"].get("stop_at_step", 0)) or total_steps
     scheduler = make_scheduler(optimizer, float(config["train"].get("warmup_ratio", 0.0)), total_steps)
 
     global_step = 0
@@ -457,7 +462,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
         last_epoch = epoch
         train_dataset.set_triplets(order_train_triplets(config, raw_train_triplets, epoch, global_step))
         for batch_index, batch in enumerate(train_loader):
-            if should_stop(global_step, total_steps, stop_time):
+            if should_stop(global_step, stop_steps, stop_time):
                 break
             batch = move_batch_to_device(batch, device, non_blocking=non_blocking)
             if use_accelerate:
@@ -465,8 +470,12 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward)
                     anchor, positive, negative = outputs["embeddings"]
                     norms = outputs["pre_norm"]
-                    groups = style_group_ids(batch, anchor.device) if objective["loss"] == "infonce" else None
-                    loss, stats = objective_loss(anchor, positive, negative, batch, objective, groups)
+                    step_objective = objective_at_step(objective, global_step)
+                    groups = style_group_ids(batch, anchor.device) if step_objective["loss"] == "infonce" else None
+                    loss, stats = objective_loss(
+                        anchor, positive, negative, batch, step_objective, groups,
+                        twin=outputs.get("twin"), has_twin=batch.get("has_twin"),
+                    )
                     matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
                         anchor,
                         positive,
@@ -474,7 +483,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         batch,
                         matryoshka_dims,
                         matryoshka_weight,
-                        objective,
+                        step_objective,
                         groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
@@ -527,8 +536,12 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward)
                     anchor, positive, negative = outputs["embeddings"]
                     norms = outputs["pre_norm"]
-                    groups = style_group_ids(batch, anchor.device) if objective["loss"] == "infonce" else None
-                    loss, stats = objective_loss(anchor, positive, negative, batch, objective, groups)
+                    step_objective = objective_at_step(objective, global_step)
+                    groups = style_group_ids(batch, anchor.device) if step_objective["loss"] == "infonce" else None
+                    loss, stats = objective_loss(
+                        anchor, positive, negative, batch, step_objective, groups,
+                        twin=outputs.get("twin"), has_twin=batch.get("has_twin"),
+                    )
                     matryoshka_loss, matryoshka_stats = matryoshka_step_loss(
                         anchor,
                         positive,
@@ -536,7 +549,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         batch,
                         matryoshka_dims,
                         matryoshka_weight,
-                        objective,
+                        step_objective,
                         groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
@@ -581,10 +594,10 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                             batch,
                         )
 
-            if should_stop(global_step, total_steps, stop_time):
+            if should_stop(global_step, stop_steps, stop_time):
                 break
 
-        if should_stop(global_step, total_steps, stop_time):
+        if should_stop(global_step, stop_steps, stop_time):
             break
 
     if accelerator is not None:
@@ -707,7 +720,17 @@ def objective_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "loss": str(train.get("loss", "triplet")),
         "temperature": float(train.get("infonce_temperature", 0.05)),
         "triplet_weight": float(train.get("infonce_triplet_weight", 0.0)),
+        "twin_temperature": float(train.get("infonce_twin_temperature", 0.0)),
+        "until_step": int(train.get("infonce_until_step", 0)),
     }
+
+
+def objective_at_step(settings: dict[str, Any], global_step: int) -> dict[str, Any]:
+    """train.infonce_until_step > 0 ends InfoNCE there: from that step on the objective is the plain hinge
+    (the `triplet` loss at weight 1, as in model.center's runs), with no twin term."""
+    if settings["loss"] == "infonce" and 0 < settings.get("until_step", 0) <= global_step:
+        return {**settings, "loss": "triplet"}
+    return settings
 
 
 def style_group_ids(batch: dict[str, Any], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
@@ -730,7 +753,11 @@ def objective_loss(
     batch: dict[str, Any],
     settings: dict[str, Any],
     groups: tuple[torch.Tensor, torch.Tensor] | None = None,
+    twin: torch.Tensor | None = None,
+    has_twin: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """The main objective. twin / has_twin (the batch's content twins) reach InfoNCE only when
+    train.infonce_twin_temperature > 0; Matryoshka prefixes never pass them."""
     if settings["loss"] == "triplet":
         return weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], batch["weight"])
     if settings["loss"] != "infonce":
@@ -745,6 +772,9 @@ def objective_loss(
         anchor_groups,
         negative_groups,
         settings["temperature"],
+        twin=twin,
+        has_twin=has_twin,
+        twin_temperature=settings.get("twin_temperature", 0.0),
     )
     stats["infonce_loss"] = loss.detach()
     if settings["triplet_weight"] > 0.0:
@@ -855,7 +885,8 @@ def log_train_step(
     writer.add_scalar("spread/uniformity_loss", float(spread_stats["uniformity_loss"].float().cpu().item()), global_step)
     writer.add_scalar("spread/top_eigen_ratio", float(spread_stats["top_eigen_ratio"].float().cpu().item()), global_step)
     writer.add_scalar("spread/effective_rank", float(spread_stats["effective_rank"].float().cpu().item()), global_step)
-    for key in ("masked_fraction", "accuracy", "infonce_loss", "triplet_loss"):
+    for key in ("masked_fraction", "accuracy", "infonce_loss", "triplet_loss", "twin_cos", "twin_violation",
+                "twin_fraction"):
         if key in stats:
             writer.add_scalar(f"infonce/{key}", float(stats[key].float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():
