@@ -59,7 +59,8 @@ infonce_b_1gpu__center_infonce_hinge_chead__s42: >
 infonce_c_1gpu__lc_clean__s42: >
   InfoNCE C (short: stops at step 1050; compare with infonce_b hinge's step 1050): hinge recipe with the
   length_course positive built without the anchor's own text. Tests whether overlapping positives teach the
-  content shortcut. Queued.
+  content shortcut. Step 1050 vs hinge: centered origin_vs_para gap -0.085 -> +0.001, paraphrase beats own
+  lines 0.660 -> 0.652 (unchanged), top-1 0.196 -> 0.187 (noise), rank 12.3 -> 10.0. Done.
 infonce_c_1gpu__twin__s42: >
   InfoNCE C (stops at 1050): hinge recipe + every row's content twin (paraphrase / rewrite source) as an extra
   InfoNCE candidate at T 0.03. Tests whether full twin coverage holds the origin_vs_para ordering. Queued.

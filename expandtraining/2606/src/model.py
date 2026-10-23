@@ -188,7 +188,9 @@ def build_qwen_style_encoder(config: dict[str, Any]) -> QwenStyleEncoder:
     )
     if bool(config["model"].get("gradient_checkpointing", False)):
         if hasattr(backbone, "gradient_checkpointing_enable"):
-            backbone.gradient_checkpointing_enable()
+            # Non-reentrant: the reentrant default drops gradients to LoRA weights when the checkpointed
+            # block's input (frozen embeddings) does not require grad.
+            backbone.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
         if hasattr(backbone.config, "use_cache"):
             backbone.config.use_cache = False
     if settings.lora_enabled:

@@ -13,6 +13,8 @@
 # twin: every row whose anchor has a content twin (a Genshin line's paraphrase, a rewrite's source) gets it as
 #   one more InfoNCE candidate at T 0.03 (harder than the 0.05 of the rest); today only origin_vs_para and
 #   paratarget_original_push rows (~14%) carry one, as their negative. One extra forward per row (~+33% time).
+#   The fourth role (128 sequences in one padded forward) ran out of the 5090's 32 GB at step ~30, so the twin
+#   arms use gradient checkpointing: the same computation, ~30% slower.
 # nce_stage1: InfoNCE (with the hinge) for stage 1 only, then the plain hinge (center's objective): does the
 #   spread survive while the ordering recovers?
 # Judge by cgap:origin_vs_para and para_beats_own_heldout (both are content leak) against heldout_top1_macro.
@@ -34,6 +36,7 @@ new_keys:
   - train.infonce_until_step
   - train.stop_at_step
   - data.length_course_positive_excludes_anchor
+  - model.gradient_checkpointing
   - validation.matryoshka_dims
 common:
   train.grad_accum: 8
@@ -49,14 +52,17 @@ arms:
     data.length_course_positive_excludes_anchor: true
   twin:
     train.infonce_twin_temperature: 0.03
+    model.gradient_checkpointing: true
   twin_lc_clean:
     data.length_course_positive_excludes_anchor: true
     train.infonce_twin_temperature: 0.03
+    model.gradient_checkpointing: true
   nce_stage1:
     train.infonce_until_step: 1050
     train.stop_at_step: 2100
 comparisons:
-  - {arm: twin_lc_clean, against: lc_clean, isolates: content twins in InfoNCE}
+  - {arm: twin_lc_clean, against: lc_clean, isolates: content twins in InfoNCE,
+     keys: [model.gradient_checkpointing, train.infonce_twin_temperature]}
   - {arm: twin_lc_clean, against: twin, isolates: length_course positive without the anchor}
 headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
            gap:same_speaker_topic_matched, effective_rank]
