@@ -92,3 +92,10 @@ infonce_d_1gpu__nce_stage1_twin__s42: >
   twin keeps the fix without the cost. Final vs nce_stage1: top-1 0.161 -> 0.169, whitened 0.254 -> 0.243,
   centered origin_vs_para gap -0.040 -> -0.047, paraphrase beats own 0.534 -> 0.537, topic_matched cgap
   0.102 -> 0.066, rank 6.9 -> 7.9. No real difference at one seed, for ~1.5x the training time. Done.
+
+leak_hsic_1gpu__hsic_w05__s42: >
+  Leak A (full 3000, compare with infonce_d nce_stage1): nce_stage1 + debiased RBF CKA between anchor style
+  embeddings and their detached content twins (256-pair queue) at weight 0.5. Tests whether an
+  instance-level independence penalty over ~63% of rows removes the origin_vs_para leak. Not launched.
+leak_hsic_1gpu__hsic_w2__s42: >
+  Leak A: as hsic_w05 at weight 2. The higher dose; watch whether top-1 pays for it. Not launched.

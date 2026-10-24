@@ -1,0 +1,53 @@
+# Leak A: debiased kernel independence (HSIC/CKA) between each anchor's style embedding and its content twin.
+# One seed on one 5090; base is infonce_d's nce_stage1 (InfoNCE + hinge for stage 1, then the hinge), so
+# compare with infonce_d_1gpu__nce_stage1__s42 (final top-1 0.161, cgap:origin_vs_para -0.040,
+# para_beats_own 0.534). See src/leak.py.
+#
+# Why instance level: chead's linear penalty against an 8-dim content code sat at its noise floor while the
+# leak grew; the leak is z(line) ~ z(its paraphrase). CKA over (anchor, twin) pairs is ~0 when the style
+# geometry carries none of the twins' geometry. Debiased: plain CKA of independent vectors is ~0.4 here.
+# The twin is a detached target (no gradient checkpointing needed) and reaches ~63% of rows; a 256-pair
+# queue steadies the statistic. Caveat: a paraphrase that keeps some of its speaker's voice makes CKA
+# penalise that voice too; watch heldout_top1_macro.
+# Two doses: CKA is in [0, 1]; the hinge term is ~0.3-0.6 (x10) late in training.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/leak_hsic_1gpu.yaml
+name: leak_hsic_1gpu
+description: >
+  nce_stage1 plus a debiased RBF-kernel CKA penalty between anchor style embeddings and their detached content
+  twins (paraphrase / rewrite source), at two weights. Judge by the centered origin_vs_para gap and paraphrase
+  rank against held-out retrieval, at step 3000, against infonce_d's nce_stage1.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - regularization.leak_method
+  - regularization.leak_weight
+  - regularization.leak_queue
+  - regularization.leak_hsic_kernel
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+  regularization.leak_method: hsic
+  regularization.leak_queue: 256
+  regularization.leak_hsic_kernel: rbf
+arms:
+  hsic_w05:
+    regularization.leak_weight: 0.5
+  hsic_w2:
+    regularization.leak_weight: 2.0
+comparisons:
+  - {arm: hsic_w2, against: hsic_w05, isolates: CKA leak weight 0.5 -> 2}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

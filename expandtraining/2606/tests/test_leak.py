@@ -79,3 +79,30 @@ def test_leak_off_adds_nothing() -> None:
     batch = {"has_twin": torch.tensor([True, True]), "twin_is_negative": torch.tensor([False, False])}
     loss, stats = leak_step_loss(state, outputs, batch, 0)
     assert float(loss) == 0.0 and stats == {}
+
+
+def test_kernel_alignment_is_high_for_copies_and_low_for_independent_rows() -> None:
+    from leak import kernel_alignment
+
+    torch.manual_seed(0)
+    x = torch.nn.functional.normalize(torch.randn(64, 16), dim=-1)
+    noise = torch.nn.functional.normalize(torch.randn(64, 16), dim=-1)
+    for kernel in ("rbf", "linear"):
+        assert kernel_alignment(x, x, kernel) > 0.99
+        assert abs(float(kernel_alignment(x, noise, kernel))) < 0.1
+    style = x.clone().requires_grad_(True)
+    kernel_alignment(style, x).backward()
+    assert style.grad is not None and style.grad.abs().sum() > 0
+
+
+def test_hsic_method_returns_weighted_alignment_and_queues_pairs() -> None:
+    state = LeakState(leak_settings_from_config(config(leak_method="hsic", leak_weight=2.0, leak_queue=8)))
+    anchor = torch.nn.functional.normalize(torch.randn(4, 8), dim=-1)
+    outputs = {"embeddings": (anchor, anchor, anchor), "twin": anchor.clone()}
+    batch = {"has_twin": torch.ones(4, dtype=torch.bool), "twin_is_negative": torch.zeros(4, dtype=torch.bool)}
+    loss, stats = leak_step_loss(state, outputs, batch, 0)
+    assert torch.isclose(loss, 2.0 * stats["hsic_cka"]) and stats["hsic_cka"] > 0.99
+    leak_step_loss(state, outputs, batch, 1)
+    assert state.queue.style.shape[0] == 8
+    late = LeakState(leak_settings_from_config(config(leak_method="hsic", leak_weight=2.0, leak_until_step=5)))
+    assert float(leak_step_loss(late, outputs, batch, 5)[0]) == 0.0
