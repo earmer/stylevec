@@ -96,14 +96,20 @@ infonce_d_1gpu__nce_stage1_twin__s42: >
 leak_hsic_1gpu__hsic_w05__s42: >
   Leak A (full 3000, compare with infonce_d nce_stage1): nce_stage1 + debiased RBF CKA between anchor style
   embeddings and their detached content twins (256-pair queue) at weight 0.5. Tests whether an
-  instance-level independence penalty over ~63% of rows removes the origin_vs_para leak. Queued 2026-10-24 (leak-all chain).
+  instance-level independence penalty over ~63% of rows removes the origin_vs_para leak. Done 2026-10-24. Step 3000 vs nce_stage1: top-1 0.154 (0.161), whitened
+  0.252 (0.254), centered origin_vs_para gap -0.023 (-0.040), paraphrase beats own 0.504 (0.534), rank 6.6
+  (6.9). Small leak gain, within likely seed noise; seed-43 control pending.
 leak_hsic_1gpu__hsic_w2__s42: >
-  Leak A: as hsic_w05 at weight 2. The higher dose; watch whether top-1 pays for it. Queued 2026-10-24 (leak-all chain).
+  Leak A: as hsic_w05 at weight 2. The higher dose; watch whether top-1 pays for it. Done 2026-10-24. Step 3000:
+  top-1 0.148 (nce_stage1 0.161), centered gap +0.006 (-0.040), paraphrase beats own 0.505 (0.534), rank 5.6
+  (6.9). Gap moves with the dose (-0.040, -0.023, +0.006) for ~0.013 top-1 and a narrower embedding.
 leak_adversary_1gpu__adv_w05__s42: >
   Leak B (full 3000, compare with infonce_d nce_stage1): nce_stage1 + an MLP probe that picks each anchor's
   content twin among 512 queued twins from its style embedding; the encoder is pushed to make the pick
   uniform (weight 0.5, ramped over 200 steps). Tests whether an adversarial instance-level content readout
-  removes the origin_vs_para leak. Queued 2026-10-24 (leak-all chain).
+  removes the origin_vs_para leak. Done 2026-10-24. Step 3000 vs nce_stage1: top-1 0.154 (0.161), whitened
+  0.252 (0.254), centered origin_vs_para gap -0.023 (-0.040), paraphrase beats own 0.504 (0.534), rank 6.6
+  (6.9). Small leak gain, within likely seed noise; seed-43 control pending.
 leak_adversary_1gpu__adv_w2__s42: >
   Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Queued 2026-10-24 (leak-all chain).
 leak_subspace_1gpu__null8__s42: >
