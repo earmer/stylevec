@@ -99,3 +99,10 @@ leak_hsic_1gpu__hsic_w05__s42: >
   instance-level independence penalty over ~63% of rows removes the origin_vs_para leak. Not launched.
 leak_hsic_1gpu__hsic_w2__s42: >
   Leak A: as hsic_w05 at weight 2. The higher dose; watch whether top-1 pays for it. Not launched.
+leak_adversary_1gpu__adv_w05__s42: >
+  Leak B (full 3000, compare with infonce_d nce_stage1): nce_stage1 + an MLP probe that picks each anchor's
+  content twin among 512 queued twins from its style embedding; the encoder is pushed to make the pick
+  uniform (weight 0.5, ramped over 200 steps). Tests whether an adversarial instance-level content readout
+  removes the origin_vs_para leak. Not launched.
+leak_adversary_1gpu__adv_w2__s42: >
+  Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Not launched.

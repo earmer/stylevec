@@ -1,0 +1,55 @@
+# Leak B: an adversarial content probe. One seed on one 5090; base is infonce_d's nce_stage1 (InfoNCE + hinge
+# for stage 1, then the hinge), so compare with infonce_d_1gpu__nce_stage1__s42 (final top-1 0.161,
+# cgap:origin_vs_para -0.040, para_beats_own 0.534). See src/leak.py adversary_loss.
+#
+# A 2-layer MLP probe (256 hidden) reads an anchor's style embedding and picks its own content twin
+# (paraphrase / rewrite source) among the 512 queued twins: an instance-level content readout, the leak
+# itself. The encoder is pushed (through the frozen probe) to make that pick uniform, not to maximise the
+# probe's loss: gradient reversal's unbounded objective tears the embedding apart. The push ramps in over
+# 200 steps so the probe learns first. leak/probe_acc against leak/probe_chance is the live leak monitor.
+# Caveat: a paraphrase that keeps some of its speaker's voice lets the probe match by voice too.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/leak_adversary_1gpu.yaml
+name: leak_adversary_1gpu
+description: >
+  nce_stage1 plus an adversarial probe that picks each anchor's content twin from its style embedding; the
+  encoder is trained to make the probe's pick uniform, at two weights. Judge by the centered origin_vs_para
+  gap and paraphrase rank against held-out retrieval, at step 3000, against infonce_d's nce_stage1.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.leak_probe_hidden
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - regularization.leak_method
+  - regularization.leak_weight
+  - regularization.leak_queue
+  - regularization.leak_probe_temperature
+  - regularization.leak_probe_warmup
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+  model.leak_probe_hidden: 256
+  regularization.leak_method: adversary
+  regularization.leak_queue: 512
+  regularization.leak_probe_temperature: 0.1
+  regularization.leak_probe_warmup: 200
+arms:
+  adv_w05:
+    regularization.leak_weight: 0.5
+  adv_w2:
+    regularization.leak_weight: 2.0
+comparisons:
+  - {arm: adv_w2, against: adv_w05, isolates: adversary weight 0.5 -> 2}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

@@ -315,7 +315,7 @@ def dataloader_worker_kwargs(section: dict[str, Any]) -> dict[str, Any]:
     return kwargs
 
 
-HEAD_MODULES = ("projection.", "fusion.", "content_head.")
+HEAD_MODULES = ("projection.", "fusion.", "content_head.", "leak_probe.")
 
 
 def optimizer_parameter_groups(model: torch.nn.Module, config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -458,7 +458,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     matryoshka_dims = configured_matryoshka_dims(config)
     objective = objective_settings_from_config(config)
     content_settings = content_settings_from_config(config)
-    leak_state = LeakState(leak_settings_from_config(config))
+    leak_state = LeakState(leak_settings_from_config(config), probe=getattr(getattr(model, "module", model), "leak_probe", None))
     detach_twin = twin_mode(config) == "detached"
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
