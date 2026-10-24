@@ -314,6 +314,25 @@ def within_speaker_nullspace(rows: pd.DataFrame, embeddings: np.ndarray, dims: i
     return _unit(unit - (unit @ basis.T) @ basis)
 
 
+def paraphrase_nullspace(rows: pd.DataFrame, embeddings: np.ndarray, dims: int) -> np.ndarray | None:
+    """Embeddings with the top `dims` directions of the paraphrases' own spread projected out, fitted on
+    seen speakers' origin_vs_para negatives. A neutral paraphrase carries a line's content and little voice,
+    so where paraphrases differ from each other is content; unlike within_speaker_nullspace, this does not
+    also remove how a speaker's own lines differ in voice. The post-hoc test of leak C (model.leak_null_dims)."""
+    heldout = heldout_speaker_set(rows)
+    ovp = rows[(rows["rule"] == "origin_vs_para") & ~rows["heldout"]]
+    speaker = ovp[ovp["role"] == "anchor"].set_index("triplet_id")["speaker"]
+    paraphrases = ovp[ovp["role"] == "negative"]
+    paraphrases = paraphrases[~paraphrases["triplet_id"].map(speaker).isin(heldout).to_numpy()]
+    if len(paraphrases) <= dims:
+        return None
+    unit = _unit(embeddings.astype(np.float64))
+    fit = unit[paraphrases.index.to_numpy()]
+    _u, _s, vt = np.linalg.svd(fit - fit.mean(axis=0), full_matrices=False)
+    basis = vt[:dims]
+    return _unit(unit - (unit @ basis.T) @ basis)
+
+
 def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]) -> dict[str, Any]:
     """Scalars for compare (topic gap by negative type, cross-scene, matched-seen, prefix and whitened
     retrieval) plus `heldout_top1_by_speaker`, the per-speaker hits compare pairs arms on."""
@@ -357,6 +376,15 @@ def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]
         if "top1" in retrieval:
             out[f"null{dims}_top1"] = retrieval["top1"]
         out.update({f"null{dims}_{key}": value for key, value in paraphrase_rank(rows, projected).items()
+                    if key.startswith("para_beats")})
+    for dims in NULLSPACE_DIMS:
+        projected = paraphrase_nullspace(rows, embeddings, dims)
+        if projected is None:
+            continue
+        retrieval = speaker_retrieval(rows, projected, heldout=True)
+        if "top1" in retrieval:
+            out[f"pnull{dims}_top1"] = retrieval["top1"]
+        out.update({f"pnull{dims}_{key}": value for key, value in paraphrase_rank(rows, projected).items()
                     if key.startswith("para_beats")})
     return out
 

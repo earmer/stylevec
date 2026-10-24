@@ -23,6 +23,9 @@ class EncoderSettings:
     center: str = "none"
     center_momentum: float = 0.01
     content_dim: int = 0
+    null_dims: int = 0
+    null_strength: float = 1.0
+    null_momentum: float = 0.01
 
 
 class MeanPool(nn.Module):
@@ -39,6 +42,7 @@ class MeanPool(nn.Module):
 
 CENTER_MODES = ("none", "running")
 CENTER_BUFFERS = ("center.mean", "center.initialized")
+NULL_BUFFERS = ("content_null.mean", "content_null.cov", "content_null.basis", "content_null.updates")
 
 
 class RunningCenter(nn.Module):
@@ -68,6 +72,50 @@ class RunningCenter(nn.Module):
                     self.mean.copy_(batch_mean)
                     self.initialized.fill_(True)
         return pooled - self.mean.to(dtype=pooled.dtype)
+
+
+class ContentNull(nn.Module):
+    """Removes a running estimate of the content subspace from the style embedding (leak C).
+
+    The subspace is the top `dims` principal directions of the content twins' embeddings (neutral
+    paraphrases, rewrite sources: content with little voice), as an EMA covariance updated without gradient
+    from each training batch's detached twins (update()). `strength` 1 projects those directions out, 0.5
+    halves them. The basis is a buffer, so gradients treat it as fixed, and it is saved with the trained
+    weights and frozen in eval: validation and export apply the same projection. Off (zero basis) until
+    `warmup` updates have filled the covariance."""
+
+    def __init__(self, dim: int, dims: int, strength: float, momentum: float, warmup: int = 20) -> None:
+        super().__init__()
+        if not 0 < dims < dim:
+            raise ValueError(f"leak null dims must be in (0, {dim}), got {dims}")
+        if not 0.0 < strength <= 1.0 or not 0.0 < momentum <= 1.0:
+            raise ValueError("leak null strength and momentum must be in (0, 1]")
+        self.dims, self.strength, self.momentum, self.warmup = dims, strength, momentum, warmup
+        self.register_buffer("mean", torch.zeros(dim))
+        self.register_buffer("cov", torch.zeros(dim, dim))
+        self.register_buffer("basis", torch.zeros(dims, dim))
+        self.register_buffer("updates", torch.zeros((), dtype=torch.long))
+
+    @torch.no_grad()
+    def update(self, twins: torch.Tensor) -> None:
+        twins = twins.detach().float()
+        rate = 1.0 if int(self.updates) == 0 else self.momentum
+        self.mean.lerp_(twins.mean(dim=0), rate)
+        centered = twins - self.mean
+        self.cov.lerp_(centered.T @ centered / max(1, twins.shape[0]), rate)
+        self.updates += 1
+        if int(self.updates) >= self.warmup:
+            _values, vectors = torch.linalg.eigh(self.cov)
+            self.basis.copy_(vectors[:, -self.dims:].T)
+
+    def share(self, embeddings: torch.Tensor) -> torch.Tensor:
+        """Mean fraction of each embedding's squared norm inside the subspace."""
+        inside = embeddings.float() @ self.basis.T
+        return (inside.pow(2).sum(dim=-1) / embeddings.float().pow(2).sum(dim=-1).clamp_min(1e-12)).mean()
+
+    def forward(self, embeddings: torch.Tensor) -> torch.Tensor:
+        basis = self.basis.to(dtype=embeddings.dtype)
+        return embeddings - self.strength * (embeddings @ basis.T) @ basis
 
 
 class LayerFusion(nn.Module):
@@ -120,6 +168,10 @@ class QwenStyleEncoder(nn.Module):
         # A small separate head trained to hold content (issue #1): the style embedding stays projection_dim
         # wide, and validation, retrieval and export never read this head.
         self.content_head = nn.Linear(projection_in, settings.content_dim) if settings.content_dim > 0 else None
+        self.content_null = (
+            ContentNull(settings.projection_dim, settings.null_dims, settings.null_strength, settings.null_momentum)
+            if settings.null_dims > 0 else None
+        )
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
         need_hidden = self.settings.layer_mode != "last"
@@ -139,6 +191,9 @@ class QwenStyleEncoder(nn.Module):
         pre_norm = projected.norm(dim=-1)
         embeddings = F.normalize(projected, p=2, dim=-1, eps=1e-8)
         output = {"embeddings": embeddings, "pre_norm": pre_norm}
+        if self.content_null is not None:
+            output["unprojected"] = embeddings
+            output["embeddings"] = F.normalize(self.content_null(embeddings), p=2, dim=-1, eps=1e-8)
         if self.content_head is not None:
             output["content"] = F.normalize(self.content_head(pooled), p=2, dim=-1, eps=1e-8)
         return output
@@ -162,6 +217,9 @@ def build_encoder_settings(config: dict[str, Any]) -> EncoderSettings:
         center=str(model_cfg.get("center", "none")),
         center_momentum=float(model_cfg.get("center_momentum", 0.01)),
         content_dim=int(model_cfg.get("content_dim", 0)),
+        null_dims=int(model_cfg.get("leak_null_dims", 0)),
+        null_strength=float(model_cfg.get("leak_null_strength", 1.0)),
+        null_momentum=float(model_cfg.get("leak_null_momentum", 0.01)),
     )
 
 
@@ -235,7 +293,10 @@ def encode_triplet_outputs(
     if detach_twin and "twin" in batch:
         outputs = encode_triplet_outputs(model, {k: v for k, v in batch.items() if k != "twin"}, combine_forward)
         with torch.no_grad():
-            outputs["twin"] = model(**batch["twin"])["embeddings"]
+            twin = model(**batch["twin"])
+            outputs["twin"] = twin["embeddings"]
+            if "unprojected" in twin:
+                outputs["twin_unprojected"] = twin["unprojected"]
         return outputs
     if combine_forward:
         return encode_triplet_combined(model, batch)
@@ -294,7 +355,7 @@ def trainable_state_dict(module: nn.Module) -> dict[str, torch.Tensor]:
         for name, parameter in module.named_parameters()
         if parameter.requires_grad
     }
-    state.update({name: buffer.detach().cpu() for name, buffer in module.named_buffers() if name.endswith(CENTER_BUFFERS)})
+    state.update({name: buffer.detach().cpu() for name, buffer in module.named_buffers() if name.endswith(CENTER_BUFFERS + NULL_BUFFERS)})
     return state
 
 

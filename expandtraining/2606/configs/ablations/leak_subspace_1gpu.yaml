@@ -1,0 +1,49 @@
+# Leak C: project the content subspace out of the style embedding, inside the model. One seed on one 5090;
+# base is infonce_d's nce_stage1 (InfoNCE + hinge for stage 1, then the hinge), so compare with
+# infonce_d_1gpu__nce_stage1__s42 (final top-1 0.161, cgap:origin_vs_para -0.040, para_beats_own 0.534).
+#
+# The subspace is the top-k principal directions of the content twins' embeddings (neutral paraphrases and
+# rewrite sources carry content and little voice), an EMA covariance fed from each batch's detached twins
+# (model.ContentNull). Training, validation and export all see the projected embedding. Unlike the offline
+# within-speaker nullspace (null8 / null32, which made the paraphrase ranking worse: it removes how a
+# speaker's own lines differ), this removes where paraphrases differ. Every validation now also reports
+# the post-hoc version, pnull8 / pnull32 (fitted on seen speakers' paraphrases), so any finished run says
+# whether projection could help before this trains through it.
+# Risk: the encoder can move content into the remaining directions; the basis follows, as the EMA updates.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/leak_subspace_1gpu.yaml
+name: leak_subspace_1gpu
+description: >
+  nce_stage1 with the top 8 or 32 principal directions of the content twins' embeddings projected out of the
+  style embedding during training and inference. Judge by the centered origin_vs_para gap and paraphrase rank
+  against held-out retrieval, at step 3000, against infonce_d's nce_stage1.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.leak_null_dims
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - regularization.leak_method
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+  regularization.leak_method: subspace
+arms:
+  null8:
+    model.leak_null_dims: 8
+  null32:
+    model.leak_null_dims: 32
+comparisons:
+  - {arm: null32, against: null8, isolates: content subspace 8 -> 32 directions}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

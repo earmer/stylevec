@@ -92,3 +92,10 @@ infonce_d_1gpu__nce_stage1_twin__s42: >
   twin keeps the fix without the cost. Final vs nce_stage1: top-1 0.161 -> 0.169, whitened 0.254 -> 0.243,
   centered origin_vs_para gap -0.040 -> -0.047, paraphrase beats own 0.534 -> 0.537, topic_matched cgap
   0.102 -> 0.066, rank 6.9 -> 7.9. No real difference at one seed, for ~1.5x the training time. Done.
+
+leak_subspace_1gpu__null8__s42: >
+  Leak C (full 3000, compare with infonce_d nce_stage1): nce_stage1 with the top 8 principal directions of
+  the content twins' embeddings (running EMA covariance) projected out of the style embedding in training
+  and inference. Tests whether removing where paraphrases differ removes the leak. Not launched.
+leak_subspace_1gpu__null32__s42: >
+  Leak C: as null8 with 32 directions. Tests whether a wider cut helps or starts removing voice. Not launched.

@@ -19,7 +19,7 @@ from typing import Any
 
 import torch
 
-LEAK_METHODS = ("none",)
+LEAK_METHODS = ("none", "subspace")
 
 
 def leak_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -33,6 +33,9 @@ def leak_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def leak_enabled(settings: dict[str, Any]) -> bool:
+    """subspace is a projection inside the model (model.leak_null_*), not a weighted loss."""
+    if settings["method"] == "subspace":
+        return True
     return settings["method"] != "none" and settings["weight"] > 0.0
 
 
@@ -40,6 +43,9 @@ def validate_leak_config(config: dict[str, Any]) -> None:
     settings = leak_settings_from_config(config)
     if settings["method"] not in LEAK_METHODS:
         raise ValueError(f"regularization.leak_method must be one of {LEAK_METHODS}, got {settings['method']!r}")
+    null_dims = int(config["model"].get("leak_null_dims", 0))
+    if (settings["method"] == "subspace") != (null_dims > 0):
+        raise ValueError("regularization.leak_method subspace and model.leak_null_dims > 0 go together")
     if settings["weight"] < 0.0:
         raise ValueError("regularization.leak_weight must be non-negative")
     if settings["queue"] < 0:
@@ -71,11 +77,30 @@ class PairQueue:
 
 
 class LeakState:
-    """Per-run state a method keeps across steps (the pair queue)."""
+    """Per-run state a method keeps across steps: the pair queue, and the encoder's content_null (subspace),
+    whose covariance this method feeds."""
 
-    def __init__(self, settings: dict[str, Any]) -> None:
+    def __init__(self, settings: dict[str, Any], null: torch.nn.Module | None = None) -> None:
         self.settings = settings
         self.queue = PairQueue(settings["queue"])
+        self.null = null
+        if settings["method"] == "subspace" and null is None:
+            raise ValueError("leak_method subspace needs the encoder's content_null (model.leak_null_dims)")
+
+
+def subspace_update(state: LeakState, outputs: dict[str, Any], batch: dict[str, Any]) -> dict[str, torch.Tensor]:
+    """Feeds this batch's unprojected twins to the encoder's content_null; returns how much of the anchors'
+    and twins' (unprojected) embeddings sits in the content subspace."""
+    anchor, _positive, negative = outputs["unprojected"]
+    has_twin, is_negative = batch["has_twin"], batch["twin_is_negative"]
+    twin = torch.where(is_negative[:, None], negative.detach(), outputs["twin_unprojected"])
+    keep = has_twin | is_negative
+    if int(keep.sum()) < 2:
+        return {}
+    state.null.update(twin[keep])
+    return {"null_share_anchor": state.null.share(anchor[keep].detach()).detach(),
+            "null_share_twin": state.null.share(twin[keep]).detach(),
+            "null_updates": state.null.updates.float()}
 
 
 def twin_pairs(outputs: dict[str, Any], batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
@@ -97,6 +122,8 @@ def leak_step_loss(
     zero = outputs["embeddings"][0].new_tensor(0.0)
     if not leak_enabled(settings) or (0 < settings["until_step"] <= global_step):
         return zero, {}
+    if settings["method"] == "subspace":
+        return zero, subspace_update(state, outputs, batch)
     style, twin = twin_pairs(outputs, batch)
     if style.shape[0] < 2:
         return zero, {}

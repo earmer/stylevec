@@ -458,7 +458,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     matryoshka_dims = configured_matryoshka_dims(config)
     objective = objective_settings_from_config(config)
     content_settings = content_settings_from_config(config)
-    leak_state = LeakState(leak_settings_from_config(config))
+    leak_state = LeakState(leak_settings_from_config(config), null=getattr(getattr(model, "module", model), "content_null", None))
     detach_twin = twin_mode(config) == "detached"
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))

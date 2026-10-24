@@ -79,3 +79,33 @@ def test_leak_off_adds_nothing() -> None:
     batch = {"has_twin": torch.tensor([True, True]), "twin_is_negative": torch.tensor([False, False])}
     loss, stats = leak_step_loss(state, outputs, batch, 0)
     assert float(loss) == 0.0 and stats == {}
+
+
+def test_content_null_learns_the_twin_axis_and_projects_it_out() -> None:
+    from model import ContentNull
+
+    torch.manual_seed(0)
+    null = ContentNull(dim=8, dims=1, strength=1.0, momentum=0.5, warmup=2)
+    axis = torch.nn.functional.one_hot(torch.tensor(3), 8).float()
+    for _ in range(3):
+        null.update(torch.randn(64, 1) * 5.0 * axis + 0.1 * torch.randn(64, 8))
+    assert abs(float(null.basis[0] @ axis)) > 0.99
+    x = torch.randn(4, 8)
+    assert torch.allclose(null(x)[:, 3], torch.zeros(4), atol=0.05)
+    assert float(ContentNull(8, 1, 1.0, 0.5, warmup=5).basis.abs().sum()) == 0.0
+
+
+def test_subspace_method_feeds_the_null_and_needs_the_model_option() -> None:
+    from model import ContentNull
+
+    null = ContentNull(dim=4, dims=1, strength=1.0, momentum=0.5, warmup=1)
+    state = LeakState(leak_settings_from_config(config(leak_method="subspace")), null=null)
+    emb = torch.nn.functional.normalize(torch.randn(3, 4), dim=-1)
+    outputs = {"embeddings": (emb, emb, emb), "unprojected": (emb, emb, emb), "twin": emb, "twin_unprojected": emb}
+    batch = {"has_twin": torch.tensor([True, True, False]), "twin_is_negative": torch.tensor([False, False, True])}
+    loss, stats = leak_step_loss(state, outputs, batch, 0)
+    assert float(loss) == 0.0 and int(null.updates) == 1 and "null_share_anchor" in stats
+    with pytest.raises(ValueError):
+        validate_leak_config(config(leak_method="subspace"))
+    with pytest.raises(ValueError):
+        LeakState(leak_settings_from_config(config(leak_method="subspace")))

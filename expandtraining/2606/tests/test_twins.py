@@ -143,3 +143,14 @@ def test_paraphrase_rank_separates_style_from_content_and_nullspace_keeps_shape(
     assert near["para_beats_own_heldout"] > far["para_beats_own_heldout"] and near["para_top1_heldout"] > 0
     projected = within_speaker_nullspace(rows, emb, 2)
     assert projected.shape == emb.shape and np.allclose(np.linalg.norm(projected, axis=1), 1.0)
+
+
+def test_paraphrase_nullspace_removes_the_shared_content_axis() -> None:
+    from report import paraphrase_nullspace
+
+    rows, emb = probe_rows(0.0)
+    assert paraphrase_nullspace(rows, emb, 2) is None  # only A/B (held out) have paraphrases here
+    rows = rows.copy()
+    rows["heldout"] = False
+    projected = paraphrase_nullspace(rows, emb, 2)
+    assert projected.shape == emb.shape and np.allclose(np.linalg.norm(projected, axis=1), 1.0)
