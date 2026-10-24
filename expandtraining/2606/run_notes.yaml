@@ -107,9 +107,10 @@ leak_adversary_1gpu__adv_w05__s42: >
   Leak B (full 3000, compare with infonce_d nce_stage1): nce_stage1 + an MLP probe that picks each anchor's
   content twin among 512 queued twins from its style embedding; the encoder is pushed to make the pick
   uniform (weight 0.5, ramped over 200 steps). Tests whether an adversarial instance-level content readout
-  removes the origin_vs_para leak. Done 2026-10-24. Step 3000 vs nce_stage1: top-1 0.154 (0.161), whitened
-  0.252 (0.254), centered origin_vs_para gap -0.023 (-0.040), paraphrase beats own 0.504 (0.534), rank 6.6
-  (6.9). Small leak gain, within likely seed noise; seed-43 control pending.
+  removes the origin_vs_para leak. Done 2026-10-25. Step 3000 vs nce_stage1: top-1 0.122 (0.161),
+  whitened 0.268 (0.254), centered gap +0.054 (-0.040), paraphrase beats own 0.488 (0.534), rank 3.5 (6.9).
+  Largest leak fix so far; raw top-1 pays because the embedding collapses to a few directions (whitening
+  recovers it).
 leak_adversary_1gpu__adv_w2__s42: >
   Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Queued 2026-10-24 (leak-all chain).
 leak_subspace_1gpu__null8__s42: >
