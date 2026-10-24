@@ -1,0 +1,31 @@
+# Control: infonce_d's nce_stage1, seed 43. Every leak branch (A hsic, B adversary, C subspace, E chead v2) is
+# one seed against nce_stage1 seed 42; this second seed is the noise bar those comparisons are read against.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/nce_seed_1gpu.yaml
+name: nce_seed_1gpu
+description: >
+  infonce_d's nce_stage1 (InfoNCE + hinge for stage 1, then the hinge) at seed 43: the seed-noise control
+  for the leak branches.
+seeds: [43]
+base: configs/remote_5090x2.yaml
+world_size: 1
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+arms:
+  nce_stage1: {}
+comparisons: []
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

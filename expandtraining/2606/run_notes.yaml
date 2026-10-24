@@ -119,3 +119,9 @@ chead_v2_1gpu__chead2__s42: >
 chead_v2_1gpu__chead2_orth__s42: >
   Leak E: chead2 + orthogonal style and content heads (weight 1). Tests whether separating what the heads
   read moves content out of the style side. Not launched.
+nce_seed_1gpu__nce_stage1__s43: >
+  Control (full 3000): infonce_d's nce_stage1 at seed 43. The seed-noise bar for every one-seed leak branch
+  (A-E) read against nce_stage1 seed 42. Not launched.
+curriculum_hard_1gpu__hard30__s42: >
+  Leak D (full 3000, compare with infonce_d nce_stage1): stage 3 easy/mid/hard 0.30/0.40/0.30 instead of
+  0.20/0.30/0.50. Tests whether the 2100 -> 3000 leak drift comes from the hard topic-matched rows. Not launched.
