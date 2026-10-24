@@ -92,3 +92,10 @@ infonce_d_1gpu__nce_stage1_twin__s42: >
   twin keeps the fix without the cost. Final vs nce_stage1: top-1 0.161 -> 0.169, whitened 0.254 -> 0.243,
   centered origin_vs_para gap -0.040 -> -0.047, paraphrase beats own 0.534 -> 0.537, topic_matched cgap
   0.102 -> 0.066, rank 6.9 -> 7.9. No real difference at one seed, for ~1.5x the training time. Done.
+
+nce_seed_1gpu__nce_stage1__s43: >
+  Control (full 3000): infonce_d's nce_stage1 at seed 43. The seed-noise bar for every one-seed leak branch
+  (A-E) read against nce_stage1 seed 42. Not launched.
+curriculum_hard_1gpu__hard30__s42: >
+  Leak D (full 3000, compare with infonce_d nce_stage1): stage 3 easy/mid/hard 0.30/0.40/0.30 instead of
+  0.20/0.30/0.50. Tests whether the 2100 -> 3000 leak drift comes from the hard topic-matched rows. Not launched.

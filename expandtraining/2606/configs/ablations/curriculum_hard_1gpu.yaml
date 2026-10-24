@@ -1,0 +1,39 @@
+# Leak D (no new loss): stage 3's hard share. nce_stage1's leak crept back between steps 2100 and 3000
+# (cgap:origin_vs_para -0.021 -> -0.040, para_beats_own 0.505 -> 0.534), when half of each batch became hard
+# topic-matched negatives that even the plain hinge partly meets with content cues. hard30 keeps the first two
+# stages and moves stage 3 from easy/mid/hard 0.20/0.30/0.50 to 0.30/0.40/0.30. Seed 42, so compare with
+# infonce_d_1gpu__nce_stage1__s42 (final top-1 0.161, cgap -0.040, topic_matched cgap 0.102: the hard rows
+# are what taught that last one, so watch it).
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/curriculum_hard_1gpu.yaml
+name: curriculum_hard_1gpu
+description: >
+  nce_stage1 with stage 3's hard-negative share cut from 0.50 to 0.30. Tests whether the late leak drift comes
+  from the hard topic-matched rows. Judge against infonce_d's nce_stage1 at step 3000.
+seeds: [42]
+base: configs/remote_5090x2.yaml
+world_size: 1
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+arms:
+  hard30:
+    curriculum.stages:
+      - {until: 0.35, tiers: {easy: 0.70, mid: 0.25, hard: 0.05}}
+      - {until: 0.70, tiers: {easy: 0.35, mid: 0.40, hard: 0.25}}
+      - {until: 1.00, tiers: {easy: 0.30, mid: 0.40, hard: 0.30}}
+comparisons: []
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]
