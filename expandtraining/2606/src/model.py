@@ -307,6 +307,8 @@ def encode_triplet_outputs(
             outputs["twin"] = twin["embeddings"]
             if "unprojected" in twin:
                 outputs["twin_unprojected"] = twin["unprojected"]
+            if "content" in twin:
+                outputs["twin_content"] = twin["content"]
         return outputs
     if combine_forward:
         return encode_triplet_combined(model, batch)

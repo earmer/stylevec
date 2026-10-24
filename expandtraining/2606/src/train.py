@@ -31,6 +31,7 @@ from curriculum import curriculum_order, schedule_summary
 from losses import (
     content_pair_loss,
     cross_correlation_penalty,
+    orthogonal_heads_penalty,
     embedding_spread_loss,
     info_nce_loss,
     matryoshka_prefix_loss,
@@ -266,7 +267,10 @@ def twin_mode(config: dict[str, Any]) -> str:
     objective = objective_settings_from_config(config)
     if objective["loss"] == "infonce" and objective["twin_temperature"] > 0.0:
         return "grad"
-    return "detached" if leak_enabled(leak_settings_from_config(config)) else "none"
+    if leak_enabled(leak_settings_from_config(config)):
+        return "detached"
+    content = content_settings_from_config(config)
+    return "detached" if content["enabled"] and content["twin_pairs"] else "none"
 
 
 def build_loaders(
@@ -499,7 +503,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
-                    content_loss, content_stats = content_step_loss(outputs, batch, content_settings)
+                    content_loss, content_stats = content_step_loss(outputs, batch, content_settings, model)
                     leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
                     loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss
                     if grad_accum > 1:
@@ -567,7 +571,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                         groups,
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
-                    content_loss, content_stats = content_step_loss(outputs, batch, content_settings)
+                    content_loss, content_stats = content_step_loss(outputs, batch, content_settings, model)
                     leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
                     loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
@@ -832,13 +836,17 @@ CONTENT_PAIR_RULES = frozenset({"origin_vs_para", "paratarget_original_push", "s
 
 def content_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
     """model.content_dim > 0 adds the content head. regularization.content_weight trains it on content pairs;
-    content_leak_weight pushes the style embedding away from linear correlation with it."""
+    content_leak_weight pushes the style embedding away from linear correlation with it. content_twin_pairs
+    also trains the head on every row with a content twin (anchor -> detached twin; ~63% of rows, against
+    ~31% for the pair rules); content_orthogonal_weight pushes the two heads to read orthogonal directions."""
     regularization = config.get("regularization", {})
     return {
         "enabled": int(config["model"].get("content_dim", 0)) > 0,
         "weight": float(regularization.get("content_weight", 0.5)),
         "temperature": float(regularization.get("content_temperature", 0.1)),
         "leak_weight": float(regularization.get("content_leak_weight", 0.0)),
+        "twin_pairs": bool(regularization.get("content_twin_pairs", False)),
+        "orthogonal_weight": float(regularization.get("content_orthogonal_weight", 0.0)),
     }
 
 
@@ -856,13 +864,20 @@ def content_step_loss(
     outputs: dict[str, Any],
     batch: dict[str, Any],
     settings: dict[str, Any],
+    model: torch.nn.Module | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Content-head InfoNCE on CONTENT_PAIR_RULES rows, plus the style/content leakage penalty."""
+    """Content-head InfoNCE on CONTENT_PAIR_RULES rows (and, with twin_pairs, every row with a content
+    twin, whose target is the detached twin instead of the negative), plus the leakage penalties."""
     if not settings["enabled"]:
         return outputs["embeddings"][0].new_tensor(0.0), {}
     anchor, positive, negative = outputs["content"]
     device = anchor.device
     is_pair = torch.tensor([rule in CONTENT_PAIR_RULES for rule in batch["rule"]], dtype=torch.bool, device=device)
+    if settings["twin_pairs"] and "twin_content" in outputs:
+        # Duplicate masking still compares against the negative's text; a twin row's target is its twin.
+        has_twin = batch["has_twin"]
+        negative = torch.where(has_twin[:, None], outputs["twin_content"].detach(), negative)
+        is_pair = is_pair | has_twin
     loss, stats = content_pair_loss(
         anchor, positive, negative, is_pair, content_duplicates(batch, device), settings["temperature"]
     )
@@ -874,6 +889,12 @@ def content_step_loss(
     total = loss * settings["weight"]
     if settings["leak_weight"] > 0.0:
         total = total + leak * settings["leak_weight"]
+    module = getattr(model, "module", model)
+    if module is not None and getattr(module, "content_head", None) is not None:
+        orthogonal = orthogonal_heads_penalty(module.projection.weight, module.content_head.weight)
+        stats["orthogonal"] = orthogonal.detach()
+        if settings["orthogonal_weight"] > 0.0:
+            total = total + orthogonal * settings["orthogonal_weight"]
     return total, stats
 
 

@@ -171,6 +171,18 @@ def content_pair_loss(
     return loss, stats
 
 
+def orthogonal_heads_penalty(style_weight: torch.Tensor, content_weight: torch.Tensor) -> torch.Tensor:
+    """How much the content head reads the same pooled directions as the style projection: per content
+    row, the sum over style rows of their squared cosine, averaged over content rows. 0 when the two heads
+    read orthogonal subspaces of the pooled hidden state; random heads give about style_rows / hidden.
+    A constraint on the weights, so it has no batch noise floor (unlike cross_correlation_penalty), but it
+    only separates what the heads read: the same information can sit in two directions."""
+    with torch.autocast(device_type=style_weight.device.type, enabled=False):
+        s = F.normalize(style_weight.float(), dim=-1)
+        c = F.normalize(content_weight.float(), dim=-1)
+        return (c @ s.T).pow(2).sum(dim=1).mean()
+
+
 def cross_correlation_penalty(style: torch.Tensor, content: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
     """How linearly visible each content dimension is in the style embedding: per content dimension, the
     sum over style dimensions of their squared batch correlation, averaged over content dimensions. With
