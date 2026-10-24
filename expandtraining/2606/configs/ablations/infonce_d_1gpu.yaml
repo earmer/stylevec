@@ -1,0 +1,47 @@
+# InfoNCE D: infonce_c's winner (nce_stage1) for the full 3000 steps, with and without a softer content twin.
+# One seed on one 5090. See RESULTS_infonce.md and run_notes.yaml for infonce_c.
+#
+# nce_stage1: InfoNCE (T 0.05 + hinge x10) for stage 1 (steps 0-1050), then the plain hinge. At step 2100
+#   it held the centered origin_vs_para gap at -0.021 (hinge -0.158) for top-1 0.157 (hinge 0.187).
+# nce_stage1_twin: the same plus each row's content twin as an extra InfoNCE candidate at T 0.1. At T 0.03
+#   (infonce_c twin) the twin removed the leak (paraphrase beats own lines 0.49) but cost ~40% of top-1;
+#   0.1 is softer than the rest's 0.05. The twin only acts while InfoNCE does (stage 1); the twin forward
+#   still runs afterwards (unused), so this arm is the slower one. Gradient checkpointing: the four-role
+#   forward does not fit the 5090 without it.
+# Judge by cgap:origin_vs_para and para_beats_own_heldout against heldout_top1_macro, at step 3000.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/infonce_d_1gpu.yaml
+name: infonce_d_1gpu
+description: >
+  infonce_c's nce_stage1 (InfoNCE for stage 1 only, then the hinge) for the full 3000 steps, with and without
+  each row's content twin as a softer (T 0.1) InfoNCE candidate during stage 1.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_twin_temperature
+  - train.infonce_until_step
+  - model.gradient_checkpointing
+  - validation.matryoshka_dims
+common:
+  train.grad_accum: 8
+  curriculum.mode: staged
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+arms:
+  nce_stage1: {}
+  nce_stage1_twin:
+    train.infonce_twin_temperature: 0.1
+    model.gradient_checkpointing: true
+comparisons:
+  - {arm: nce_stage1_twin, against: nce_stage1, isolates: content twin (T 0.1) in stage-1 InfoNCE,
+     keys: [model.gradient_checkpointing, train.infonce_twin_temperature]}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

@@ -78,3 +78,12 @@ infonce_c_1gpu__nce_stage1__s42: >
   hinge's 2100: centered origin_vs_para gap -0.158 -> -0.021, raw -0.025 -> +0.117, topic_matched cgap 0.071
   -> 0.125, top-1 0.187 -> 0.157, whitened 0.269 -> 0.257, rank 10.6 -> 7.4; paraphrase beats own 0.505. Best
   balance of the four; candidate for the full 3000. Done.
+
+infonce_d_1gpu__nce_stage1__s42: >
+  InfoNCE D (full 3000): infonce_c nce_stage1 run to the end. InfoNCE T 0.05 + hinge x10 for stage 1
+  (0-1050), then the plain hinge. Tests whether the small origin_vs_para leak (cgap -0.021 at 2100) and the
+  top-1 gap to the hinge (0.157 vs 0.187) hold through stage 3. Queued.
+infonce_d_1gpu__nce_stage1_twin__s42: >
+  InfoNCE D (full 3000): nce_stage1 + each row's content twin as an extra InfoNCE candidate at T 0.1 during
+  stage 1 (gradient checkpointing). T 0.03 removed the leak but cost ~40% of top-1; tests whether a softer
+  twin keeps the fix without the cost. Queued.
