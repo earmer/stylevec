@@ -96,32 +96,32 @@ infonce_d_1gpu__nce_stage1_twin__s42: >
 leak_hsic_1gpu__hsic_w05__s42: >
   Leak A (full 3000, compare with infonce_d nce_stage1): nce_stage1 + debiased RBF CKA between anchor style
   embeddings and their detached content twins (256-pair queue) at weight 0.5. Tests whether an
-  instance-level independence penalty over ~63% of rows removes the origin_vs_para leak. Not launched.
+  instance-level independence penalty over ~63% of rows removes the origin_vs_para leak. Queued 2026-10-24 (leak-all chain).
 leak_hsic_1gpu__hsic_w2__s42: >
-  Leak A: as hsic_w05 at weight 2. The higher dose; watch whether top-1 pays for it. Not launched.
+  Leak A: as hsic_w05 at weight 2. The higher dose; watch whether top-1 pays for it. Queued 2026-10-24 (leak-all chain).
 leak_adversary_1gpu__adv_w05__s42: >
   Leak B (full 3000, compare with infonce_d nce_stage1): nce_stage1 + an MLP probe that picks each anchor's
   content twin among 512 queued twins from its style embedding; the encoder is pushed to make the pick
   uniform (weight 0.5, ramped over 200 steps). Tests whether an adversarial instance-level content readout
-  removes the origin_vs_para leak. Not launched.
+  removes the origin_vs_para leak. Queued 2026-10-24 (leak-all chain).
 leak_adversary_1gpu__adv_w2__s42: >
-  Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Not launched.
+  Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Queued 2026-10-24 (leak-all chain).
 leak_subspace_1gpu__null8__s42: >
   Leak C (full 3000, compare with infonce_d nce_stage1): nce_stage1 with the top 8 principal directions of
   the content twins' embeddings (running EMA covariance) projected out of the style embedding in training
-  and inference. Tests whether removing where paraphrases differ removes the leak. Not launched.
+  and inference. Tests whether removing where paraphrases differ removes the leak. Queued 2026-10-24 (leak-all chain).
 leak_subspace_1gpu__null32__s42: >
-  Leak C: as null8 with 32 directions. Tests whether a wider cut helps or starts removing voice. Not launched.
+  Leak C: as null8 with 32 directions. Tests whether a wider cut helps or starts removing voice. Queued 2026-10-24 (leak-all chain).
 chead_v2_1gpu__chead2__s42: >
   Leak E (full 3000, compare with infonce_d nce_stage1 and infonce_b chead): nce_stage1 + a 64-dim content
   head trained on every row with a content twin (~63% of rows) + the linear leak penalty (0.05). Tests
-  whether chead's retrieval (top-1 0.194) survives without its leak once InfoNCE stops at 1050. Not launched.
+  whether chead's retrieval (top-1 0.194) survives without its leak once InfoNCE stops at 1050. Queued 2026-10-24 (leak-all chain).
 chead_v2_1gpu__chead2_orth__s42: >
   Leak E: chead2 + orthogonal style and content heads (weight 1). Tests whether separating what the heads
-  read moves content out of the style side. Not launched.
+  read moves content out of the style side. Queued 2026-10-24 (leak-all chain).
 nce_seed_1gpu__nce_stage1__s43: >
   Control (full 3000): infonce_d's nce_stage1 at seed 43. The seed-noise bar for every one-seed leak branch
-  (A-E) read against nce_stage1 seed 42. Not launched.
+  (A-E) read against nce_stage1 seed 42. Queued 2026-10-24 (leak-all chain).
 curriculum_hard_1gpu__hard30__s42: >
   Leak D (full 3000, compare with infonce_d nce_stage1): stage 3 easy/mid/hard 0.30/0.40/0.30 instead of
-  0.20/0.30/0.50. Tests whether the 2100 -> 3000 leak drift comes from the hard topic-matched rows. Not launched.
+  0.20/0.30/0.50. Tests whether the 2100 -> 3000 leak drift comes from the hard topic-matched rows. Queued 2026-10-24 (leak-all chain).
