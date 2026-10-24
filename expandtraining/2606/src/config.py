@@ -108,7 +108,7 @@ def validate_loss_config(config: dict[str, Any]) -> None:
     regularization = config.get("regularization", {})
     if float(regularization.get("content_temperature", 0.1)) <= 0.0:
         raise ValueError("regularization.content_temperature must be positive")
-    for key in ("content_weight", "content_leak_weight"):
+    for key in ("content_weight", "content_leak_weight", "content_orthogonal_weight"):
         if float(regularization.get(key, 0.0)) < 0.0:
             raise ValueError(f"regularization.{key} must be non-negative")
     validate_leak_config(config)

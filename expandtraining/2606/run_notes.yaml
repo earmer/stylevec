@@ -92,3 +92,11 @@ infonce_d_1gpu__nce_stage1_twin__s42: >
   twin keeps the fix without the cost. Final vs nce_stage1: top-1 0.161 -> 0.169, whitened 0.254 -> 0.243,
   centered origin_vs_para gap -0.040 -> -0.047, paraphrase beats own 0.534 -> 0.537, topic_matched cgap
   0.102 -> 0.066, rank 6.9 -> 7.9. No real difference at one seed, for ~1.5x the training time. Done.
+
+chead_v2_1gpu__chead2__s42: >
+  Leak E (full 3000, compare with infonce_d nce_stage1 and infonce_b chead): nce_stage1 + a 64-dim content
+  head trained on every row with a content twin (~63% of rows) + the linear leak penalty (0.05). Tests
+  whether chead's retrieval (top-1 0.194) survives without its leak once InfoNCE stops at 1050. Not launched.
+chead_v2_1gpu__chead2_orth__s42: >
+  Leak E: chead2 + orthogonal style and content heads (weight 1). Tests whether separating what the heads
+  read moves content out of the style side. Not launched.

@@ -235,7 +235,10 @@ def encode_triplet_outputs(
     if detach_twin and "twin" in batch:
         outputs = encode_triplet_outputs(model, {k: v for k, v in batch.items() if k != "twin"}, combine_forward)
         with torch.no_grad():
-            outputs["twin"] = model(**batch["twin"])["embeddings"]
+            twin = model(**batch["twin"])
+            outputs["twin"] = twin["embeddings"]
+            if "content" in twin:
+                outputs["twin_content"] = twin["content"]
         return outputs
     if combine_forward:
         return encode_triplet_combined(model, batch)

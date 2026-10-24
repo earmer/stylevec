@@ -140,3 +140,34 @@ def test_config_refuses_bad_content_settings(key, value) -> None:
 
     with pytest.raises(ValueError):
         validate_loss_config({"train": {}, "model": {"content_dim": 8}, "regularization": {key: value}})
+
+
+def test_orthogonal_heads_penalty_is_zero_for_orthogonal_rows_and_one_for_shared() -> None:
+    from losses import orthogonal_heads_penalty
+
+    eye = torch.eye(4)
+    assert float(orthogonal_heads_penalty(eye[:2], eye[2:])) == pytest.approx(0.0)
+    assert float(orthogonal_heads_penalty(eye[:2], eye[:1])) == pytest.approx(1.0)
+
+
+def test_content_twin_pairs_train_on_twin_rows_and_the_orthogonal_term_reaches_both_heads() -> None:
+    from train import twin_mode
+
+    model = encoder(2)
+    batch = {
+        **token_batch(),
+        "twin": token_batch()["positive"],
+        "has_twin": torch.tensor([False, True]), "twin_is_negative": torch.tensor([True, False]),
+        "rule": ["origin_vs_para", "same_speaker_real"],
+        "anchor_text": ["a", "b"], "positive_text": ["c", "d"], "negative_text": ["a2", "e"],
+    }
+    regularization = {"content_weight": 1.0, "content_twin_pairs": True, "content_orthogonal_weight": 1.0}
+    config = {"model": {"content_dim": 2}, "train": {"loss": "triplet"}, "regularization": regularization}
+    assert twin_mode(config) == "detached"
+    outputs = encode_triplet_outputs(model, batch, detach_twin=True)
+    assert "twin_content" in outputs and not outputs["twin_content"].requires_grad
+    loss, stats = content_step_loss(outputs, batch, content_settings_from_config(config), model)
+    assert stats["pairs"] == 2 and "orthogonal" in stats
+    loss.backward()
+    assert torch.count_nonzero(model.content_head.weight.grad) > 0
+    assert torch.count_nonzero(model.projection.weight.grad) > 0
