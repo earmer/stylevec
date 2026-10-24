@@ -22,7 +22,7 @@ import torch
 import torch.nn.functional as F
 from torch.func import functional_call
 
-LEAK_METHODS = ("none", "hsic", "adversary")
+LEAK_METHODS = ("none", "hsic", "adversary", "subspace")
 HSIC_KERNELS = ("rbf", "linear")
 
 
@@ -40,6 +40,9 @@ def leak_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def leak_enabled(settings: dict[str, Any]) -> bool:
+    """subspace is a projection inside the model (model.leak_null_*), not a weighted loss."""
+    if settings["method"] == "subspace":
+        return True
     return settings["method"] != "none" and settings["weight"] > 0.0
 
 
@@ -53,6 +56,9 @@ def validate_leak_config(config: dict[str, Any]) -> None:
         raise ValueError("regularization.leak_method adversary needs model.leak_probe_hidden > 0")
     if settings["probe_temperature"] <= 0.0 or settings["probe_warmup"] < 0:
         raise ValueError("regularization.leak_probe_temperature must be positive, leak_probe_warmup >= 0")
+    null_dims = int(config["model"].get("leak_null_dims", 0))
+    if (settings["method"] == "subspace") != (null_dims > 0):
+        raise ValueError("regularization.leak_method subspace and model.leak_null_dims > 0 go together")
     if settings["weight"] < 0.0:
         raise ValueError("regularization.leak_weight must be non-negative")
     if settings["queue"] < 0:
@@ -120,15 +126,20 @@ class PairQueue:
 
 
 class LeakState:
-    """Per-run state a method keeps across steps: the pair queue, and the adversary's probe (a module of
-    the encoder, so the optimizer and checkpoints already hold it)."""
+    """Per-run state a method keeps across steps: the pair queue, the adversary's probe (a module of the
+    encoder, so the optimizer and checkpoints already hold it), and the encoder's content_null (subspace),
+    whose covariance that method feeds."""
 
-    def __init__(self, settings: dict[str, Any], probe: torch.nn.Module | None = None) -> None:
+    def __init__(self, settings: dict[str, Any], probe: torch.nn.Module | None = None,
+                 null: torch.nn.Module | None = None) -> None:
         self.settings = settings
         self.queue = PairQueue(settings["queue"])
         self.probe = probe
+        self.null = null
         if settings["method"] == "adversary" and leak_enabled(settings) and probe is None:
             raise ValueError("leak_method adversary needs the encoder's leak_probe (model.leak_probe_hidden)")
+        if settings["method"] == "subspace" and null is None:
+            raise ValueError("leak_method subspace needs the encoder's content_null (model.leak_null_dims)")
 
 
 def probe_logits(probe: torch.nn.Module, style: torch.Tensor, twins: torch.Tensor, temperature: float,
@@ -165,6 +176,21 @@ def adversary_loss(probe: torch.nn.Module, style: torch.Tensor, twins: torch.Ten
     return probe_ce, confusion * ramp, stats
 
 
+def subspace_update(state: LeakState, outputs: dict[str, Any], batch: dict[str, Any]) -> dict[str, torch.Tensor]:
+    """Feeds this batch's unprojected twins to the encoder's content_null; returns how much of the anchors'
+    and twins' (unprojected) embeddings sits in the content subspace."""
+    anchor, _positive, negative = outputs["unprojected"]
+    has_twin, is_negative = batch["has_twin"], batch["twin_is_negative"]
+    twin = torch.where(is_negative[:, None], negative.detach(), outputs["twin_unprojected"])
+    keep = has_twin | is_negative
+    if int(keep.sum()) < 2:
+        return {}
+    state.null.update(twin[keep])
+    return {"null_share_anchor": state.null.share(anchor[keep].detach()).detach(),
+            "null_share_twin": state.null.share(twin[keep]).detach(),
+            "null_updates": state.null.updates.float()}
+
+
 def twin_pairs(outputs: dict[str, Any], batch: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
     """(anchor style embeddings, detached twin embeddings) for every row with a twin."""
     anchor, _positive, negative = outputs["embeddings"]
@@ -184,6 +210,8 @@ def leak_step_loss(
     zero = outputs["embeddings"][0].new_tensor(0.0)
     if not leak_enabled(settings) or (0 < settings["until_step"] <= global_step):
         return zero, {}
+    if settings["method"] == "subspace":
+        return zero, subspace_update(state, outputs, batch)
     style, twin = twin_pairs(outputs, batch)
     if style.shape[0] < 4:
         return zero, {}

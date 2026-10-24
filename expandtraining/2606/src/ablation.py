@@ -35,7 +35,7 @@ DEFAULT_FOCUS_RULES = [
     "bookraw_same_author_cross_work",
 ]
 LOWER_IS_BETTER = ("provenance_", "violation:", "macro_violation", "memory_gap", "top_component_ratio", "length_r2",
-                   "para_beats", "para_top1", "null8_para", "null32_para")
+                   "para_beats", "para_top1", "null8_para", "null32_para", "pnull8_para", "pnull32_para")
 DEFAULT_KILL = {"retrieval_lift_max": 0.05, "provenance_min": 0.85}
 
 
@@ -452,7 +452,8 @@ DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout
                    "heldout_top1_macro", "seen_top1_matched", "memory_gap_matched",
                    "heldout_top1_d32", "heldout_top1_d64", "heldout_top1_d128",
                    "para_beats_own_heldout", "para_top1_heldout", "null8_top1", "null8_para_beats_own_heldout",
-                   "null32_top1", "null32_para_beats_own_heldout")
+                   "null32_top1", "null32_para_beats_own_heldout",
+                   "pnull8_top1", "pnull8_para_beats_own_heldout", "pnull32_top1", "pnull32_para_beats_own_heldout")
 SPEAKER_PAIRED = "heldout_top1_macro (paired by speaker)"
 
 

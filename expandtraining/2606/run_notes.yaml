@@ -106,3 +106,9 @@ leak_adversary_1gpu__adv_w05__s42: >
   removes the origin_vs_para leak. Not launched.
 leak_adversary_1gpu__adv_w2__s42: >
   Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Not launched.
+leak_subspace_1gpu__null8__s42: >
+  Leak C (full 3000, compare with infonce_d nce_stage1): nce_stage1 with the top 8 principal directions of
+  the content twins' embeddings (running EMA covariance) projected out of the style embedding in training
+  and inference. Tests whether removing where paraphrases differ removes the leak. Not launched.
+leak_subspace_1gpu__null32__s42: >
+  Leak C: as null8 with 32 directions. Tests whether a wider cut helps or starts removing voice. Not launched.
