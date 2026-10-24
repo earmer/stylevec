@@ -79,3 +79,45 @@ def test_leak_off_adds_nothing() -> None:
     batch = {"has_twin": torch.tensor([True, True]), "twin_is_negative": torch.tensor([False, False])}
     loss, stats = leak_step_loss(state, outputs, batch, 0)
     assert float(loss) == 0.0 and stats == {}
+
+
+def probe_state(weight: float = 1.0, warmup: int = 0) -> LeakState:
+    settings = leak_settings_from_config(config(leak_method="adversary", leak_weight=weight, leak_probe_warmup=warmup))
+    probe = torch.nn.Sequential(torch.nn.Linear(8, 16), torch.nn.GELU(), torch.nn.Linear(16, 8))
+    return LeakState(settings, probe=probe)
+
+
+def test_adversary_probe_learns_twins_and_only_the_encoder_term_reaches_style() -> None:
+    from leak import adversary_loss
+
+    torch.manual_seed(0)
+    state = probe_state()
+    twins = torch.nn.functional.normalize(torch.randn(16, 8), dim=-1)
+    style = twins.clone().requires_grad_(True)
+    optimizer = torch.optim.Adam(state.probe.parameters(), lr=0.02)
+    for step in range(200):
+        probe_ce, confusion, stats = adversary_loss(state.probe, style, twins, 16, state.settings, step)
+        optimizer.zero_grad()
+        probe_ce.backward()
+        optimizer.step()
+    assert stats["probe_acc"] > 0.9 and style.grad is None
+    _, confusion, _ = adversary_loss(state.probe, style, twins, 16, state.settings, 0)
+    confusion.backward()
+    assert style.grad.abs().sum() > 0  # the frozen probe's weights get nothing (below)
+    before = [p.grad.clone() for p in state.probe.parameters()]
+    _, confusion, _ = adversary_loss(state.probe, style, twins, 16, state.settings, 0)
+    confusion.backward()
+    assert all(torch.equal(b, p.grad) for b, p in zip(before, state.probe.parameters()))
+
+
+def test_adversary_ramp_and_config_checks() -> None:
+    from leak import adversary_loss
+
+    state = probe_state(warmup=10)
+    twins = torch.nn.functional.normalize(torch.randn(6, 8), dim=-1)
+    _, early, stats = adversary_loss(state.probe, twins.clone(), twins, 6, state.settings, 0)
+    assert float(stats["ramp"]) == pytest.approx(0.1)
+    with pytest.raises(ValueError):
+        validate_leak_config(config(leak_method="adversary", leak_weight=1.0))
+    with pytest.raises(ValueError):
+        LeakState(leak_settings_from_config(config(leak_method="adversary", leak_weight=1.0)))

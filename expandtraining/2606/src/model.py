@@ -23,6 +23,7 @@ class EncoderSettings:
     center: str = "none"
     center_momentum: float = 0.01
     content_dim: int = 0
+    leak_probe_hidden: int = 0
 
 
 class MeanPool(nn.Module):
@@ -120,6 +121,14 @@ class QwenStyleEncoder(nn.Module):
         # A small separate head trained to hold content (issue #1): the style embedding stays projection_dim
         # wide, and validation, retrieval and export never read this head.
         self.content_head = nn.Linear(projection_in, settings.content_dim) if settings.content_dim > 0 else None
+        # The leak adversary (leak.py): reads a style embedding and guesses its content twin. Training only.
+        self.leak_probe = None
+        if settings.leak_probe_hidden > 0:
+            self.leak_probe = nn.Sequential(
+                nn.Linear(settings.projection_dim, settings.leak_probe_hidden),
+                nn.GELU(),
+                nn.Linear(settings.leak_probe_hidden, settings.projection_dim),
+            )
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
         need_hidden = self.settings.layer_mode != "last"
@@ -162,6 +171,7 @@ def build_encoder_settings(config: dict[str, Any]) -> EncoderSettings:
         center=str(model_cfg.get("center", "none")),
         center_momentum=float(model_cfg.get("center_momentum", 0.01)),
         content_dim=int(model_cfg.get("content_dim", 0)),
+        leak_probe_hidden=int(model_cfg.get("leak_probe_hidden", 0)),
     )
 
 
