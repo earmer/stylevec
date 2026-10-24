@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from leak import LeakState, leak_enabled, leak_settings_from_config, leak_step_loss
 from prebuilt import load_or_build
 import tracking
 from config import (
@@ -259,14 +260,21 @@ def order_train_triplets(
     )
 
 
+def twin_mode(config: dict[str, Any]) -> str:
+    """How the train batches carry content twins: "none"; "grad" when InfoNCE scores them as candidates
+    (the encoder is trained through them); "detached" when only a leak regulariser reads them as a target."""
+    objective = objective_settings_from_config(config)
+    if objective["loss"] == "infonce" and objective["twin_temperature"] > 0.0:
+        return "grad"
+    return "detached" if leak_enabled(leak_settings_from_config(config)) else "none"
+
+
 def build_loaders(
     config: dict[str, Any],
     tokenizer: Any,
     triplets: list[Any],
 ) -> tuple[TripletTextDataset, DataLoader, DataLoader]:
-    objective = objective_settings_from_config(config)
-    twins = objective["loss"] == "infonce" and objective["twin_temperature"] > 0.0
-    collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]), twins=twins)
+    collate = make_triplet_collate(tokenizer, int(config["model"]["max_length"]), twins=twin_mode(config) != "none")
     train_triplets = [row for row in triplets if row.split == "train"]
     train_dataset = TripletTextDataset(order_train_triplets(config, train_triplets, epoch=0), "train")
     val_dataset = TripletTextDataset(
@@ -450,6 +458,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     matryoshka_dims = configured_matryoshka_dims(config)
     objective = objective_settings_from_config(config)
     content_settings = content_settings_from_config(config)
+    leak_state = LeakState(leak_settings_from_config(config))
+    detach_twin = twin_mode(config) == "detached"
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
     log_every_steps = max(1, int(config.get("logging", {}).get("train_every_steps", 1)))
@@ -467,7 +477,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
             batch = move_batch_to_device(batch, device, non_blocking=non_blocking)
             if use_accelerate:
                 with accelerator.accumulate(model):
-                    outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward)
+                    outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward, detach_twin=detach_twin)
                     anchor, positive, negative = outputs["embeddings"]
                     norms = outputs["pre_norm"]
                     step_objective = objective_at_step(objective, global_step)
@@ -488,7 +498,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     content_loss, content_stats = content_step_loss(outputs, batch, content_settings)
-                    loss = loss + spread_loss + matryoshka_loss + content_loss
+                    leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
+                    loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss
                     if grad_accum > 1:
                         window_size = accumulation_window(batch_index, total_batches, grad_accum)
                         loss = loss * (float(grad_accum) / float(window_size))
@@ -525,6 +536,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                                 spread_stats,
                                 matryoshka_stats,
                                 content_stats,
+                                leak_stats,
                                 norms,
                                 optimizer,
                                 grad_norm,
@@ -533,7 +545,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                             )
             else:
                 with autocast_context(device, precision):
-                    outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward)
+                    outputs = encode_triplet_outputs(model, batch, combine_forward=combine_forward, detach_twin=detach_twin)
                     anchor, positive, negative = outputs["embeddings"]
                     norms = outputs["pre_norm"]
                     step_objective = objective_at_step(objective, global_step)
@@ -554,7 +566,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     )
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     content_loss, content_stats = content_step_loss(outputs, batch, content_settings)
-                    loss = loss + spread_loss + matryoshka_loss + content_loss
+                    leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
+                    loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
                     scaled_loss = loss / float(window_size)
                 scaled_loss.backward()
@@ -587,6 +600,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                             spread_stats,
                             matryoshka_stats,
                             content_stats,
+                            leak_stats,
                             norms,
                             optimizer,
                             grad_norm,
@@ -868,6 +882,7 @@ def log_train_step(
     spread_stats: dict[str, torch.Tensor],
     matryoshka_stats: dict[str, torch.Tensor],
     content_stats: dict[str, torch.Tensor],
+    leak_stats: dict[str, torch.Tensor],
     norms: torch.Tensor,
     optimizer: torch.optim.Optimizer,
     grad_norm: torch.Tensor | float,
@@ -893,6 +908,8 @@ def log_train_step(
         writer.add_scalar(f"matryoshka/{key}", float(value.float().cpu().item()), global_step)
     for key, value in content_stats.items():
         writer.add_scalar(f"content/{key}", float(value.float().cpu().item()), global_step)
+    for key, value in leak_stats.items():
+        writer.add_scalar(f"leak/{key}", float(value.float().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_mean", float(norms.detach().float().mean().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_std", float(norms.detach().float().std(unbiased=False).cpu().item()), global_step)
     writer.add_scalar("optim/lr", float(optimizer.param_groups[0]["lr"]), global_step)

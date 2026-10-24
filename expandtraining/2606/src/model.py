@@ -226,9 +226,17 @@ def encode_triplet_outputs(
     model: QwenStyleEncoder,
     batch: dict[str, Any],
     combine_forward: bool = False,
+    detach_twin: bool = False,
 ) -> dict[str, Any]:
     """Each output key as an (anchor, positive, negative) tuple, except pre_norm, which is concatenated.
-    A batch with a "twin" role (the collate's content twins) also gets outputs["twin"], its embeddings."""
+    A batch with a "twin" role (the collate's content twins) also gets outputs["twin"], its embeddings.
+    detach_twin encodes the twins in a separate forward without gradient: a target, not a trained input,
+    so it needs no activation memory (the leak regularisers)."""
+    if detach_twin and "twin" in batch:
+        outputs = encode_triplet_outputs(model, {k: v for k, v in batch.items() if k != "twin"}, combine_forward)
+        with torch.no_grad():
+            outputs["twin"] = model(**batch["twin"])["embeddings"]
+        return outputs
     if combine_forward:
         return encode_triplet_combined(model, batch)
     roles = [model(**batch[role]) for role in batch_roles(batch)]

@@ -7,6 +7,8 @@ from typing import Any
 
 import yaml
 
+from leak import validate_leak_config
+
 
 LOSS_TYPES = ("triplet", "infonce")
 
@@ -109,6 +111,7 @@ def validate_loss_config(config: dict[str, Any]) -> None:
     for key in ("content_weight", "content_leak_weight"):
         if float(regularization.get(key, 0.0)) < 0.0:
             raise ValueError(f"regularization.{key} must be non-negative")
+    validate_leak_config(config)
 
 
 def config_hash(config: dict[str, Any]) -> str:

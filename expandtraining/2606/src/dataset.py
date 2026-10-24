@@ -72,14 +72,17 @@ class TripletCollate:
 def twin_columns(rows: list[TripletRecord], encode: Any) -> dict[str, Any]:
     """Each row's content twin (meta twin_text) and whether it counts. A row without one, or whose twin is
     already its own negative (origin_vs_para, paratarget_original_push), encodes its anchor as a
-    placeholder and has_twin False, so the loss drops it."""
-    texts, has_twin = [], []
+    placeholder and has_twin False, so the loss drops it; twin_is_negative marks the second kind, whose twin
+    the leak regularisers read from the negative instead."""
+    texts, has_twin, is_negative = [], [], []
     for row in rows:
         twin = normalize_text(str(row.meta.get("twin_text") or ""))
         usable = bool(twin) and twin != normalize_text(row.negative_text)
         texts.append(twin if usable else row.anchor_text)
         has_twin.append(usable)
-    return {"twin": encode(texts), "has_twin": torch.tensor(has_twin, dtype=torch.bool)}
+        is_negative.append(bool(twin) and not usable)
+    return {"twin": encode(texts), "has_twin": torch.tensor(has_twin, dtype=torch.bool),
+            "twin_is_negative": torch.tensor(is_negative, dtype=torch.bool)}
 
 
 def triplet_styles(rule: str, meta: dict[str, Any]) -> tuple[str | None, str | None]:
