@@ -19,7 +19,7 @@ import pandas as pd
 import yaml
 
 from config import repo_root, validate_config, workspace_dir
-from curriculum import DEFAULT_STAGES, expected_exposure
+from curriculum import curriculum_grouping, default_stages, expected_exposure
 from prebuilt import data_key, dataset_dir, default_name, read_manifest
 from report import per_rule_table
 
@@ -133,8 +133,9 @@ def comparable(config: dict[str, Any]) -> dict[str, Any]:
     curriculum.setdefault("enabled", False)
     curriculum.setdefault("mode", "staged")
     curriculum.setdefault("pacing", "step")
+    curriculum.setdefault("grouping", "difficulty")
     if not curriculum.get("stages"):
-        curriculum["stages"] = DEFAULT_STAGES
+        curriculum["stages"] = default_stages(curriculum_grouping(clean))
     return flatten(clean)
 
 

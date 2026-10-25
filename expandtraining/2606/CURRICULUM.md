@@ -34,8 +34,10 @@ single pass, with the stage set by position (`train.py:curriculum_row_budget`).
 | | `mixed` | staged's time-averaged mix at every position. Same exposure, no order |
 | | `uniform` | every rule equally likely, tiers ignored. Roughly the legacy rule-balanced order |
 | `curriculum.pacing` | `step` / `linear` | switch mixes at boundaries / interpolate between stage midpoints |
+| `curriculum.grouping` | `difficulty` | easy / mid / hard (the default, so old configs replay unchanged) |
+| | `cleanliness` | clean / topic / confounded: can the anchor's content alone pick the positive? Unlisted rules count as confounded. Stage names must match, so set `curriculum.stages` with it (the base config's stages name easy/mid/hard). See `configs/ablations/clean_a_1gpu.yaml` and #5 |
 | `curriculum.stages` | list | `until` progress boundaries and tier weights per stage |
-| `curriculum.tiers` | `{rule: easy\|mid\|hard\|drop}` | move a rule to another tier, or out of training |
+| `curriculum.tiers` | `{rule: <tier of the grouping>\|drop}` | move a rule to another tier, or out of training |
 | `curriculum.rule_shares` | `{rule: weight}` | weight rules within their tier (default 1 each) |
 
 Implementation guarantees, each covered by a test in `tests/test_curriculum_strategies.py`:

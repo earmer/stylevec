@@ -1,7 +1,20 @@
-"""Sampling schedules over "how much variation must be ignored" (automating.md section three).
+"""Sampling schedules over rule groups ("tiers") as a function of training progress.
 
-Rules are grouped into tiers (easy / mid / hard); a schedule gives tier probabilities as a function of
-training progress. Every mode spends the same row budget, so arms differ only in what is drawn when:
+`curriculum.grouping` picks how rules are grouped:
+
+  difficulty   easy / mid / hard (automating.md section three; the legacy default, kept so old runs replay)
+  cleanliness  clean / topic / confounded: can the anchor's content alone pick the positive?
+                 clean       content is held fixed (the negative is the same text in another voice) or the
+                             data is synthetic with one style feature varied: content cannot solve it
+                 topic       real text, but the positive is off-scene and the negative shares the scene:
+                             content points at the negative
+                 confounded  shared topic, scene or overlap can pick the positive (same_speaker_real,
+                             length_course_*, same-work bookraw); unknown rules land here too
+               Easy-first put confounded rules first, so the content shortcut was learned from step 0; the
+               cleanliness default starts clean-only and adds confounded rows last and thin (#5).
+
+A schedule gives tier probabilities as a function of progress. Every mode spends the same row budget, so
+arms differ only in what is drawn when:
 
   staged   stage mixes, easy-heavy -> hard-heavy (~20% -> 50-60% hard, never all-hard)
   anti     the staged schedule played backwards; same exposure as staged, opposite order
@@ -9,7 +22,7 @@ training progress. Every mode spends the same row budget, so arms differ only in
   uniform  every rule equally likely, tiers ignored (~ the legacy rule-balanced order)
 
 `pacing: step` switches mixes at stage boundaries; `pacing: linear` interpolates between stage midpoints.
-`curriculum.tiers` moves a rule to another tier, or out of training with `drop`.
+`curriculum.tiers` moves a rule to another tier of the grouping, or out of training with `drop`.
 `curriculum.rule_shares` weights rules within their tier (default 1 each; in uniform mode, across all rules).
 CURRICULUM.md says which pair of modes isolates which effect.
 """
@@ -37,9 +50,26 @@ RULE_TIERS: dict[str, str] = {
     "paratarget_original_push": "mid",
 }
 
+# Whether the anchor's content alone can pick the positive; see the module docstring.
+RULE_CLEANLINESS: dict[str, str] = {
+    "origin_vs_para": "clean",
+    "paratarget_original_push": "clean",
+    "same_content_diff_style": "clean",
+    "generated_to_target": "clean",
+    "target_hard_negative": "clean",
+    "trait_positive_vs_negative": "clean",
+    "trait_cross_feature_hard": "clean",
+    "same_speaker_topic_matched": "topic",
+    "bookraw_same_author_cross_work": "topic",
+    "same_speaker_real": "confounded",
+    "bookraw_same_work": "confounded",
+    "bookraw_same_language_author_negative": "confounded",
+}
+
 MODES = ("staged", "anti", "mixed", "uniform")
 PACINGS = ("step", "linear")
 TIERS = ("easy", "mid", "hard")
+CLEANLINESS = ("clean", "topic", "confounded")
 DROP = "drop"
 # Schedules are tabulated over this many progress buckets; mixed averages the same buckets staged uses,
 # so the two arms' expected exposures match exactly.
@@ -51,24 +81,51 @@ DEFAULT_STAGES: list[dict[str, Any]] = [
     {"until": 1.00, "tiers": {"easy": 0.20, "mid": 0.30, "hard": 0.50}},
 ]
 
+CLEAN_STAGES: list[dict[str, Any]] = [
+    {"until": 0.20, "tiers": {"clean": 1.0}},
+    {"until": 0.60, "tiers": {"clean": 0.6, "topic": 0.4}},
+    {"until": 1.00, "tiers": {"clean": 0.45, "topic": 0.45, "confounded": 0.10}},
+]
 
-def rule_tier(rule: str, overrides: dict[str, str] | None = None) -> str:
+# grouping -> (tier names, default stages, rule table, tier of length_course_*, tier of an unlisted rule)
+GROUPINGS: dict[str, tuple[tuple[str, ...], list[dict[str, Any]], dict[str, str], str, str]] = {
+    "difficulty": (TIERS, DEFAULT_STAGES, RULE_TIERS, "easy", "mid"),
+    "cleanliness": (CLEANLINESS, CLEAN_STAGES, RULE_CLEANLINESS, "confounded", "confounded"),
+}
+
+
+def curriculum_grouping(config: dict[str, Any]) -> str:
+    grouping = str((config.get("curriculum", {}) or {}).get("grouping", "difficulty"))
+    if grouping not in GROUPINGS:
+        raise ValueError(f"curriculum.grouping must be one of {tuple(GROUPINGS)}, got {grouping}")
+    return grouping
+
+
+def default_stages(grouping: str = "difficulty") -> list[dict[str, Any]]:
+    return GROUPINGS[grouping][1]
+
+
+def rule_tier(rule: str, overrides: dict[str, str] | None = None, grouping: str = "difficulty") -> str:
     if overrides and rule in overrides:
         return overrides[rule]
+    _, _, table, length_course, unlisted = GROUPINGS[grouping]
     if rule.startswith("length_course_"):
-        return "easy"
-    return RULE_TIERS.get(rule, "mid")
+        return length_course
+    return table.get(rule, unlisted)
 
 
 def curriculum_stages(config: dict[str, Any]) -> list[dict[str, Any]]:
-    stages = config.get("curriculum", {}).get("stages") or DEFAULT_STAGES
+    grouping = curriculum_grouping(config)
+    names = GROUPINGS[grouping][0]
+    stages = config.get("curriculum", {}).get("stages") or default_stages(grouping)
     previous = 0.0
     for stage in stages:
         if not previous < float(stage["until"]) <= 1.0:
             raise ValueError(f"curriculum stage boundaries must increase within (0, 1]: {stages}")
-        unknown = set(stage["tiers"]) - set(TIERS)
+        unknown = set(stage["tiers"]) - set(names)
         if unknown:
-            raise ValueError(f"curriculum stage names unknown tiers {sorted(unknown)}; use {TIERS}")
+            raise ValueError(f"curriculum stage names unknown tiers {sorted(unknown)}; {grouping} uses {names} "
+                             "(a base config's stages are kept when only curriculum.grouping changes)")
         if any(float(v) < 0 for v in stage["tiers"].values()):
             raise ValueError(f"curriculum stage has a negative weight: {stage}")
         if sum(float(v) for v in stage["tiers"].values()) <= 0:
@@ -87,14 +144,17 @@ def curriculum_settings(config: dict[str, Any]) -> dict[str, Any]:
     pacing = str(cfg.get("pacing", "step"))
     if pacing not in PACINGS:
         raise ValueError(f"curriculum.pacing must be one of {PACINGS}, got {pacing}")
+    grouping = curriculum_grouping(config)
+    names = GROUPINGS[grouping][0]
     tiers = {str(rule): str(tier) for rule, tier in (cfg.get("tiers") or {}).items()}
-    bad = {rule: tier for rule, tier in tiers.items() if tier not in (*TIERS, DROP)}
+    bad = {rule: tier for rule, tier in tiers.items() if tier not in (*names, DROP)}
     if bad:
-        raise ValueError(f"curriculum.tiers values must be one of {(*TIERS, DROP)}: {bad}")
+        raise ValueError(f"curriculum.tiers values must be one of {(*names, DROP)} under {grouping}: {bad}")
     shares = {str(rule): float(value) for rule, value in (cfg.get("rule_shares") or {}).items()}
     if any(value <= 0 for value in shares.values()):
         raise ValueError(f"curriculum.rule_shares must be positive (drop a rule with curriculum.tiers): {shares}")
-    return {"mode": mode, "pacing": pacing, "stages": curriculum_stages(config), "tiers": tiers, "shares": shares}
+    return {"mode": mode, "pacing": pacing, "grouping": grouping, "stages": curriculum_stages(config),
+            "tiers": tiers, "shares": shares}
 
 
 def stage_at(stages: list[dict[str, Any]], progress: float) -> int:
@@ -152,10 +212,10 @@ def schedule_table(settings: dict[str, Any], present: list[str]) -> list[dict[st
     return staged
 
 
-def _tier_rules(rules: list[str], overrides: dict[str, str]) -> dict[str, list[str]]:
+def _tier_rules(rules: list[str], overrides: dict[str, str], grouping: str) -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = defaultdict(list)
     for rule in sorted(rules):
-        tier = rule_tier(rule, overrides)
+        tier = rule_tier(rule, overrides, grouping)
         if tier != DROP:
             grouped[tier].append(rule)
     return dict(grouped)
@@ -175,7 +235,7 @@ def curriculum_order(
     rng = random.Random(seed)
     by_rule: dict[str, list[Any]] = defaultdict(list)
     for row in triplets:
-        if rule_tier(row.rule, settings["tiers"]) != DROP:
+        if rule_tier(row.rule, settings["tiers"], settings["grouping"]) != DROP:
             by_rule[row.rule].append(row)
     if not by_rule:
         raise ValueError("curriculum has no rules left to sample (all dropped or no triplets)")
@@ -195,7 +255,7 @@ def curriculum_order(
     if settings["mode"] == "uniform":
         rules, cumulative = rule_picker(sorted(by_rule))
         return [draw(rng.choices(rules, cum_weights=cumulative)[0]) for _ in range(total)]
-    tier_rules = _tier_rules(list(by_rule), settings["tiers"])
+    tier_rules = _tier_rules(list(by_rule), settings["tiers"], settings["grouping"])
     pickers = {tier: rule_picker(rules) for tier, rules in tier_rules.items()}
     table = schedule_table(settings, sorted(tier_rules))
     choices = [(list(row), list(accumulate(row.values()))) for row in table]
@@ -208,13 +268,15 @@ def curriculum_order(
     return ordered
 
 
-def _rule_rows(draws: dict[str, float], available: dict[str, int], overrides: dict[str, str]) -> dict[str, Any]:
+def _rule_rows(
+    draws: dict[str, float], available: dict[str, int], overrides: dict[str, str], grouping: str
+) -> dict[str, Any]:
     rows: dict[str, Any] = {}
     for rule in sorted(set(draws) | set(available)):
         count = int(available.get(rule, 0))
         drawn = float(draws.get(rule, 0.0))
         rows[rule] = {
-            "tier": rule_tier(rule, overrides),
+            "tier": rule_tier(rule, overrides, grouping),
             "available": count,
             "draws": round(drawn, 1),
             "repeats": round(drawn / count, 2) if count else None,
@@ -234,7 +296,7 @@ def expected_exposure(
     """
     settings = curriculum_settings(config)
     present = {rule: n for rule, n in available.items() if n > 0}
-    tier_rules = _tier_rules(list(present), settings["tiers"])
+    tier_rules = _tier_rules(list(present), settings["tiers"], settings["grouping"])
     if not tier_rules:
         raise ValueError("curriculum has no rules left to sample (all dropped or no triplets)")
     shares = settings["shares"]
@@ -256,9 +318,10 @@ def expected_exposure(
     return {
         "mode": settings["mode"],
         "pacing": settings["pacing"],
+        "grouping": settings["grouping"],
         "rows": total,
         "tier_share_by_phase": share_by_phase,
-        "rules": _rule_rows(draws, available, settings["tiers"]),
+        "rules": _rule_rows(draws, available, settings["tiers"], settings["grouping"]),
     }
 
 
@@ -274,7 +337,7 @@ def schedule_summary(
     by_phase = [Counter() for _ in range(phases)]
     draws: Counter[str] = Counter()
     for position, row in enumerate(ordered):
-        by_phase[position * phases // max(1, total)][rule_tier(row.rule, settings["tiers"])] += 1
+        by_phase[position * phases // max(1, total)][rule_tier(row.rule, settings["tiers"], settings["grouping"])] += 1
         draws[row.rule] += 1
     share_by_phase = [
         {tier: round(count / sum(counter.values()), 4) for tier, count in sorted(counter.items())}
@@ -283,7 +346,8 @@ def schedule_summary(
     return {
         "mode": settings["mode"],
         "pacing": settings["pacing"],
+        "grouping": settings["grouping"],
         "rows": total,
         "tier_share_by_phase": share_by_phase,
-        "rules": _rule_rows(dict(draws), available, settings["tiers"]),
+        "rules": _rule_rows(dict(draws), available, settings["tiers"], settings["grouping"]),
     }

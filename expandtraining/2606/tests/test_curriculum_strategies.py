@@ -105,6 +105,34 @@ def test_schedule_summary_reports_realized_mix_and_repeats() -> None:
         assert v["repeats"] == pytest.approx(v["draws"] / 50, abs=0.01)
 
 
+CLEAN_RULES = ("origin_vs_para", "same_speaker_topic_matched", "same_speaker_real", "length_course_genshin")
+
+
+def test_cleanliness_grouping_starts_clean_and_adds_confounded_rows_last() -> None:
+    clean = {"grouping": "cleanliness"}
+    assert [rule_tier(rule, grouping="cleanliness") for rule in CLEAN_RULES] == ["clean", "topic", "confounded", "confounded"]
+    assert rule_tier("a_rule_nobody_classified", grouping="cleanliness") == "confounded"
+    order = curriculum_order(rows(CLEAN_RULES), mode("staged", **clean), seed=0, total=5000)
+    assert {r.rule for r in order[:900]} == {"origin_vs_para"}
+    assert not any(r.rule.startswith(("same_speaker_real", "length_course")) for r in order[:3000])
+    late = order[-1500:]
+    assert 0.05 < np.mean([rule_tier(r.rule, grouping="cleanliness") == "confounded" for r in late]) < 0.15
+    summary = schedule_summary(order, mode("staged", **clean), {rule: 50 for rule in CLEAN_RULES})
+    assert summary["grouping"] == "cleanliness" and summary["tier_share_by_phase"][0] == {"clean": 1.0}
+
+
+def test_cleanliness_grouping_checks_its_own_names() -> None:
+    with pytest.raises(ValueError, match="unknown tiers"):
+        curriculum_settings({"curriculum": {"grouping": "cleanliness", "stages": [{"until": 1.0, "tiers": {"easy": 1.0}}]}})
+    with pytest.raises(ValueError, match="curriculum.tiers"):
+        curriculum_settings(mode("staged", grouping="cleanliness", tiers={"same_speaker_real": "hard"}))
+    with pytest.raises(ValueError, match="curriculum.grouping"):
+        curriculum_settings(mode("staged", grouping="clean"))
+    dropped = mode("staged", grouping="cleanliness", tiers={"same_speaker_real": "drop", "length_course_genshin": "drop"})
+    order = curriculum_order(rows(CLEAN_RULES), dropped, seed=0, total=2000)
+    assert {r.rule for r in order} == {"origin_vs_para", "same_speaker_topic_matched"}
+
+
 def test_curriculum_disables_loader_shuffle() -> None:
     assert not train_loader_shuffles({"curriculum": {"enabled": True}, "train": {"rule_balanced_batches": False}})
     assert not train_loader_shuffles({"train": {"rule_balanced_batches": True}})
