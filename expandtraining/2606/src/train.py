@@ -28,6 +28,7 @@ from config import (
     workspace_dir,
 )
 from dataset import TripletTextDataset, make_triplet_collate
+from conversation_batches import conversation_group, conversation_stats, group_by_conversation
 from curriculum import curriculum_order, schedule_summary
 from losses import (
     content_pair_loss,
@@ -245,6 +246,11 @@ def order_train_triplets(
         # One pass covers all max_steps; stage follows position, so `epochs` is irrelevant here.
         ordered = curriculum_order(
             train_triplets, config, int(config["runtime"]["seed"]), curriculum_row_budget(config)
+        )
+        # Before the resume slice, so a resumed run sees the same batches. Micro-batches tile a step.
+        ordered = group_by_conversation(
+            ordered, train_triplets, int(config["train"]["batch_size"]), conversation_group(config),
+            int(config["runtime"]["seed"]),
         )
         per_step = int(config["train"]["batch_size"]) * int(config["train"].get("grad_accum", 1)) * int(
             os.environ.get("WORLD_SIZE", "1")
@@ -685,6 +691,8 @@ def write_run_records(
     for row in train_triplets:
         available[row.rule] = available.get(row.rule, 0) + 1
     summary = schedule_summary(ordered, config, available)
+    if conversation_group(config):
+        summary["conversation"] = conversation_stats(ordered, int(config["train"]["batch_size"]))
     (run_dir / "curriculum_schedule.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 

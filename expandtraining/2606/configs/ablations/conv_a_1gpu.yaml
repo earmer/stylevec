@@ -1,0 +1,79 @@
+# Conversation A: real conversations as the hard set. genshin_v2.db carries each line's conversation
+# (talk_id), so data.genshin_source: v2 takes same_speaker_topic_matched's negative from another speaker in
+# the anchor's own conversation (v1 guessed the scene from DB ids within +-12 rows; on v2's ordering about
+# half of such neighbours are another conversation) and the far positive from any other conversation.
+# Echoing replies (character-bigram Jaccard > 0.5 with the anchor) are not negatives.
+# Recipe is clean_a's clean arm (chead2 + cleanliness schedule), screened to step 2100.
+#   v2_base   v2 data, defaults (3 neighbours, 1 topic-matched triplet per anchor): the control
+#   v2_hard   8 neighbours, 3 topic-matched triplets per anchor (13.7k -> 36.5k train rows): more and more
+#             varied same-conversation negatives
+#   v2_conv   v2_hard + train.conversation_group 4: up to 4 rows per micro-batch share a conversation (not a
+#             speaker), so InfoNCE's in-batch negatives share the anchor's topic (~60% of Genshin rows grouped)
+# Every arm is scored on the v2 evaluation set, so none compares directly with clean_a (v1 evaluation).
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/conv_a_1gpu.yaml
+name: conv_a_1gpu
+description: >
+  clean_a's clean recipe on genshin v2, whose conversations are real: same-conversation hard negatives at the
+  default count, at 8 neighbours x 3 variants, and with conversation-grouped InfoNCE batches. Screens to step
+  2100. Judge by gap:same_speaker_topic_matched and cgap:origin_vs_para against heldout and whitened top-1.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.content_dim
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - train.stop_at_step
+  - train.conversation_group
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - regularization.content_twin_pairs
+  - validation.matryoshka_dims
+  - data.genshin_source
+  - data.genshin_scene_neighbors
+  - data.genshin_topic_matched_variants
+common:
+  train.grad_accum: 8
+  train.stop_at_step: 2100
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 1050
+  validation.matryoshka_dims: [32, 64, 128]
+  model.content_dim: 64
+  regularization.content_weight: 0.5
+  regularization.content_temperature: 0.1
+  regularization.content_leak_weight: 0.05
+  regularization.content_twin_pairs: true
+  curriculum.mode: staged
+  curriculum.grouping: cleanliness
+  curriculum.stages:
+    - {until: 0.20, tiers: {clean: 1.0}}
+    - {until: 0.60, tiers: {clean: 0.6, topic: 0.4}}
+    - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+  curriculum.rule_shares: {trait_positive_vs_negative: 0.25, trait_cross_feature_hard: 0.25,
+                          length_course_genshin: 0.1, length_course_msynthstel: 0.1}
+  data.genshin_source: v2
+  data.genshin_scene_neighbors: 3
+  data.genshin_topic_matched_variants: 1
+  train.conversation_group: 0
+arms:
+  v2_base: {}
+  v2_hard:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+  v2_conv:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.conversation_group: 4
+comparisons:
+  - {arm: v2_hard, against: v2_base, isolates: more same-conversation negatives,
+     keys: [data.genshin_scene_neighbors, data.genshin_topic_matched_variants]}
+  - {arm: v2_conv, against: v2_hard, isolates: conversation-grouped batches}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, gap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank]

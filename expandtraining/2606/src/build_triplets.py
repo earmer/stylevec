@@ -173,6 +173,7 @@ def build_genshin_triplets(config: dict[str, Any], samples: list[SampleRecord], 
                 "heldout": bool(anchor.meta.get("heldout", False)),
                 "anchor_db_id": int(anchor.meta.get("db_id", -1)),
                 **twin_meta(anchor.text, anchor.meta.get("para_text")),
+                **({"talk_id": int(anchor.meta["talk_id"])} if "talk_id" in anchor.meta else {}),
             }
             if others:
                 easy_negative = min(others[:candidates], key=lambda row: abs(sample_length(row) - sample_length(anchor)))
@@ -251,7 +252,12 @@ def topic_matched_pairs(
 
 
 def far_rows(anchor: SampleRecord, rows: list[SampleRecord], min_gap: int) -> list[SampleRecord]:
-    """Same-speaker rows at least `min_gap` DB ids away (different scene); else the farthest available."""
+    """Same-speaker rows at least `min_gap` DB ids away (different scene); else the farthest available.
+    Rows that know their conversation (genshin v2's talk_id) use it instead: any other conversation."""
+    if "talk_id" in anchor.meta:
+        others = [row for row in rows if row.sample_id != anchor.sample_id]
+        far = [row for row in others if row.meta.get("talk_id") != anchor.meta["talk_id"]]
+        return far
     key = "db_id" if "db_id" in anchor.meta else "order"
     here = int(anchor.meta.get(key, 0))
     others = [row for row in rows if row.sample_id != anchor.sample_id]

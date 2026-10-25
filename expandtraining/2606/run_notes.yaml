@@ -152,13 +152,18 @@ clean_a_1gpu__clean__s42: >
   Clean A (screen to 2100, compare with chead_v2 chead2 at steps 1050 / 2100): chead2 with the curriculum
   grouped by cleanliness instead of difficulty (#5): clean rules only until 0.20, then clean/topic 0.6/0.4,
   then 0.45/0.45 plus 10% confounded (same_speaker_real, length_course). Tests whether a clean start keeps
-  content out of the style space. Queued 2026-10-25.
+  content out of the style space. Done 2026-10-25. Step 2100: top-1 0.138, whitened 0.364, cgap -0.013,
+  para 0.455, topic gap 0.086, rank 4.9 (chead2 at 2100: 0.147 / 0.372 / -0.109 / 0.539 / 0.096 / 6.6).
+  Largest leak cut that keeps retrieval; narrower. Provenance probe (length-matched) 0.59, not a shortcut.
 clean_a_1gpu__clean_noconf__s42: >
   Clean A: as clean with the confounded rules dropped. Tests whether the late confounded rows are needed for
-  retrieval. Queued 2026-10-25.
+  retrieval. Done 2026-10-25. Step 2100: top-1 0.134, whitened 0.356, cgap +0.005, para 0.460, topic gap
+  0.080, rank 4.9. Within noise of clean: the late confounded rows add nothing.
 clean_a_1gpu__clean_mixed__s42: >
   Clean A: clean's time-averaged mix from step 0 (same exposure, no order). Tests whether clean-first order
-  matters or only the mix. Queued 2026-10-25.
+  matters or only the mix. Done 2026-10-25. Step 2100: top-1 0.126, whitened 0.364, cgap -0.034, para
+  0.518, topic gap 0.191, rank 4.1. Order cuts the leak (cgap, para); the mix doubles the topic-matched gap.
+  One seed each.
 clean_b_1gpu__pairs_data__s42: >
   Clean B (screen to 2100, compare with clean_a clean): clean_a's clean arm with msynthstel as 40 pole pairs x
   90 rows (was 32 x 32), cross-feature triplets dropped, the old trait hinge kept. Tests what more and cleaner
@@ -169,3 +174,15 @@ clean_b_1gpu__tdir__s42: >
   where the triplets (~0.9 violations) could not. Queued 2026-10-25.
 clean_b_1gpu__tdir_w3__s42: >
   Clean B: as tdir at weight 3. Queued 2026-10-25.
+conv_a_1gpu__v2_base__s42: >
+  Conversation A (screen to 2100, v2 evaluation set, so compare only within conv_a): clean_a's clean recipe
+  on genshin_v2.db, where each line's conversation (talk_id) is real. Topic-matched negatives are other
+  speakers' lines from the anchor's own conversation (echoes dropped), far positives from other conversations;
+  default 3 neighbours, 1 topic-matched triplet per anchor. The control. Queued 2026-10-25.
+conv_a_1gpu__v2_hard__s42: >
+  Conversation A: v2_base with 8 neighbours and 3 topic-matched triplets per anchor (13.7k -> 36.5k train
+  rows). Tests whether more same-conversation negatives cut the topic leak. Queued 2026-10-25.
+conv_a_1gpu__v2_conv__s42: >
+  Conversation A: v2_hard plus train.conversation_group 4, so up to 4 rows per micro-batch share a
+  conversation and InfoNCE's in-batch negatives share the anchor's topic. Tests the batch effect on top of
+  the negatives. Queued 2026-10-25.

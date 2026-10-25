@@ -7,6 +7,7 @@ from typing import Any
 
 import yaml
 
+from conversation_batches import conversation_group
 from leak import validate_leak_config
 from trait_directions import validate_trait_direction_config
 
@@ -86,6 +87,15 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ValueError("train.max_steps must be positive")
     if int(config["data"]["max_triplets"]) <= 0:
         raise ValueError("data.max_triplets must be positive")
+    # Mirrors import_genshin.GENSHIN_SOURCES (which imports this module). v2's db is only read where the
+    # dataset is built, so its path is not required to exist here.
+    if str(config["data"].get("genshin_source", "v1")) not in ("v1", "v2"):
+        raise ValueError("data.genshin_source must be v1 or v2")
+    if not 0.0 < float(config["data"].get("genshin_echo_jaccard", 0.5)) <= 1.0:
+        raise ValueError("data.genshin_echo_jaccard must be in (0, 1]")
+    # The rewrite runs on the curriculum's positional order; a shuffling loader would undo it.
+    if conversation_group(config) and not bool(config.get("curriculum", {}).get("enabled", False)):
+        raise ValueError("train.conversation_group needs curriculum.enabled")
     validate_loss_config(config)
 
 

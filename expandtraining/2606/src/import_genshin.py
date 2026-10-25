@@ -53,7 +53,21 @@ def heldout_speakers(config: dict[str, Any], speakers: list[str]) -> set[str]:
     return set(speakers[len(speakers) - count :]) if count else set()
 
 
+GENSHIN_SOURCES = ("v1", "v2")
+
+
+def genshin_source(config: dict[str, Any]) -> str:
+    """`data.genshin_source`: "v1" (genshin.db, scenes guessed from nearby DB ids; the default) or "v2"
+    (genshin_v2.db, whose talk_id is the real conversation)."""
+    source = str(config["data"].get("genshin_source", "v1"))
+    if source not in GENSHIN_SOURCES:
+        raise ValueError(f"data.genshin_source must be one of {GENSHIN_SOURCES}, got {source!r}")
+    return source
+
+
 def load_genshin_samples(config: dict[str, Any], speakers: list[str]) -> tuple[list[SampleRecord], dict[str, int]]:
+    if genshin_source(config) == "v2":
+        return load_genshin_v2_samples(config, speakers)
     db_path = resolve_repo_path(str(config["paths"]["genshin_db"]))
     min_chars = int(config["data"]["min_chars"])
     max_chars = int(config["data"]["max_chars"])
@@ -96,28 +110,11 @@ def load_genshin_samples(config: dict[str, Any], speakers: list[str]) -> tuple[l
                     continue
                 usable.append((row_id, origin, para))
                 scene_lines.append((int(row_id), speaker, origin))
-            selected_rows: list[tuple[Any, Any, Any]] = []
-            # Spread the per-speaker cap over the whole id range; "first N" would be one early quest.
-            if per_speaker > 0 and len(usable) > per_speaker:
-                picks = sorted({int(i) for i in np.linspace(0, len(usable) - 1, per_speaker)})
-                candidates = [usable[i] for i in picks]
-            else:
-                candidates = usable
-            for row_id, origin, para in candidates:
-                text_key = origin.casefold()
-                if text_key in seen_texts:
-                    filter_counts["duplicate_origin"] += 1
-                    continue
-                seen_texts.add(text_key)
-                selected_rows.append((row_id, origin, para))
-            val_per_speaker = min(max(2, len(selected_rows) // 5), max(1, len(selected_rows) - 2))
-            train_cutoff = len(selected_rows) - val_per_speaker
             is_heldout = speaker in heldout
-            for speaker_kept, (row_id, origin, para) in enumerate(selected_rows):
-                if is_heldout:
-                    split = "val"
-                else:
-                    split = "val" if speaker_kept >= train_cutoff else "train"
+            selected_rows = select_speaker_rows(usable, per_speaker, seen_texts, filter_counts)
+            for speaker_kept, ((row_id, origin, para), split) in enumerate(
+                zip(selected_rows, speaker_splits(len(selected_rows), is_heldout))
+            ):
                 samples.append(
                     SampleRecord(
                         sample_id=stable_id("genshin", row_id, "origin"),
@@ -147,6 +144,158 @@ def load_genshin_samples(config: dict[str, Any], speakers: list[str]) -> tuple[l
     if not samples:
         raise ValueError("Genshin importer produced no samples")
     return samples, dict(filter_counts)
+
+
+def select_speaker_rows(
+    usable: list[tuple[Any, ...]],
+    per_speaker: int,
+    seen_texts: set[str],
+    filter_counts: defaultdict[str, int],
+) -> list[tuple[Any, ...]]:
+    """A speaker's usable rows (row[1] is the line) capped at `per_speaker`, minus lines already taken."""
+    # Spread the per-speaker cap over the whole id range; "first N" would be one early quest.
+    if per_speaker > 0 and len(usable) > per_speaker:
+        picks = sorted({int(i) for i in np.linspace(0, len(usable) - 1, per_speaker)})
+        candidates = [usable[i] for i in picks]
+    else:
+        candidates = usable
+    selected: list[tuple[Any, ...]] = []
+    for row in candidates:
+        text_key = row[1].casefold()
+        if text_key in seen_texts:
+            filter_counts["duplicate_origin"] += 1
+            continue
+        seen_texts.add(text_key)
+        selected.append(row)
+    return selected
+
+
+def speaker_splits(count: int, is_heldout: bool) -> list[str]:
+    """A held-out speaker's lines all go to val; otherwise the last fifth (at least 2) does."""
+    if is_heldout:
+        return ["val"] * count
+    val_per_speaker = min(max(2, count // 5), max(1, count - 2))
+    return ["val" if kept >= count - val_per_speaker else "train" for kept in range(count)]
+
+
+def load_genshin_v2_samples(config: dict[str, Any], speakers: list[str]) -> tuple[list[SampleRecord], dict[str, int]]:
+    """genshin_v2.db: lines carry their conversation (talk_id) and turn. Rows marked dup_of are skipped.
+
+    Same selection and splits as v1. Scene neighbours become other speakers' lines from the same
+    conversation (any speaker, not only the top ones), and the far positive a line from another
+    conversation; see attach_conversation_neighbors."""
+    db_path = resolve_repo_path(str(config["paths"].get("genshin_v2_db", "data/genshin/genshin_v2.db")))
+    data = config["data"]
+    min_chars, max_chars = int(data["min_chars"]), int(data["max_chars"])
+    per_speaker = int(data["genshin_lines_per_speaker"])
+    samples: list[SampleRecord] = []
+    filter_counts: defaultdict[str, int] = defaultdict(int)
+    seen_texts: set[str] = set()
+    heldout = heldout_speakers(config, speakers)
+    wanted = set(speakers)
+    by_speaker: defaultdict[str, list[tuple[int, str, str, int, int]]] = defaultdict(list)
+    talk_lines: defaultdict[int, list[tuple[int, str, str, int]]] = defaultdict(list)  # (turn, speaker, text, id)
+    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as connection:
+        rows = connection.execute(
+            """
+            select id, talk_id, turn_id, speaker, origin_text, para_text
+            from dialogues
+            where dup_of is null and origin_text is not null and trim(origin_text) != ''
+            order by id
+            """
+        ).fetchall()
+    for row_id, talk_id, turn_id, speaker, origin_text, para_text in rows:
+        origin = normalize_text(origin_text)
+        if is_junk(origin) or speaker in PLACEHOLDER_SPEAKERS or not min_chars <= len(origin) <= max_chars:
+            if speaker in wanted:
+                filter_counts["junk_placeholder" if is_junk(origin) else "bad_origin_length"] += 1
+            continue
+        talk_lines[int(talk_id)].append((int(turn_id), speaker, origin, int(row_id)))
+        if speaker not in wanted:
+            continue
+        para = normalize_text(para_text or "")
+        if not min_chars <= len(para) <= max_chars:
+            filter_counts["bad_para_length"] += 1
+            continue
+        by_speaker[speaker].append((int(row_id), origin, para, int(talk_id), int(turn_id)))
+    for speaker in speakers:
+        is_heldout = speaker in heldout
+        selected = select_speaker_rows(by_speaker[speaker], per_speaker, seen_texts, filter_counts)
+        for kept, ((row_id, origin, para, talk_id, turn_id), split) in enumerate(
+            zip(selected, speaker_splits(len(selected), is_heldout))
+        ):
+            samples.append(
+                SampleRecord(
+                    sample_id=stable_id("genshin_v2", row_id, "origin"),
+                    text=origin,
+                    style_id=speaker,
+                    style_type="speaker",
+                    domain="genshin",
+                    content_id=stable_id("genshin_v2_content", row_id),
+                    source_id=f"v2:{row_id}",
+                    language="zh",
+                    split=split,
+                    quality=1.0,
+                    meta={
+                        "para_text": para,
+                        "speaker": speaker,
+                        "heldout": is_heldout,
+                        "order": kept,
+                        "db_id": row_id,
+                        "talk_id": talk_id,
+                        "turn_id": turn_id,
+                        "length": len(origin),
+                        "length_bucket": len(origin) // 20,
+                    },
+                )
+            )
+        if len(selected) < 2:
+            filter_counts["speaker_shortage"] += 1
+    attach_conversation_neighbors(
+        samples, talk_lines, heldout, int(data.get("genshin_scene_neighbors", 3)), hub_speakers(config),
+        float(data.get("genshin_echo_jaccard", 0.5)),
+    )
+    if not samples:
+        raise ValueError("Genshin v2 importer produced no samples")
+    return samples, dict(filter_counts)
+
+
+def char_bigrams(text: str) -> set[str]:
+    return {text[i : i + 2] for i in range(len(text) - 1)} or {text}
+
+
+def attach_conversation_neighbors(
+    samples: list[SampleRecord],
+    talk_lines: dict[int, list[tuple[int, str, str, int]]],
+    heldout: set[str],
+    limit: int,
+    hubs: frozenset[str] = frozenset(),
+    echo_jaccard: float = 0.5,
+) -> None:
+    """v2's scene neighbours: other speakers' lines from the anchor's own conversation, nearest turn first.
+
+    Same leak rules as attach_scene_neighbors (train anchors never get a held-out speaker's line or a
+    validation line) and the same non-hub-then-hub order. A line that echoes the anchor (character-bigram
+    Jaccard above `echo_jaccard`, e.g. a reply repeating the question) is dropped: it would share more
+    words with the anchor than any far positive can. The distance kept is in turns."""
+    split_by_id = {int(s.meta["db_id"]): s.split for s in samples}
+    for sample in samples:
+        anchor_grams = char_bigrams(sample.text)
+        turn = int(sample.meta["turn_id"])
+        near: list[tuple[int, str, str]] = []
+        for other_turn, speaker, text, row_id in talk_lines.get(int(sample.meta["talk_id"]), []):
+            if speaker == sample.style_id or row_id == int(sample.meta["db_id"]):
+                continue
+            if sample.split == "train" and (speaker in heldout or split_by_id.get(row_id) == "val"):
+                continue
+            grams = char_bigrams(text)
+            if len(anchor_grams & grams) / len(anchor_grams | grams) > echo_jaccard:
+                continue
+            near.append((abs(other_turn - turn), speaker, text))
+        near.sort()
+        others = [row for row in near if row[1] not in hubs][:limit]
+        fallback = [row for row in near if row[1] in hubs][:limit]
+        sample.meta["scene_neighbors"] = [[sp, tx, d] for d, sp, tx in others + fallback]
 
 
 def attach_scene_neighbors(
