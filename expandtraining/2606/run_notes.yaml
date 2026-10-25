@@ -159,3 +159,13 @@ clean_a_1gpu__clean_noconf__s42: >
 clean_a_1gpu__clean_mixed__s42: >
   Clean A: clean's time-averaged mix from step 0 (same exposure, no order). Tests whether clean-first order
   matters or only the mix. Queued 2026-10-25.
+clean_b_1gpu__pairs_data__s42: >
+  Clean B (screen to 2100, compare with clean_a clean): clean_a's clean arm with msynthstel as 40 pole pairs x
+  90 rows (was 32 x 32), cross-feature triplets dropped, the old trait hinge kept. Tests what more and cleaner
+  trait rows do alone. Queued 2026-10-25.
+clean_b_1gpu__tdir__s42: >
+  Clean B: pairs data with a learned direction per pole pair from z(pole A) - z(pole B), where the sentence's
+  content cancels (trait_direction_weight 1), trait hinge all but off. Tests whether the pairs teach style
+  where the triplets (~0.9 violations) could not. Queued 2026-10-25.
+clean_b_1gpu__tdir_w3__s42: >
+  Clean B: as tdir at weight 3. Queued 2026-10-25.

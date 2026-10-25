@@ -8,7 +8,7 @@ from typing import Any
 from config import config_hash
 from import_bookraw import load_bookraw_samples
 from import_genshin import hub_speakers, load_genshin_samples, load_top_speakers
-from import_msynthstel import load_msynthstel_samples
+from import_msynthstel import load_msynthstel_samples, msynthstel_mode
 from import_paratarget import load_paratarget_samples
 from similarity import char_ngrams, jaccard
 from records import SampleRecord, TripletRecord, normalize_text, stable_id
@@ -67,6 +67,8 @@ def require_rule_coverage(config: dict[str, Any], triplets: list[TripletRecord])
         "paratarget": {"generated_to_target", "target_hard_negative"},
         "msynthstel": {"trait_positive_vs_negative", "trait_cross_feature_hard"},
     }
+    if msynthstel_mode(config) == "pairs":
+        required["msynthstel"].discard("trait_cross_feature_hard")
     if bool(config["data"].get("same_content_diff_style_enabled", True)):
         required["paratarget"].add("same_content_diff_style")
     if bool(config["data"].get("bookraw_enabled", False)):
@@ -391,13 +393,20 @@ def build_msynthstel_triplets(
     features = [feature for feature, rows in positives.items() if len(rows) >= 2 and negatives.get(feature)]
     if not features:
         return []
+    pairs = msynthstel_mode(config) == "pairs"
     triplets: list[TripletRecord] = []
     for feature_index, feature in enumerate(features):
         rows = positives[feature]
         bad_rows = negatives[feature]
         for index, anchor in enumerate(rows):
             positive = rows[(index + 1) % len(rows)]
+            # The importer appends each row's two poles together, so index i is anchor i's own pair.
             negative = bad_rows[index % len(bad_rows)]
+            meta: dict[str, Any] = {"feature": feature}
+            if pairs:
+                if negative.content_id != anchor.content_id:
+                    raise ValueError(f"msynthstel pair {anchor.sample_id} lost its other pole")
+                meta["pole"] = anchor.meta["raw_feature"]
             add_triplet(
                 triplets,
                 anchor.text,
@@ -407,8 +416,10 @@ def build_msynthstel_triplets(
                 split,
                 float(weights["msynthstel"]),
                 float(margins["medium"]),
-                {"feature": feature},
+                meta,
             )
+            if pairs:
+                continue
             other_feature = features[(feature_index + 1) % len(features)]
             if other_feature != feature:
                 other_negative = positives[other_feature][index % len(positives[other_feature])]

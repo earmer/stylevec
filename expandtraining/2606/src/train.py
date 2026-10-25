@@ -16,6 +16,7 @@ import torch
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from trait_directions import TraitDirections, trait_direction_loss, trait_direction_settings_from_config
 from leak import LeakState, leak_enabled, leak_settings_from_config, leak_step_loss
 from prebuilt import load_or_build
 import tracking
@@ -465,6 +466,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     encoder = getattr(model, "module", model)
     leak_state = LeakState(leak_settings_from_config(config), probe=getattr(encoder, "leak_probe", None),
                            null=getattr(encoder, "content_null", None))
+    trait_state = TraitDirections(trait_direction_settings_from_config(config))
     detach_twin = twin_mode(config) == "detached"
     combine_forward = bool(config["train"].get("combine_triplet_forward", False))
     non_blocking = device.type == "cuda" and bool(config["train"].get("pin_memory", False))
@@ -505,7 +507,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     content_loss, content_stats = content_step_loss(outputs, batch, content_settings, model)
                     leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
-                    loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss
+                    trait_loss, trait_stats = trait_direction_loss(trait_state, outputs, batch)
+                    loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss + trait_loss
                     if grad_accum > 1:
                         window_size = accumulation_window(batch_index, total_batches, grad_accum)
                         loss = loss * (float(grad_accum) / float(window_size))
@@ -548,6 +551,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                                 grad_norm,
                                 global_step,
                                 batch,
+                                trait_stats,
                             )
             else:
                 with autocast_context(device, precision):
@@ -573,7 +577,8 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     spread_loss, spread_stats = spread_step_loss(anchor, positive, negative, spread_settings)
                     content_loss, content_stats = content_step_loss(outputs, batch, content_settings, model)
                     leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
-                    loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss
+                    trait_loss, trait_stats = trait_direction_loss(trait_state, outputs, batch)
+                    loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss + trait_loss
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
                     scaled_loss = loss / float(window_size)
                 scaled_loss.backward()
@@ -612,6 +617,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                             grad_norm,
                             global_step,
                             batch,
+                            trait_stats,
                         )
 
             if should_stop(global_step, stop_steps, stop_time):
@@ -911,6 +917,7 @@ def log_train_step(
     grad_norm: torch.Tensor | float,
     global_step: int,
     batch: dict[str, Any],
+    trait_stats: dict[str, torch.Tensor] | None = None,
 ) -> None:
     writer.add_scalar("loss/train", float(loss.detach().float().cpu().item()), global_step)
     writer.add_scalar("cosine/positive_mean", float(stats["pos_cos"].mean().cpu().item()), global_step)
@@ -933,6 +940,8 @@ def log_train_step(
         writer.add_scalar(f"content/{key}", float(value.float().cpu().item()), global_step)
     for key, value in leak_stats.items():
         writer.add_scalar(f"leak/{key}", float(value.float().cpu().item()), global_step)
+    for key, value in (trait_stats or {}).items():
+        writer.add_scalar(f"trait/{key}", float(value.float().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_mean", float(norms.detach().float().mean().cpu().item()), global_step)
     writer.add_scalar("embedding/pre_norm_std", float(norms.detach().float().std(unbiased=False).cpu().item()), global_step)
     writer.add_scalar("optim/lr", float(optimizer.param_groups[0]["lr"]), global_step)

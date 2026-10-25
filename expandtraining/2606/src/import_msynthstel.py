@@ -39,11 +39,27 @@ def near_duplicate_feature(feature: str, kept: list[str], threshold: float = 0.5
     return False
 
 
+MSYNTHSTEL_MODES = ("triplets", "pairs")
+
+
+def msynthstel_mode(config: dict[str, Any]) -> str:
+    """triplets: the trait rules as built so far. pairs: trait_positive_vs_negative only, each labelled with
+    its pole pair (meta `pole`) for trait directions; trait_cross_feature_hard is dropped, as its negative
+    often shares the anchor's feature (prepositions vs determiners) and never its content."""
+    mode = str(config.get("data", {}).get("msynthstel_mode", "triplets"))
+    if mode not in MSYNTHSTEL_MODES:
+        raise ValueError(f"data.msynthstel_mode must be one of {MSYNTHSTEL_MODES}, got {mode!r}")
+    return mode
+
+
 def load_msynthstel_samples(config: dict[str, Any]) -> tuple[list[SampleRecord], dict[str, int]]:
     train_path = resolve_repo_path(str(config["paths"]["msynthstel_train"]))
     test_path = resolve_repo_path(str(config["paths"]["msynthstel_test"]))
     feature_cap = int(config["data"]["msynthstel_features"])
     rows_per_feature = int(config["data"].get("msynthstel_rows_per_feature", 4))
+    # pairs keeps near-duplicate feature names: each is its own pole pair ("Affective / Perceptual" vs
+    # "Affective / Cognitive"), which trait directions tell apart by `raw_feature`.
+    keep_near_duplicates = msynthstel_mode(config) == "pairs"
     samples: list[SampleRecord] = []
     filter_counts: defaultdict[str, int] = defaultdict(int)
 
@@ -71,12 +87,14 @@ def load_msynthstel_samples(config: dict[str, Any]) -> tuple[list[SampleRecord],
                 if feature_cap > 0 and len(features_seen) >= feature_cap:
                     filter_counts["feature_cap"] += 1
                     continue
-                if near_duplicate_feature(feature, features_seen):
+                if not keep_near_duplicates and near_duplicate_feature(feature, features_seen):
                     skipped_features.add(feature)
                     filter_counts["near_duplicate_feature"] += 1
                     continue
                 features_seen.append(feature)
-            if rows_per_feature > 0 and feature_counts[feature] >= rows_per_feature:
+            # pairs caps each pole pair: one feature name can hold several ("Self-focused / You-focused", ...).
+            count_key = raw_feature if keep_near_duplicates else feature
+            if rows_per_feature > 0 and feature_counts[count_key] >= rows_per_feature:
                 filter_counts["rows_per_feature_cap"] += 1
                 continue
             for polarity, text in (("positive", positive), ("negative", negative)):
@@ -101,7 +119,7 @@ def load_msynthstel_samples(config: dict[str, Any]) -> tuple[list[SampleRecord],
                         },
                     )
                 )
-            feature_counts[feature] += 1
+            feature_counts[count_key] += 1
     if not samples:
         raise ValueError("msynthstel importer produced no samples")
     return samples, dict(filter_counts)
