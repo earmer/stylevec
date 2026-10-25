@@ -454,6 +454,7 @@ DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout
                    "heldout_top1_d32", "heldout_top1_d64", "heldout_top1_d128",
                    "para_beats_own_heldout", "para_top1_heldout", "null8_top1", "null8_para_beats_own_heldout",
                    "null32_top1", "null32_para_beats_own_heldout",
+                   "content_rel_line", "content_rel_pair", "content_rel_speaker", "content_rel_line_top",
                    "pnull8_top1", "pnull8_para_beats_own_heldout", "pnull32_top1", "pnull32_para_beats_own_heldout")
 SPEAKER_PAIRED = "heldout_top1_macro (paired by speaker)"
 

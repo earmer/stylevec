@@ -333,6 +333,75 @@ def paraphrase_nullspace(rows: pd.DataFrame, embeddings: np.ndarray, dims: int) 
     return _unit(unit - (unit @ basis.T) @ basis)
 
 
+CONTENT_TOP_SHARE = 0.05
+
+
+def content_relation(rows: pd.DataFrame, embeddings: np.ndarray) -> dict[str, float]:
+    """How much a line's content moves its style vector, beyond what its speaker's habits explain.
+
+    Content is partly style (what a character habitually talks about), so the target is a small positive
+    relation, not zero; a negative one means same-topic lines are pushed apart, which is a content relation
+    too. Lines are origin_vs_para anchors (real Genshin lines); a line's content is its paraphrase (the
+    negative: same content in one neutral voice), compared by char 1-2 gram TF-IDF cosine. Over pairs of
+    lines from different speakers:
+      content_rel_pair     corr(style cos, content sim), raw
+      content_rel_line     the same after subtracting each speaker pair's mean of both (habitual content
+                           removed): does sharing more content than usual for these two speakers move them closer
+      content_rel_speaker  corr across speaker pairs of the two means: the habitual part, expected positive
+      content_rel_line_top mean residual style cos (centered) of the top 5% content-sharing pairs
+    """
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    if len(rows) != len(embeddings):
+        raise ValueError("rows and embeddings must align")
+    centered = _unit(embeddings.astype(np.float64) - embeddings.mean(axis=0, keepdims=True))
+    ovp = rows.reset_index(drop=True)
+    ovp = ovp.assign(at=np.arange(len(ovp)))[ovp["rule"] == "origin_vs_para"]
+    anchors = ovp[ovp["role"] == "anchor"].drop_duplicates("triplet_id").set_index("triplet_id")
+    paras = ovp[ovp["role"] == "negative"].drop_duplicates("triplet_id").set_index("triplet_id")
+    shared = anchors.index.intersection(paras.index)
+    lines = pd.DataFrame({
+        "at": anchors.loc[shared, "at"].to_numpy(),
+        "speaker": anchors.loc[shared, "speaker"].fillna("").astype(str).to_numpy(),
+        "text": anchors.loc[shared, "text_preview"].astype(str).to_numpy(),
+        "para": paras.loc[shared, "text_preview"].astype(str).to_numpy(),
+    })
+    lines = lines[lines["speaker"] != ""].drop_duplicates("text").reset_index(drop=True)
+    if len(lines) < 20 or lines["speaker"].nunique() < 3:
+        return {}
+    vectorizer = TfidfVectorizer(analyzer="char", ngram_range=(1, 2), token_pattern=None,
+                                 preprocessor=lambda text: "".join(ch for ch in text if ch.isalnum()))
+    tfidf = vectorizer.fit_transform(lines["para"])
+    content = (tfidf @ tfidf.T).toarray()
+    positions = lines["at"].to_numpy()
+    style = centered[positions] @ centered[positions].T
+    speakers = pd.factorize(lines["speaker"])[0]
+    upper_i, upper_j = np.triu_indices(len(lines), k=1)
+    keep = speakers[upper_i] != speakers[upper_j]
+    upper_i, upper_j = upper_i[keep], upper_j[keep]
+    pairs = pd.DataFrame({
+        "a": np.minimum(speakers[upper_i], speakers[upper_j]), "b": np.maximum(speakers[upper_i], speakers[upper_j]),
+        "style": style[upper_i, upper_j], "content": content[upper_i, upper_j],
+    })
+    means = pairs.groupby(["a", "b"])[["style", "content"]].transform("mean")
+    residual = pairs[["style", "content"]] - means
+    by_pair = pairs.groupby(["a", "b"])[["style", "content"]].mean()
+    top = residual["content"] >= residual["content"].quantile(1.0 - CONTENT_TOP_SHARE)
+    return {
+        "content_rel_pair": _corr(pairs["style"], pairs["content"]),
+        "content_rel_line": _corr(residual["style"], residual["content"]),
+        "content_rel_speaker": _corr(by_pair["style"], by_pair["content"]),
+        "content_rel_line_top": float(residual.loc[top, "style"].mean()),
+    }
+
+
+def _corr(left: pd.Series, right: pd.Series) -> float:
+    left, right = np.asarray(left, dtype=np.float64), np.asarray(right, dtype=np.float64)
+    if left.std() < 1e-12 or right.std() < 1e-12:
+        return 0.0
+    return float(np.corrcoef(left, right)[0, 1])
+
+
 def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]) -> dict[str, Any]:
     """Scalars for compare (topic gap by negative type, cross-scene, matched-seen, prefix and whitened
     retrieval) plus `heldout_top1_by_speaker`, the per-speaker hits compare pairs arms on."""
@@ -368,6 +437,7 @@ def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]
         if len(ovp):
             out["whitened_gap_origin_vs_para"] = float((ovp["pos"] - ovp["neg"]).mean())
     out.update(paraphrase_rank(rows, embeddings))
+    out.update(content_relation(rows, embeddings))
     for dims in NULLSPACE_DIMS:
         projected = within_speaker_nullspace(rows, embeddings, dims)
         if projected is None:
