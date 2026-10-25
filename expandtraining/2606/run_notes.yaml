@@ -112,23 +112,50 @@ leak_adversary_1gpu__adv_w05__s42: >
   Largest leak fix so far; raw top-1 pays because the embedding collapses to a few directions (whitening
   recovers it).
 leak_adversary_1gpu__adv_w2__s42: >
-  Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Queued 2026-10-24 (leak-all chain).
+  Leak B: as adv_w05 at weight 2. The higher dose; watch top-1 and leak/probe_acc. Done 2026-10-25. Step
+  3000 vs nce_stage1 (top-1 0.161, whitened 0.254, cgap -0.040, para 0.534, topic gap 0.104, rank 6.9):
+  top-1 0.142, whitened 0.199, cgap -0.456, para 0.896, topic gap -0.001, rank 33.6. Breaks down: the probe
+  wins and the space spreads without style order.
 leak_subspace_1gpu__null8__s42: >
   Leak C (full 3000, compare with infonce_d nce_stage1): nce_stage1 with the top 8 principal directions of
   the content twins' embeddings (running EMA covariance) projected out of the style embedding in training
-  and inference. Tests whether removing where paraphrases differ removes the leak. Queued 2026-10-24 (leak-all chain).
+  and inference. Tests whether removing where paraphrases differ removes the leak. Done 2026-10-25. Step
+  3000 vs nce_stage1 (top-1 0.161, whitened 0.254, cgap -0.040, para 0.534, topic gap 0.104, rank 6.9):
+  top-1 0.116, whitened 0.149, cgap -0.153, para 0.768, topic gap -0.005, rank 51.1. Fails: removing content
+  directions removes style too.
 leak_subspace_1gpu__null32__s42: >
-  Leak C: as null8 with 32 directions. Tests whether a wider cut helps or starts removing voice. Queued 2026-10-24 (leak-all chain).
+  Leak C: as null8 with 32 directions. Tests whether a wider cut helps or starts removing voice. Done
+  2026-10-25. Step 3000: top-1 0.120, whitened 0.140, cgap -0.328, para 0.865, topic gap 0.033, rank 34.6.
+  Worse than null8.
 chead_v2_1gpu__chead2__s42: >
   Leak E (full 3000, compare with infonce_d nce_stage1 and infonce_b chead): nce_stage1 + a 64-dim content
   head trained on every row with a content twin (~63% of rows) + the linear leak penalty (0.05). Tests
-  whether chead's retrieval (top-1 0.194) survives without its leak once InfoNCE stops at 1050. Queued 2026-10-24 (leak-all chain).
+  whether chead's retrieval (top-1 0.194) survives without its leak once InfoNCE stops at 1050. Done
+  2026-10-25. Step 3000 vs nce_stage1 (top-1 0.161, whitened 0.254, cgap -0.040, para 0.534, topic gap
+  0.104, rank 6.9): top-1 0.152, whitened 0.369 (best of all), cgap -0.097, para 0.572, topic gap 0.125
+  (best), rank 8.9; step 1050 top-1 0.224, whitened 0.410. Best retrieval, still leaks; base of clean_a.
 chead_v2_1gpu__chead2_orth__s42: >
   Leak E: chead2 + orthogonal style and content heads (weight 1). Tests whether separating what the heads
-  read moves content out of the style side. Queued 2026-10-24 (leak-all chain).
+  read moves content out of the style side. Done 2026-10-25. Step 3000: top-1 0.142, whitened 0.352, cgap
+  -0.144, para 0.596, topic gap 0.083, rank 9.2. Slightly worse than chead2 on every column.
 nce_seed_1gpu__nce_stage1__s43: >
   Control (full 3000): infonce_d's nce_stage1 at seed 43. The seed-noise bar for every one-seed leak branch
-  (A-E) read against nce_stage1 seed 42. Queued 2026-10-24 (leak-all chain).
+  (A-E) read against nce_stage1 seed 42. Stopped 2026-10-25 ~10:14 just past step 1050: the AutoDL account
+  ran out of balance and the box powered off. No final validation; to be resumed.
 curriculum_hard_1gpu__hard30__s42: >
   Leak D (full 3000, compare with infonce_d nce_stage1): stage 3 easy/mid/hard 0.30/0.40/0.30 instead of
-  0.20/0.30/0.50. Tests whether the 2100 -> 3000 leak drift comes from the hard topic-matched rows. Queued 2026-10-24 (leak-all chain).
+  0.20/0.30/0.50. Tests whether the 2100 -> 3000 leak drift comes from the hard topic-matched rows. Done
+  2026-10-25. Step 3000 vs nce_stage1 (top-1 0.161, whitened 0.254, cgap -0.040, para 0.534, topic gap
+  0.104, rank 6.9): top-1 0.164, whitened 0.254, cgap -0.026, para 0.522, topic gap 0.109, rank 6.8. Small
+  gain everywhere, within likely seed noise.
+clean_a_1gpu__clean__s42: >
+  Clean A (screen to 2100, compare with chead_v2 chead2 at steps 1050 / 2100): chead2 with the curriculum
+  grouped by cleanliness instead of difficulty (#5): clean rules only until 0.20, then clean/topic 0.6/0.4,
+  then 0.45/0.45 plus 10% confounded (same_speaker_real, length_course). Tests whether a clean start keeps
+  content out of the style space. Queued 2026-10-25.
+clean_a_1gpu__clean_noconf__s42: >
+  Clean A: as clean with the confounded rules dropped. Tests whether the late confounded rows are needed for
+  retrieval. Queued 2026-10-25.
+clean_a_1gpu__clean_mixed__s42: >
+  Clean A: clean's time-averaged mix from step 0 (same exposure, no order). Tests whether clean-first order
+  matters or only the mix. Queued 2026-10-25.
