@@ -21,7 +21,7 @@ from records import TripletRecord
 from report import paraphrase_rank, within_speaker_nullspace
 from test_content_head import encoder, token_batch
 from test_curriculum_and_validation import genshin
-from train import objective_at_step, objective_settings_from_config
+from train import objective_at_step, objective_loss, objective_settings_from_config
 
 
 def unit(*rows: list[float]) -> torch.Tensor:
@@ -104,6 +104,27 @@ def test_infonce_until_step_switches_to_the_hinge_and_keys_are_checked() -> None
     assert objective_at_step(always, 2999)["loss"] == "infonce"
     validate_loss_config(train_config(stop_at_step=1050, infonce_until_step=1050))
     for bad in ({"stop_at_step": 3001}, {"infonce_until_step": -1}, {"infonce_twin_temperature": -0.1}):
+        with pytest.raises(ValueError):
+            validate_loss_config(train_config(**bad))
+
+
+def test_infonce_from_step_and_sqrt_ramp() -> None:
+    late = objective_settings_from_config(train_config(infonce_from_step=500))
+    assert objective_at_step(late, 499)["loss"] == "triplet"
+    assert objective_at_step(late, 500)["loss"] == "infonce" and "infonce_weight" not in objective_at_step(late, 500)
+    ramp = objective_settings_from_config(train_config(stop_at_step=2100, infonce_weight_schedule="sqrt"))
+    weights = [objective_at_step(ramp, step)["infonce_weight"] for step in (0, 525, 1050, 2100, 2500)]
+    assert weights == pytest.approx([0.0, 0.5, 0.5**0.5, 1.0, 1.0])
+    # The weight scales the InfoNCE term only; the hinge on top keeps its weight.
+    a, p, n = unit([1.0, 0.0], [0.8, 0.6]), unit([0.6, 0.8], [0.0, 1.0]), unit([0.9, 0.1], [0.5, 0.5])
+    batch = {"margin": torch.tensor([0.2, 0.2]), "weight": torch.ones(2), "anchor_style": ["A", "B"],
+             "negative_style": ["C", "D"]}
+    settings = {**objective_settings_from_config(train_config(infonce_triplet_weight=2.0))}
+    full, stats = objective_loss(a, p, n, batch, settings)
+    half, _ = objective_loss(a, p, n, batch, {**settings, "infonce_weight": 0.5})
+    assert half.item() == pytest.approx(full.item() - 0.5 * stats["infonce_loss"].item())
+    for bad in ({"infonce_weight_schedule": "cosine"}, {"infonce_from_step": 1050, "infonce_until_step": 1050},
+                {"infonce_from_step": 3001}):
         with pytest.raises(ValueError):
             validate_loss_config(train_config(**bad))
 

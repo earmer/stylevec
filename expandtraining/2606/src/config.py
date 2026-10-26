@@ -13,6 +13,7 @@ from trait_directions import validate_trait_direction_config
 
 
 LOSS_TYPES = ("triplet", "infonce")
+INFONCE_WEIGHT_SCHEDULES = ("constant", "sqrt")
 
 
 def workspace_dir() -> Path:
@@ -110,10 +111,15 @@ def validate_loss_config(config: dict[str, Any]) -> None:
     if float(config["train"].get("infonce_twin_temperature", 0.0)) < 0.0:
         raise ValueError("train.infonce_twin_temperature must be non-negative (0 = off)")
     max_steps = int(config["train"].get("max_steps", 0))
-    for key in ("infonce_until_step", "stop_at_step"):
+    for key in ("infonce_until_step", "stop_at_step", "infonce_from_step"):
         value = int(config["train"].get(key, 0))
         if value < 0 or (value > 0 and value > max_steps):
             raise ValueError(f"train.{key} must be in [0, train.max_steps] (0 = off)")
+    from_step, until_step = (int(config["train"].get(key, 0)) for key in ("infonce_from_step", "infonce_until_step"))
+    if from_step > 0 and until_step > 0 and from_step >= until_step:
+        raise ValueError("train.infonce_from_step must be below train.infonce_until_step")
+    if str(config["train"].get("infonce_weight_schedule", "constant")) not in INFONCE_WEIGHT_SCHEDULES:
+        raise ValueError(f"train.infonce_weight_schedule must be one of {INFONCE_WEIGHT_SCHEDULES}")
     if int(config["model"].get("content_dim", 0)) < 0:
         raise ValueError("model.content_dim must be non-negative")
     regularization = config.get("regularization", {})

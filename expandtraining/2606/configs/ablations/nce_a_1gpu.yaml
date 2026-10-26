@@ -1,0 +1,93 @@
+# NCE A: when should InfoNCE act? conv_a showed, in every arm, top-1 falling ~0.045 and the effective rank
+# collapsing 13-16 -> 5 between step 1050 (where InfoNCE stops) and 2100, while InfoNCE's paraphrase leak
+# (cgap -0.05 at 1050 in v2_hard) is what the hinge-only phase repairs. Each arm keeps InfoNCE to the end of
+# the screen and changes its onset:
+#   nce_after_500  hinge only for steps 0-500 (clean structure first; the clean-only stage ends at 600)
+#   nce_ramp       InfoNCE weight sqrt(step / 2100) from 0: fast early, slower later, no switch
+#   nce_on_twin    InfoNCE 0-2100 plus each line's paraphrase as an InfoNCE candidate at T 0.05
+#                  (infonce_c: T 0.03 cut the leak but ~40% of top-1; infonce_d: T 0.1 did nothing)
+#   nce_on         InfoNCE 0-2100: the reference the others need for the curriculum-stage confound; last,
+#                  so it can be dropped if the others make its outcome clear
+# No control arm: conv_a's v2_hard is this recipe with InfoNCE stopping at 1050, trained on the same
+# dataset and scored on the same evaluation set (common data = conv_a's, arms override the negatives).
+# Snapshots at 500 / 1050 / 1500 / 2100 show when the leak and the narrowing happen.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/nce_a_1gpu.yaml
+name: nce_a_1gpu
+description: >
+  conv_a's v2_hard with InfoNCE kept on to step 2100, varying its onset: after 500 steps of hinge, a sqrt
+  ramp from 0, from 0 with paraphrase candidates, and from 0 plain. Compare with conv_a v2_hard (InfoNCE
+  stops at 1050) on rank, top-1, cgap:origin_vs_para and content_rel_line.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.content_dim
+  - model.gradient_checkpointing
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - train.infonce_from_step
+  - train.infonce_weight_schedule
+  - train.infonce_twin_temperature
+  - train.stop_at_step
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - regularization.content_twin_pairs
+  - validation.matryoshka_dims
+  - data.genshin_source
+  - data.genshin_scene_neighbors
+  - data.genshin_topic_matched_variants
+common:
+  train.grad_accum: 8
+  train.stop_at_step: 2100
+  train.keep_weights_at: [0.1667, 0.35, 0.5, 0.70]
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 0
+  validation.matryoshka_dims: [32, 64, 128]
+  model.content_dim: 64
+  regularization.content_weight: 0.5
+  regularization.content_temperature: 0.1
+  regularization.content_leak_weight: 0.05
+  regularization.content_twin_pairs: true
+  curriculum.mode: staged
+  curriculum.grouping: cleanliness
+  curriculum.stages:
+    - {until: 0.20, tiers: {clean: 1.0}}
+    - {until: 0.60, tiers: {clean: 0.6, topic: 0.4}}
+    - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+  curriculum.rule_shares: {trait_positive_vs_negative: 0.25, trait_cross_feature_hard: 0.25,
+                          length_course_genshin: 0.1, length_course_msynthstel: 0.1}
+  data.genshin_source: v2
+  # conv_a's evaluation set (built from its common data); every arm trains on v2_hard's negatives.
+  data.genshin_scene_neighbors: 3
+  data.genshin_topic_matched_variants: 1
+arms:
+  nce_after_500:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.infonce_from_step: 500
+  nce_ramp:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.infonce_weight_schedule: sqrt
+  nce_on_twin:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.infonce_twin_temperature: 0.05
+    model.gradient_checkpointing: true
+  nce_on:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+comparisons:
+  - {arm: nce_after_500, against: nce_on, isolates: hinge-only first 500 steps}
+  - {arm: nce_ramp, against: nce_on, isolates: sqrt ramp of the InfoNCE weight}
+  - {arm: nce_on_twin, against: nce_on, isolates: paraphrase candidates in InfoNCE,
+     keys: [train.infonce_twin_temperature, model.gradient_checkpointing]}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank, content_rel_line]
