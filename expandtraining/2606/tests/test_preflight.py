@@ -84,6 +84,22 @@ def test_queue_states(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert (latest / "weights.pt").exists()
 
 
+def test_step_kills_the_whole_process_group_past_the_deadline(tmp_path: Path) -> None:
+    import time
+
+    marker = tmp_path / "child_still_running"
+    # The grandchild (sleep, then write) stands in for accelerate -> python under remote_train.sh's bash.
+    command = ["bash", "-c", f"(sleep 3; touch {marker}) & wait"]
+    started = time.time()
+    code = run_queue.step(command, {}, tmp_path / "log.txt", deadline=time.time() + 1)
+    assert code == run_queue.TIMED_OUT and time.time() - started < 3
+    time.sleep(3)
+    assert not marker.exists(), "the grandchild survived the kill"
+    assert "killed: run budget spent" in (tmp_path / "log.txt").read_text()
+    assert run_queue.step(["true"], {}, tmp_path / "log.txt", deadline=time.time() + 30) == 0
+    assert run_queue.cost(60, 2.88) == "60.0 min, CNY 2.88"
+
+
 def test_local_checks_refuse_runs_without_a_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(preflight, "load_notes", lambda: {"spec__a__s42": "tests a"})
     result = {"name": "spec", "world_size": 1, "datasets": {},

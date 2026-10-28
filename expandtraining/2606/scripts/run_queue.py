@@ -10,6 +10,11 @@ done, so re-running a finished spec fills them in), so
 compare can show the trajectory; a failed snapshot validation is logged and does not fail the run. A run is skipped when its validation is complete, resumed from
 checkpoints/latest when training was cut off, otherwise started fresh. Per-run logs are written to
 outputs/runs/<run>/queue_{train,validate}.log and the queue's own status to outputs/queue/<spec>.json.
+
+Each run (training, final validation and its snapshot validations) gets a budget of --max-run-cost at
+--price-per-hour (default CNY 6 at 2.88/h, ~125 min). Past it the run's process group is killed and the run is
+marked failed (training resumes from checkpoints/latest on a later queue); snapshot validations cut off
+by the budget are warnings. Each finished run logs its minutes and cost.
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -51,14 +57,37 @@ def state_of(name: str) -> str:
     return "fresh"
 
 
-def step(command: list[str], env: dict[str, str], log: Path) -> int:
+TIMED_OUT = -1000
+
+
+def step(command: list[str], env: dict[str, str], log: Path, deadline: float | None = None) -> int:
+    """Run command, logging to log. Past deadline (time.time()) its whole process group (bash ->
+    accelerate -> python) is killed and TIMED_OUT returned."""
     log.parent.mkdir(parents=True, exist_ok=True)
     with open(log, "a", encoding="utf-8") as handle:
         handle.write(f"\n=== {time.strftime('%F %T')} {' '.join(command)}\n")
         handle.flush()
         # No stdin: a tool that would prompt (swanlab without a login) fails fast instead of hanging.
-        return subprocess.run(command, cwd=repo_root(), env=env, stdin=subprocess.DEVNULL,
-                              stdout=handle, stderr=subprocess.STDOUT).returncode
+        process = subprocess.Popen(command, cwd=repo_root(), env=env, stdin=subprocess.DEVNULL,
+                                   stdout=handle, stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            return process.wait(timeout=None if deadline is None else max(1.0, deadline - time.time()))
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            handle.write(f"\n=== {time.strftime('%F %T')} killed: run budget spent\n")
+            return TIMED_OUT
+        except BaseException:
+            os.killpg(process.pid, signal.SIGTERM)  # Ctrl-C reaches the queue, not the new session
+            raise
+
+
+def cost(minutes: float, price_per_hour: float) -> str:
+    return f"{minutes:.1f} min, CNY {minutes / 60 * price_per_hour:.2f}"
 
 
 def pending_snapshots(name: str) -> list[Path]:
@@ -88,7 +117,11 @@ def main() -> None:
     parser.add_argument("--keep-up", action="store_true",
                         help="do not power off when the queue ends (by default it does, to stop billing)")
     parser.add_argument("--dry-run", action="store_true", help="print what would run, then exit")
+    parser.add_argument("--max-run-cost", type=float, default=6.0,
+                        help="CNY budget per run (train + validation); 0 = no cap")
+    parser.add_argument("--price-per-hour", type=float, default=2.88, help="instance price, CNY per hour")
     args = parser.parse_args()
+    budget_seconds = args.max_run_cost / args.price_per_hour * 3600 if args.max_run_cost > 0 else None
     try:
         result = plan(args.spec, write=False)
     except SpecError as error:
@@ -119,15 +152,20 @@ def main() -> None:
     failures = 0
     interrupted = False
 
-    def validate_snapshots(name: str, r: dict, entry: dict) -> None:
+    def validate_snapshots(name: str, r: dict, entry: dict, deadline: float | None = None) -> None:
         """Validate kept step_NNNNN snapshots not validated yet (also for runs finished before this
-        existed). A failure is recorded as a warning and does not fail the run."""
+        existed). A failure, or the run budget running out, is recorded as a warning and does not fail
+        the run."""
         for snapshot in pending_snapshots(name):
+            if deadline is not None and time.time() >= deadline:
+                entry.setdefault("warnings", []).append(f"{snapshot.name} not validated: run budget spent")
+                print(f"run budget spent: {name} {snapshot.name} not validated", flush=True)
+                continue
             print(f"{time.strftime('%T')} validate {snapshot.name}: {name}", flush=True)
             code = step(["bash", str(SCRIPTS / "validate.sh"), name, str(snapshot)],
                         {**env, "CONFIG": r["eval_config"], "DATASET": r["eval_dataset"],
                          "OUT_NAME": f"validation_{snapshot.name}"},
-                        run_dir(name) / "queue_validate.log")
+                        run_dir(name) / "queue_validate.log", deadline)
             if code != 0:
                 entry.setdefault("warnings", []).append(f"{snapshot.name} validate exit {code}")
                 print(f"snapshot validation failed for {name} {snapshot.name}; see queue_validate.log", flush=True)
@@ -152,6 +190,8 @@ def main() -> None:
                 print("stopping: disk nearly full", file=sys.stderr, flush=True)
                 break
             started = time.time()
+            deadline = None if budget_seconds is None else started + budget_seconds
+            spent = lambda: f"run budget CNY {args.max_run_cost:g} spent ({cost((time.time() - started) / 60, args.price_per_hour)})"
             if entry["state"] in ("fresh", "resume"):
                 command = ["bash", str(SCRIPTS / "remote_train.sh"), name]
                 if entry["state"] == "resume":
@@ -160,7 +200,13 @@ def main() -> None:
                 entry["state"] = "training"
                 save()
                 code = step(command, {**env, "CONFIG": r["config"], "DATASET": r["dataset"]},
-                            run_dir(name) / "queue_train.log")
+                            run_dir(name) / "queue_train.log", deadline)
+                if code == TIMED_OUT:
+                    entry.update(state="failed", error=f"train: {spent()}; resumes from checkpoints/latest")
+                    print(f"{time.strftime('%T')} {entry['error']}: {name}", flush=True)
+                    failures += 1
+                    save()
+                    continue
                 if code != 0:
                     entry.update(state="failed", error=f"train exit {code}; see queue_train.log")
                     failures += 1
@@ -172,16 +218,25 @@ def main() -> None:
             save()
             code = step(["bash", str(SCRIPTS / "validate.sh"), name],
                         {**env, "CONFIG": r["eval_config"], "DATASET": r["eval_dataset"]},
-                        run_dir(name) / "queue_validate.log")
+                        run_dir(name) / "queue_validate.log", deadline)
+            if code == TIMED_OUT:
+                entry.update(state="failed", error=f"validate: {spent()}")
+                print(f"{time.strftime('%T')} {entry['error']}: {name}", flush=True)
+                failures += 1
+                save()
+                continue
             if code != 0 or state_of(name) != "done":
                 entry.update(state="failed", error=f"validate exit {code}; see queue_validate.log")
                 failures += 1
                 save()
                 continue
-            validate_snapshots(name, r, entry)
+            validate_snapshots(name, r, entry, deadline)
             if args.prune:
                 prune(name)
-            entry.update(state="done", minutes=round((time.time() - started) / 60, 1))
+            minutes = (time.time() - started) / 60
+            entry.update(state="done", minutes=round(minutes, 1),
+                         cost_cny=round(minutes / 60 * args.price_per_hour, 2))
+            print(f"{time.strftime('%T')} done: {name} ({cost(minutes, args.price_per_hour)})", flush=True)
             save()
     except KeyboardInterrupt:
         interrupted = True  # a hand on the keyboard keeps the box up

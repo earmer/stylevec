@@ -214,8 +214,9 @@ nce_a_1gpu__nce_on_twin__s42: >
   top-1 0.189, rank 12.6 at 2100 (v2_hard 0.151 / 5.5), mild leak growing over the run (cgap +0.036 at 500,
   -0.048 at 2100; para_beats_own 0.496); content_rel_line +0.012.
 nce_a_1gpu__nce_on__s42: >
-  NCE A: InfoNCE from 0 to 2100, no other change. The reference that separates "InfoNCE off" from the
-  curriculum stages (topic at 600, confounded at 1800); last in the queue, can be dropped. Failed to start (GPU gone), re-queued 2026-10-27.
+  NCE A: InfoNCE from 0 to 2100, no other change; twin's direct reference. Done 2026-10-28: widest and highest
+  top-1 (0.194, rank 14.6 at 2100) but the worst leak, growing all run (cgap -0.032 at 500, -0.098 at 2100;
+  para_beats_own 0.554). The paraphrase candidate (nce_on_twin) halves the leak (-0.048) for ~0.005 top-1.
 burst_a_1gpu__burst_1000__s42: >
   BURST A (screen to 2100, conv_a's evaluation set; compare with conv_a v2_hard): v2_hard (InfoNCE + hinge x10
   for 0-1050, hinge alone after) plus 100-step InfoNCE bursts on clean-only data at 1500-1600 and 1900-2000.
@@ -224,3 +225,10 @@ burst_a_1gpu__burst_1000__s42: >
 burst_a_1gpu__burst_1000_twin__s42: >
   BURST A: burst_1000 with each line's paraphrase as an InfoNCE candidate at T 0.05 in every InfoNCE window
   (gradient checkpointing). Combines the bursts with nce_a's best arm (nce_on_twin). Built 2026-10-28.
+cap_a_1gpu__mid_layers__s42: >
+  CAP A (screen to 2100, conv_a's evaluation set; compare with nce_a nce_on_twin, the same recipe): a learned
+  softmax mix of hidden states 14/18/22/28 instead of the last layer. Tests whether style sits deeper in the
+  network than the last layer exposes (top-1 at a given width). Built 2026-10-28.
+cap_a_1gpu__lora_mlp__s42: >
+  CAP A: LoRA rank 64 on the MLPs (gate/up/down_proj) as well as attention, ~2x the trainable parameters. Tests
+  whether adapter capacity limits how much voice the model can represent. Built 2026-10-28.
