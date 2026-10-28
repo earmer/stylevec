@@ -757,6 +757,7 @@ def objective_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "twin_temperature": float(train.get("infonce_twin_temperature", 0.0)),
         "until_step": int(train.get("infonce_until_step", 0)),
         "from_step": int(train.get("infonce_from_step", 0)),
+        "windows": [(int(start), int(end)) for start, end in train.get("infonce_windows", []) or []],
         "schedule": str(train.get("infonce_weight_schedule", "constant")),
         # The ramp ends where the run does: stop_at_step when set, else max_steps.
         "ramp_steps": int(train.get("stop_at_step", 0)) or int(train.get("max_steps", 1)),
@@ -767,10 +768,15 @@ def objective_at_step(settings: dict[str, Any], global_step: int) -> dict[str, A
     """InfoNCE runs on [train.infonce_from_step, train.infonce_until_step) (0 = no bound); outside it the
     objective is the plain hinge (the `triplet` loss at weight 1, as in model.center's runs), with no twin
     term. Inside it, train.infonce_weight_schedule scales the InfoNCE term (the hinge on top keeps its
-    weight): `constant` 1, `sqrt` sqrt(step / ramp_steps), which rises fast early and slower later."""
+    weight): `constant` 1, `sqrt` sqrt(step / ramp_steps), which rises fast early and slower later.
+    train.infonce_windows ([[start, end), ...], replacing from/until) runs InfoNCE in bursts instead."""
     if settings["loss"] != "infonce":
         return settings
-    if global_step < settings.get("from_step", 0) or 0 < settings.get("until_step", 0) <= global_step:
+    windows = settings.get("windows")
+    if windows:
+        if not any(start <= global_step < end for start, end in windows):
+            return {**settings, "loss": "triplet"}
+    elif global_step < settings.get("from_step", 0) or 0 < settings.get("until_step", 0) <= global_step:
         return {**settings, "loss": "triplet"}
     if settings.get("schedule", "constant") == "sqrt":
         return {**settings, "infonce_weight": min(1.0, global_step / max(1, settings["ramp_steps"])) ** 0.5}

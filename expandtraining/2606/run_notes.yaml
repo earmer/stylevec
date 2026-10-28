@@ -198,14 +198,29 @@ nce_a_1gpu__nce_after_500__s42: >
   NCE A (screen to 2100, conv_a's evaluation set; compare with conv_a v2_hard, where InfoNCE stops at 1050):
   v2_hard with the hinge alone for steps 0-500, then InfoNCE + hinge to the end. Tests whether InfoNCE's
   paraphrase leak forms early, before clean structure exists, and whether keeping InfoNCE on avoids the
-  1050 -> 2100 rank collapse (13-16 -> 5). Snapshots at 500 / 1050 / 1500 / 2100. Queued 2026-10-27.
+  1050 -> 2100 rank collapse (13-16 -> 5). Snapshots at 500 / 1050 / 1500 / 2100. Done 2026-10-27: at 2100
+  top-1 0.169 (v2_hard 0.151), rank 10.0 (5.5), but the leak stays: cgap -0.066 (-0.009), para_beats_own 0.513
+  (0.463), topic gap 0.041 (0.089); content_rel_line +0.013. Kept-on InfoNCE slows the narrowing, but the
+  hinge-only phase is what repaired v2_hard's leak. Step 500 (hinge only) is still near the base model.
 nce_a_1gpu__nce_ramp__s42: >
   NCE A: InfoNCE weight sqrt(step / 2100) from 0 (0.5 at 525, 0.71 at 1050, 1 at 2100), hinge x10 throughout.
-  Tests a gradual onset with no switch. Queued 2026-10-27.
+  Tests a gradual onset with no switch. Done 2026-10-27 (validation re-run after the GPU dropped out): no leak
+  (cgap +0.105, para_beats_own 0.421) but narrow and weak: top-1 0.139, rank 4.6 at 2100, already 5.2 at 500.
+  With InfoNCE weak early the hinge narrows the space first and full-weight InfoNCE later never re-widens it.
 nce_a_1gpu__nce_on_twin__s42: >
   NCE A: InfoNCE from 0 to 2100 plus each line's paraphrase as an InfoNCE candidate at T 0.05 (gradient
   checkpointing, ~1.5x time; T 0.03 cut the leak but ~40% of top-1, T 0.1 did nothing). Tests whether InfoNCE
-  can counter its own leak. Queued 2026-10-27.
+  can counter its own leak. Done 2026-10-27 (re-queued after the GPU dropped out): best balance so far,
+  top-1 0.189, rank 12.6 at 2100 (v2_hard 0.151 / 5.5), mild leak growing over the run (cgap +0.036 at 500,
+  -0.048 at 2100; para_beats_own 0.496); content_rel_line +0.012.
 nce_a_1gpu__nce_on__s42: >
   NCE A: InfoNCE from 0 to 2100, no other change. The reference that separates "InfoNCE off" from the
-  curriculum stages (topic at 600, confounded at 1800); last in the queue, can be dropped. Queued 2026-10-27.
+  curriculum stages (topic at 600, confounded at 1800); last in the queue, can be dropped. Failed to start (GPU gone), re-queued 2026-10-27.
+burst_a_1gpu__burst_1000__s42: >
+  BURST A (screen to 2100, conv_a's evaluation set; compare with conv_a v2_hard): v2_hard (InfoNCE + hinge x10
+  for 0-1050, hinge alone after) plus 100-step InfoNCE bursts on clean-only data at 1500-1600 and 1900-2000.
+  Tests whether short bursts re-widen the space (v2_hard rank 14 -> 5.5 after 1050) while the hinge-only
+  stretches keep repairing the paraphrase leak. Snapshots every 100 steps from 1000. Built 2026-10-27.
+burst_a_1gpu__burst_1000_twin__s42: >
+  BURST A: burst_1000 with each line's paraphrase as an InfoNCE candidate at T 0.05 in every InfoNCE window
+  (gradient checkpointing). Combines the bursts with nce_a's best arm (nce_on_twin). Built 2026-10-28.

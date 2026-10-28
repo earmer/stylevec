@@ -118,6 +118,15 @@ def validate_loss_config(config: dict[str, Any]) -> None:
     from_step, until_step = (int(config["train"].get(key, 0)) for key in ("infonce_from_step", "infonce_until_step"))
     if from_step > 0 and until_step > 0 and from_step >= until_step:
         raise ValueError("train.infonce_from_step must be below train.infonce_until_step")
+    windows = config["train"].get("infonce_windows", []) or []
+    if windows and (from_step or until_step):
+        raise ValueError("train.infonce_windows replaces infonce_from_step / infonce_until_step; set one")
+    previous_end = 0
+    for window in windows:
+        if len(window) != 2 or not previous_end <= int(window[0]) < int(window[1]) <= max_steps:
+            raise ValueError(f"train.infonce_windows must be increasing, disjoint [start, end) pairs within "
+                             f"[0, train.max_steps], got {windows}")
+        previous_end = int(window[1])
     if str(config["train"].get("infonce_weight_schedule", "constant")) not in INFONCE_WEIGHT_SCHEDULES:
         raise ValueError(f"train.infonce_weight_schedule must be one of {INFONCE_WEIGHT_SCHEDULES}")
     if int(config["model"].get("content_dim", 0)) < 0:

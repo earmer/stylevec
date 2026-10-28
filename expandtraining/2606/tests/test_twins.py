@@ -129,6 +129,17 @@ def test_infonce_from_step_and_sqrt_ramp() -> None:
             validate_loss_config(train_config(**bad))
 
 
+def test_infonce_windows_run_infonce_in_bursts() -> None:
+    bursts = objective_settings_from_config(train_config(infonce_windows=[[0, 1050], [1500, 1600]]))
+    losses = [objective_at_step(bursts, step)["loss"] for step in (0, 1049, 1050, 1499, 1500, 1599, 1600)]
+    assert losses == ["infonce", "infonce", "triplet", "triplet", "infonce", "infonce", "triplet"]
+    validate_loss_config(train_config(infonce_windows=[[0, 100], [100, 200]]))
+    for bad in ({"infonce_windows": [[500, 600], [100, 200]]}, {"infonce_windows": [[0, 3001]]},
+                {"infonce_windows": [[200, 200]]}, {"infonce_windows": [[0, 100]], "infonce_from_step": 50}):
+        with pytest.raises(ValueError):
+            validate_loss_config(train_config(**bad))
+
+
 def probe_rows(para_offset: float) -> tuple[pd.DataFrame, np.ndarray]:
     """Held-out speakers A/B: two origin_vs_para triplets each plus extra real lines; the paraphrase sits
     para_offset away from its anchor along a content axis shared by every speaker."""

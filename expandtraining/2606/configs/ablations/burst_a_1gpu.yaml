@@ -1,0 +1,93 @@
+# BURST A: re-widen the space in short clean InfoNCE bursts. In conv_a (v2_hard), InfoNCE widens the space
+# (rank 14 at step 1050) and the hinge-only phase that follows repairs its paraphrase leak (cgap -0.05 -> -0.01)
+# but narrows it again (rank 5.5 at 2100); nce_a's nce_after_500 kept InfoNCE on and kept rank 10 but not the
+# repair (cgap -0.066). Each arm runs InfoNCE (+ the x10 hinge) only in windows, on clean-only data inside the
+# bursts (curriculum stages of 100 steps; stage fractions are of max_steps 3000), the hinge alone elsewhere:
+#   burst_1000  v2_hard (InfoNCE 0-1050) plus bursts at 1500-1600 and 1900-2000
+#   burst_1000_twin  burst_1000 with each line's paraphrase as an InfoNCE candidate at T 0.05 in every window
+#                    (nce_a: nce_on_twin kept top-1 0.189 / rank 12.6 with a mild leak)
+# A burst-every-500-from-the-start arm was dropped: nce_a's ramp showed a weak early InfoNCE phase lets the
+# hinge narrow the space first (rank 5.2 at 500) and later InfoNCE never re-widens it. Both end with 100 hinge-only steps. No control arm: conv_a's v2_hard is the reference (same data, seed,
+# recipe and evaluation set). Snapshots every 100 steps from 1000 measure how fast the hinge narrows the
+# space after a burst. The LR is cosine over 3000 steps: a burst at 1500 runs at ~0.54 of peak, at 1900 ~0.33.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/burst_a_1gpu.yaml
+name: burst_a_1gpu
+description: >
+  conv_a's v2_hard with InfoNCE in 100-step clean-only bursts after its 0-1050 phase, at 1500 and 1900,
+  with and without the paraphrase candidate in every InfoNCE window. Compare with conv_a v2_hard on rank, top-1, cgap:origin_vs_para and
+  content_rel_line, and on the trajectory every 100 steps.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.content_dim
+  - model.gradient_checkpointing
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_windows
+  - train.infonce_twin_temperature
+  - train.stop_at_step
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - regularization.content_twin_pairs
+  - validation.matryoshka_dims
+  - data.genshin_source
+  - data.genshin_scene_neighbors
+  - data.genshin_topic_matched_variants
+common:
+  train.grad_accum: 8
+  train.stop_at_step: 2100
+  train.keep_weights_at: [0.1667, 0.3333, 0.35, 0.3667, 0.4, 0.4333, 0.4667, 0.5, 0.5333, 0.5667, 0.6, 0.6333, 0.6667, 0.7]
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  validation.matryoshka_dims: [32, 64, 128]
+  model.content_dim: 64
+  regularization.content_weight: 0.5
+  regularization.content_temperature: 0.1
+  regularization.content_leak_weight: 0.05
+  regularization.content_twin_pairs: true
+  curriculum.mode: staged
+  curriculum.grouping: cleanliness
+  curriculum.rule_shares: {trait_positive_vs_negative: 0.25, trait_cross_feature_hard: 0.25,
+                          length_course_genshin: 0.1, length_course_msynthstel: 0.1}
+  data.genshin_source: v2
+  # conv_a's evaluation set (built from its common data); every arm trains on v2_hard's negatives.
+  data.genshin_scene_neighbors: 3
+  data.genshin_topic_matched_variants: 1
+arms:
+  burst_1000:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.infonce_windows: [[0, 1050], [1500, 1600], [1900, 2000]]
+    curriculum.stages:
+      - {until: 0.2, tiers: {clean: 1.0}}
+      - {until: 0.5, tiers: {clean: 0.6, topic: 0.4}}
+      - {until: 0.5333, tiers: {clean: 1.0}}
+      - {until: 0.6, tiers: {clean: 0.6, topic: 0.4}}
+      - {until: 0.6333, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+      - {until: 0.6667, tiers: {clean: 1.0}}
+      - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+  burst_1000_twin:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.infonce_twin_temperature: 0.05
+    model.gradient_checkpointing: true
+    train.infonce_windows: [[0, 1050], [1500, 1600], [1900, 2000]]
+    curriculum.stages:
+      - {until: 0.2, tiers: {clean: 1.0}}
+      - {until: 0.5, tiers: {clean: 0.6, topic: 0.4}}
+      - {until: 0.5333, tiers: {clean: 1.0}}
+      - {until: 0.6, tiers: {clean: 0.6, topic: 0.4}}
+      - {until: 0.6333, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+      - {until: 0.6667, tiers: {clean: 1.0}}
+      - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+comparisons:
+  - {arm: burst_1000_twin, against: burst_1000, isolates: paraphrase candidates in the InfoNCE windows,
+     keys: [train.infonce_twin_temperature, model.gradient_checkpointing]}
+headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank, content_rel_line]
