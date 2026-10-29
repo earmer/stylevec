@@ -254,7 +254,13 @@ clean_nce_a_1gpu__nce_clean__s42: >
   CLEAN NCE A (screen to 2100, conv_a's evaluation set; compare with nce_a nce_on): InfoNCE 0-2100 with only
   clean-tier rows as queries (train.infonce_tiers [clean]); topic and confounded rows stay candidates and keep
   the x10 hinge. Tests whether InfoNCE's width survives without its line-content leak (line_leak_heldout:
-  nce_on_twin 0.700, v2_hard 0.641, 0.5 = none).
+  nce_on_twin 0.700, v2_hard 0.641, 0.5 = none). Done 2026-10-29 (62 min, CNY 2.97): no cut in line leak
+  (0.712 at 2100, rising from 0.680 at 500, where every row is still clean so the mask is inert). Keeps
+  nce_on's width (rank 14.6, top-1 0.188) with less paraphrase leak (cgap -0.059 vs -0.098) and a lower
+  topic gap (0.036). The leak comes from InfoNCE on clean pairs too, not from the topic or confounded rows.
 clean_nce_a_1gpu__nce_clean_twin__s42: >
   CLEAN NCE A: nce_clean plus each line's paraphrase as an InfoNCE candidate at T 0.05 (gradient
   checkpointing); nce_on_twin with clean-only queries. The candidate for a leak-free nce_on_twin (0.189 / 12.6).
+  Done 2026-10-30 (81 min, CNY 3.89): line leak 0.707 at 2100 (nce_on_twin 0.700), lower early (0.658 at
+  500, 0.662 at 1050) but rising after; top-1 0.184, rank 14.6, cgap -0.026, para_beats_own 0.496, topic gap
+  0.054. Wider than nce_on_twin at the same leak; clean-only queries do not stop the line leak.
