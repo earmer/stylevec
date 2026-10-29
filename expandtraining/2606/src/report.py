@@ -291,6 +291,35 @@ def paraphrase_rank(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool = 
             f"n_para_rank_{tag}": float(len(beats))}
 
 
+def line_leak(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool = True) -> dict[str, float]:
+    """Line-specific content: for each origin_vs_para anchor, the share of its speaker's other anchors'
+    paraphrases that sit farther from it than its own paraphrase (raw cosine). 0.5 = the encoder cannot tell
+    its own paraphrase from another line's paraphrase in the same voice (no line content), 1 = it always can.
+    Unlike para_beats_own, every candidate is a paraphrase, so the paraphrase style cancels out."""
+    frame = triplet_frame(rows, embeddings)
+    if frame.empty:
+        return {}
+    frame = frame[(frame["rule"] == "origin_vs_para") & (frame["heldout"] == heldout)]
+    if frame.empty:
+        return {}
+    unit = _unit(embeddings.astype(np.float64))
+    index = {(tid, role): i for i, (tid, role) in enumerate(zip(rows["triplet_id"], rows["role"]))}
+    pairs = pd.DataFrame([(rows.at[index[(tid, "anchor")], "speaker"], rows.at[index[(tid, "anchor")], "text_preview"],
+                           index[(tid, "anchor")], index[(tid, "negative")]) for tid in frame["triplet_id"]],
+                         columns=["speaker", "text", "anchor", "para"]).drop_duplicates("text")
+    shares = []
+    for _speaker, group in pairs.groupby("speaker"):
+        if len(group) < 3:
+            continue
+        cos = unit[group["anchor"].to_numpy()] @ unit[group["para"].to_numpy()].T
+        own = np.diagonal(cos)
+        shares.extend(((cos < own[:, None]).sum(axis=1)) / (len(group) - 1))
+    if not shares:
+        return {}
+    tag = "heldout" if heldout else "seen"
+    return {f"line_leak_{tag}": float(np.mean(shares)), f"n_line_leak_{tag}": float(len(shares))}
+
+
 NULLSPACE_DIMS = (8, 32)
 
 
@@ -437,6 +466,7 @@ def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]
         if len(ovp):
             out["whitened_gap_origin_vs_para"] = float((ovp["pos"] - ovp["neg"]).mean())
     out.update(paraphrase_rank(rows, embeddings))
+    out.update(line_leak(rows, embeddings))
     out.update(content_relation(rows, embeddings))
     for dims in NULLSPACE_DIMS:
         projected = within_speaker_nullspace(rows, embeddings, dims)

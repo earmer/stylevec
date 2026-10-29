@@ -140,6 +140,29 @@ def test_infonce_windows_run_infonce_in_bursts() -> None:
             validate_loss_config(train_config(**bad))
 
 
+def test_infonce_tiers_limit_the_queries_to_clean_rows() -> None:
+    a, p, n = unit([1.0, 0.0], [0.8, 0.6]), unit([0.6, 0.8], [0.0, 1.0]), unit([0.9, 0.1], [0.5, 0.5])
+    batch = {"margin": torch.tensor([0.2, 0.2]), "weight": torch.ones(2), "anchor_style": ["A", "B"],
+             "negative_style": ["C", "D"], "rule": ["origin_vs_para", "same_speaker_real"]}
+    every = objective_settings_from_config(train_config())
+    clean = objective_settings_from_config(train_config(infonce_tiers=["clean"]))
+    _all, stats = objective_loss(a, p, n, batch, every)
+    only, clean_stats = objective_loss(a, p, n, batch, clean)
+    # Row 0 (clean) is the only query; row 1 (confounded) stays a candidate, so row 0's loss is unchanged.
+    assert only.item() == pytest.approx(stats["raw_loss"][0].item())
+    assert clean_stats["query_fraction"].item() == pytest.approx(0.5) and "query_fraction" not in stats
+    none, _ = objective_loss(a, p, n, {**batch, "rule": ["same_speaker_real"] * 2}, clean)
+    assert none.item() == 0.0
+    # The hinge on top still sees every row.
+    hinged, _ = objective_loss(a, p, n, batch, {**clean, "triplet_weight": 1.0})
+    from losses import weighted_triplet_margin_loss
+
+    triplet, _ = weighted_triplet_margin_loss(a, p, n, batch["margin"], batch["weight"])
+    assert hinged.item() == pytest.approx(only.item() + triplet.item())
+    with pytest.raises(ValueError):
+        validate_loss_config(train_config(infonce_tiers=["easy"]))
+
+
 def probe_rows(para_offset: float) -> tuple[pd.DataFrame, np.ndarray]:
     """Held-out speakers A/B: two origin_vs_para triplets each plus extra real lines; the paraphrase sits
     para_offset away from its anchor along a content axis shared by every speaker."""
@@ -175,6 +198,28 @@ def test_paraphrase_rank_separates_style_from_content_and_nullspace_keeps_shape(
     assert near["para_beats_own_heldout"] > far["para_beats_own_heldout"] and near["para_top1_heldout"] > 0
     projected = within_speaker_nullspace(rows, emb, 2)
     assert projected.shape == emb.shape and np.allclose(np.linalg.norm(projected, axis=1), 1.0)
+
+
+def test_line_leak_is_one_half_without_line_content_and_rises_with_it() -> None:
+    from report import line_leak
+
+    rng = np.random.default_rng(1)
+    style, recs, vecs = rng.normal(size=16), [], []
+    for i in range(40):
+        content, para_style = rng.normal(size=16), rng.normal(size=16) * 0.3
+        for role, vec in (("anchor", style + content), ("positive", style + rng.normal(size=16)),
+                          ("negative", para_style + content)):
+            recs.append({"triplet_id": f"t{i}", "role": role, "rule": "origin_vs_para", "heldout": True,
+                         "speaker": "A", "text_preview": f"t{i}{role}"})
+            vecs.append(vec)
+    rows, emb = pd.DataFrame(recs), np.stack(vecs)
+    leaky = line_leak(rows, emb)
+    assert leaky["n_line_leak_heldout"] == 40 and leaky["line_leak_heldout"] > 0.9
+    # Drop the content from the anchors: its own paraphrase is no closer than another line's.
+    is_anchor = (rows["role"] == "anchor").to_numpy()
+    emb[is_anchor] = style + rng.normal(size=(40, 16)) * 0.01
+    assert abs(line_leak(rows, emb)["line_leak_heldout"] - 0.5) < 0.1
+    assert line_leak(rows.assign(heldout=False), emb) == {}
 
 
 def test_paraphrase_nullspace_removes_the_shared_content_axis() -> None:

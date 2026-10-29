@@ -51,6 +51,7 @@ def info_nce_loss(
     twin: torch.Tensor | None = None,
     has_twin: torch.Tensor | None = None,
     twin_temperature: float = 0.0,
+    queries: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """In-batch InfoNCE on cosine / temperature. Row i's candidates: every positive (its own is the target),
     every other anchor, and every mined negative (its own always kept).
@@ -62,6 +63,9 @@ def info_nce_loss(
     row's candidate with anchor i's style is a false negative and is dropped from the denominator, not
     pushed away. Distinct ids that never match (e.g. negative values per row) mean "unknown, keep".
     Margins only feed the hinge-style `violations` diagnostic, so logs stay comparable with the triplet loss.
+
+    queries (bool, batch) limits the loss to those rows, averaged over them (0 when there are none); the
+    other rows stay candidates for every query.
     """
     if anchor.shape != positive.shape or anchor.shape != negative.shape:
         raise ValueError(
@@ -102,7 +106,10 @@ def info_nce_loss(
     logits = logits.masked_fill(blocked, torch.finfo(logits.dtype).min)
     targets = torch.arange(batch, device=anchor.device)
     raw = F.cross_entropy(logits, targets, reduction="none")
-    loss = (raw * weights.float()).mean()
+    if queries is None:
+        loss = (raw * weights.float()).mean()
+    else:
+        loss = (raw * weights.float() * queries.float()).sum() / queries.float().sum().clamp(min=1.0)
 
     pos_cos = torch.diagonal(sim_p)
     neg_cos = torch.diagonal(sim_n)
@@ -116,6 +123,8 @@ def info_nce_loss(
         "masked_fraction": masked.mean().detach(),
         "accuracy": (logits.argmax(dim=1) == targets).float().mean().detach(),
     }
+    if queries is not None:
+        stats["query_fraction"] = queries.float().mean().detach()
     if use_twin and bool(has_twin.any()):
         rows = has_twin
         stats["twin_cos"] = twin_cos[rows].mean().detach()

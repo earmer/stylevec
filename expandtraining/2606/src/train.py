@@ -29,7 +29,7 @@ from config import (
 )
 from dataset import TripletTextDataset, make_triplet_collate
 from conversation_batches import conversation_group, conversation_stats, group_by_conversation
-from curriculum import curriculum_order, schedule_summary
+from curriculum import curriculum_order, rule_tier, schedule_summary
 from losses import (
     content_pair_loss,
     cross_correlation_penalty,
@@ -748,7 +748,9 @@ def spread_step_loss(
 
 def objective_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
     """train.loss picks the main objective: `triplet` (the hinge on 1 - cos, default) or `infonce`.
-    Under infonce, train.infonce_triplet_weight adds the hinge on top (0 = InfoNCE alone)."""
+    Under infonce, train.infonce_triplet_weight adds the hinge on top (0 = InfoNCE alone).
+    train.infonce_tiers (cleanliness tiers, curriculum.RULE_CLEANLINESS) limits InfoNCE's queries to rows of
+    those rules; the hinge on top still sees every row. Empty = every row."""
     train = config["train"]
     return {
         "loss": str(train.get("loss", "triplet")),
@@ -759,6 +761,7 @@ def objective_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "from_step": int(train.get("infonce_from_step", 0)),
         "windows": [(int(start), int(end)) for start, end in train.get("infonce_windows", []) or []],
         "schedule": str(train.get("infonce_weight_schedule", "constant")),
+        "tiers": [str(tier) for tier in train.get("infonce_tiers", []) or []],
         # The ramp ends where the run does: stop_at_step when set, else max_steps.
         "ramp_steps": int(train.get("stop_at_step", 0)) or int(train.get("max_steps", 1)),
     }
@@ -796,6 +799,14 @@ def style_group_ids(batch: dict[str, Any], device: torch.device) -> tuple[torch.
     return encode(batch["anchor_style"], 1), encode(batch["negative_style"], 2)
 
 
+def infonce_queries(batch: dict[str, Any], tiers: list[str] | None, device: torch.device) -> torch.Tensor | None:
+    """Rows whose rule is in one of `tiers` by cleanliness (None when tiers is empty: every row)."""
+    if not tiers:
+        return None
+    return torch.tensor([rule_tier(rule, grouping="cleanliness") in tiers for rule in batch["rule"]],
+                        dtype=torch.bool, device=device)
+
+
 def objective_loss(
     anchor: torch.Tensor,
     positive: torch.Tensor,
@@ -825,6 +836,7 @@ def objective_loss(
         twin=twin,
         has_twin=has_twin,
         twin_temperature=settings.get("twin_temperature", 0.0),
+        queries=infonce_queries(batch, settings.get("tiers"), anchor.device),
     )
     stats["infonce_loss"] = loss.detach()
     if "infonce_weight" in settings:
@@ -958,7 +970,7 @@ def log_train_step(
     writer.add_scalar("spread/top_eigen_ratio", float(spread_stats["top_eigen_ratio"].float().cpu().item()), global_step)
     writer.add_scalar("spread/effective_rank", float(spread_stats["effective_rank"].float().cpu().item()), global_step)
     for key in ("masked_fraction", "accuracy", "infonce_loss", "triplet_loss", "twin_cos", "twin_violation",
-                "twin_fraction"):
+                "twin_fraction", "query_fraction"):
         if key in stats:
             writer.add_scalar(f"infonce/{key}", float(stats[key].float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():

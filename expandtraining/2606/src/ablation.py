@@ -452,7 +452,7 @@ DIAGNOSTIC_KEYS = ("topic_gap_hub_neg", "topic_gap_other_neg", "real_gap_heldout
                    "heldout_top1_cross_scene", "whitened_top1", "whitened_gap_origin_vs_para",
                    "heldout_top1_macro", "seen_top1_matched", "memory_gap_matched",
                    "heldout_top1_d32", "heldout_top1_d64", "heldout_top1_d128",
-                   "para_beats_own_heldout", "para_top1_heldout", "null8_top1", "null8_para_beats_own_heldout",
+                   "para_beats_own_heldout", "para_top1_heldout", "line_leak_heldout", "null8_top1", "null8_para_beats_own_heldout",
                    "null32_top1", "null32_para_beats_own_heldout",
                    "content_rel_line", "content_rel_pair", "content_rel_speaker", "content_rel_line_top",
                    "pnull8_top1", "pnull8_para_beats_own_heldout", "pnull32_top1", "pnull32_para_beats_own_heldout")
@@ -461,9 +461,9 @@ SPEAKER_PAIRED = "heldout_top1_macro (paired by speaker)"
 
 def load_diagnostics(validation: Path, probe: dict[str, Any]) -> dict[str, Any]:
     """report.diagnostics from the probe file, or recomputed from rows + embeddings for runs validated
-    before a diagnostic existed. Empty when neither is available."""
+    before a diagnostic existed (per-speaker hits, line leak). Empty when neither is available."""
     extra = probe.get("diagnostics")
-    if extra is None or "heldout_top1_by_speaker" not in extra:
+    if extra is None or not {"heldout_top1_by_speaker", "line_leak_heldout"} <= set(extra):
         rows_path, embeddings_path = validation / "rows.parquet", validation / "embeddings.npy"
         if not rows_path.exists() or not embeddings_path.exists():
             return extra or {}

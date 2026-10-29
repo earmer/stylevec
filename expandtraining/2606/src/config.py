@@ -8,6 +8,7 @@ from typing import Any
 import yaml
 
 from conversation_batches import conversation_group
+from curriculum import CLEANLINESS
 from leak import validate_leak_config
 from trait_directions import validate_trait_direction_config
 
@@ -127,6 +128,9 @@ def validate_loss_config(config: dict[str, Any]) -> None:
             raise ValueError(f"train.infonce_windows must be increasing, disjoint [start, end) pairs within "
                              f"[0, train.max_steps], got {windows}")
         previous_end = int(window[1])
+    tiers = config["train"].get("infonce_tiers", []) or []
+    if any(tier not in CLEANLINESS for tier in tiers):
+        raise ValueError(f"train.infonce_tiers must name cleanliness tiers {CLEANLINESS}, got {tiers}")
     if str(config["train"].get("infonce_weight_schedule", "constant")) not in INFONCE_WEIGHT_SCHEDULES:
         raise ValueError(f"train.infonce_weight_schedule must be one of {INFONCE_WEIGHT_SCHEDULES}")
     if int(config["model"].get("content_dim", 0)) < 0:
