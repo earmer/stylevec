@@ -133,7 +133,15 @@ class LayerFusion(nn.Module):
     def output_multiplier(self) -> int:
         return len(self.layers) if self.mode == "concat" else 1
 
-    def forward(self, last_hidden: torch.Tensor, hidden_states: tuple[torch.Tensor, ...] | None) -> torch.Tensor:
+    def forward(
+        self,
+        last_hidden: torch.Tensor,
+        hidden_states: tuple[torch.Tensor, ...] | None,
+        final_norm: nn.Module | None = None,
+    ) -> torch.Tensor:
+        """final_norm is the backbone's output norm. hidden_states[-1] has already been through it, the others
+        are the raw residual stream, where a few channels run ~100x larger: mean-pooled, they hold ~100% of the
+        energy and the fused space collapses to rank ~1 (cap_a mid_layers). So they go through it too."""
         if self.mode == "last":
             return last_hidden
         if hidden_states is None:
@@ -141,7 +149,11 @@ class LayerFusion(nn.Module):
         max_layer = max(self.layers)
         if max_layer >= len(hidden_states):
             raise ValueError(f"requested layer {max_layer}, but model returned {len(hidden_states)} hidden states")
-        selected = [hidden_states[index] for index in self.layers]
+        last = len(hidden_states) - 1
+        selected = [
+            final_norm(hidden_states[index]) if final_norm is not None and index != last else hidden_states[index]
+            for index in self.layers
+        ]
         if self.mode == "concat":
             return torch.cat(selected, dim=-1)
         if self.layer_logits is None:
@@ -182,6 +194,10 @@ class QwenStyleEncoder(nn.Module):
             if settings.null_dims > 0 else None
         )
 
+    def _final_norm(self) -> nn.Module | None:
+        base = self.backbone.get_base_model() if hasattr(self.backbone, "get_base_model") else self.backbone
+        return getattr(base, "norm", None)
+
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> dict[str, torch.Tensor]:
         need_hidden = self.settings.layer_mode != "last"
         outputs = self.backbone(
@@ -190,7 +206,9 @@ class QwenStyleEncoder(nn.Module):
             output_hidden_states=need_hidden,
             return_dict=True,
         )
-        token_hidden = self.fusion(outputs.last_hidden_state, outputs.hidden_states if need_hidden else None)
+        token_hidden = self.fusion(
+            outputs.last_hidden_state, outputs.hidden_states if need_hidden else None, self._final_norm()
+        )
         pooled = self.pool(token_hidden, attention_mask)
         pooled = pooled.to(dtype=self.projection.weight.dtype)
         if self.center is not None:

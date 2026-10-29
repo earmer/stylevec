@@ -5,6 +5,9 @@
 #   mid_layers  a learned softmax-weighted mix of hidden states 14, 18, 22 and 28 (28 = the last layer's output)
 #               instead of the last layer alone
 #   lora_mlp    LoRA rank 64 also on the MLPs (gate/up/down_proj), ~2x the trainable parameters
+#   mid_layers_norm  mid_layers re-run after the fusion fix: mid_layers mixed layers 14/18/22 in as raw
+#               residual stream (only 28 is post-norm) and collapsed from the start (rank 1.2 at init, ~3 after);
+#               they now go through the backbone's final norm (rank 30 at init). Same config, new code.
 # No control arm: nce_a's nce_on_twin is this recipe on the same dataset and evaluation set. Each run is capped
 # at CNY 6 by run_queue (lora_mlp is the slowest; twin alone took 79 min).
 # uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/cap_a_1gpu.yaml
@@ -68,6 +71,13 @@ arms:
     model.gradient_checkpointing: true
     model.layer_fusion.mode: weighted_sum
     model.layer_fusion.layers: [14, 18, 22, 28]
+  mid_layers_norm:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    train.infonce_twin_temperature: 0.05
+    model.gradient_checkpointing: true
+    model.layer_fusion.mode: weighted_sum
+    model.layer_fusion.layers: [14, 18, 22, 28]
   lora_mlp:
     data.genshin_scene_neighbors: 8
     data.genshin_topic_matched_variants: 3
@@ -76,6 +86,8 @@ arms:
     model.lora.targets: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
 comparisons:
   - {arm: lora_mlp, against: mid_layers, isolates: MLP adapters vs a layer mix,
+     keys: [model.layer_fusion.mode, model.layer_fusion.layers, model.lora.targets]}
+  - {arm: lora_mlp, against: mid_layers_norm, isolates: MLP adapters vs a normed layer mix,
      keys: [model.layer_fusion.mode, model.layer_fusion.layers, model.lora.targets]}
 headline: [heldout_top1_macro, whitened_top1, cgap:origin_vs_para, para_beats_own_heldout,
            gap:same_speaker_topic_matched, effective_rank, content_rel_line]

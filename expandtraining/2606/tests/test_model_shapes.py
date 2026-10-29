@@ -55,6 +55,14 @@ def test_layer_fusion_concat_shape() -> None:
     assert out.shape == (2, 4, 10)
 
 
+def test_layer_fusion_puts_intermediate_layers_through_the_final_norm() -> None:
+    fusion = LayerFusion("concat", (1, 3))
+    states = tuple(torch.full((1, 2, 4), float(index + 1)) for index in range(4))
+    out = fusion(states[-1], states, final_norm=lambda hidden: hidden * 0)
+    assert torch.equal(out[..., :4], torch.zeros(1, 2, 4)), "layer 1 is raw residual stream: normed"
+    assert torch.equal(out[..., 4:], states[3]), "the last layer is already normed: left alone"
+
+
 def test_qwen_style_encoder_fake_backbone_shape() -> None:
     model = QwenStyleEncoder(FakeBackbone(hidden_size=4), hidden_size=4, settings=settings("weighted_sum", (1, 2)))
     batch = {
