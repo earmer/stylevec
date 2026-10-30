@@ -264,3 +264,12 @@ clean_nce_a_1gpu__nce_clean_twin__s42: >
   Done 2026-10-30 (81 min, CNY 3.89): line leak 0.707 at 2100 (nce_on_twin 0.700), lower early (0.658 at
   500, 0.662 at 1050) but rising after; top-1 0.184, rank 14.6, cgap -0.026, para_beats_own 0.496, topic gap
   0.054. Wider than nce_on_twin at the same leak; clean-only queries do not stop the line leak.
+scene_a_1gpu__scene4__s42: >
+  SCENE A (screen to 2100, conv_a's evaluation set; compare with clean_nce_a nce_clean_twin): nce_clean_twin
+  with train.conversation_group 4, so InfoNCE's in-batch candidates come in groups of up to 4 from the anchor's
+  own conversation (different speakers) and topic no longer separates them. InfoNCE on all run (conv_a's
+  v2_conv stopped it at 1050). Tests whether the line leak (nce_clean_twin 0.707) comes from easy cross-scene
+  candidates.
+scene_a_1gpu__scene8__s42: >
+  SCENE A: scene4 with groups of 8 (4 conversations per 32-row micro-batch): the stronger dose of
+  same-conversation candidates.
