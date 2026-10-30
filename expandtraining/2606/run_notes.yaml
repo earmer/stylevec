@@ -270,6 +270,12 @@ scene_a_1gpu__scene4__s42: >
   own conversation (different speakers) and topic no longer separates them. InfoNCE on all run (conv_a's
   v2_conv stopped it at 1050). Tests whether the line leak (nce_clean_twin 0.707) comes from easy cross-scene
   candidates.
+  Done 2026-10-31 (76.5 min, CNY 3.67; 65% of anchors grouped): line leak 0.728 at 2100 (0.673 at 500, 0.682
+  at 1050, 0.710 at 1500), above nce_clean_twin; top-1 0.167, rank 16.4, cgap -0.071, para_beats_own 0.515,
+  topic gap 0.038. Same-conversation candidates do not cut the line leak, and identity gets worse.
 scene_a_1gpu__scene8__s42: >
   SCENE A: scene4 with groups of 8 (4 conversations per 32-row micro-batch): the stronger dose of
   same-conversation candidates.
+  Done 2026-10-31 (79.3 min, CNY 3.81; 67% of anchors grouped): line leak 0.713 at 2100 (0.682 at 500, 0.693
+  at 1050, 0.700 at 1500), level with nce_clean_twin; top-1 0.193, rank 15.7, cgap -0.066, para_beats_own
+  0.519, topic gap 0.041. Topic gap a little lower, but no change in line leak; scene batching is ruled out.
