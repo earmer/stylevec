@@ -24,8 +24,8 @@ import torch
 
 from ablation import run_metrics
 from config import load_config, workspace_dir
-from frozen_llm import (conditional_scores, hidden_means, load_lm, neutralize, persona_coordinates,
-                        reference_lines, summary_of, validation_rows)
+from frozen_llm import (conditional_scores, fisher_neurons, hidden_means, load_lm, neuron_means, neutralize,
+                        persona_coordinates, reference_lines, summary_of, validation_rows)
 from prebuilt import load_or_build
 from report import heldout_speaker_set
 from validate import write_validation_outputs
@@ -60,11 +60,14 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--dataset", required=True)
     parser.add_argument("--gen-model", required=True, help="writes the neutral rewrites")
-    parser.add_argument("--enc-models", nargs="+", required=True, help="hidden states (raw, diff, persona)")
+    parser.add_argument("--enc-models", nargs="*", default=[], help="hidden states (raw, diff, persona)")
     parser.add_argument("--cond-models", nargs="*", default=[], help="conditional likelihood scores")
     parser.add_argument("--layer-fractions", nargs="+", type=float, default=[0.5, 0.75, 1.0])
     parser.add_argument("--ref-speakers", type=int, default=32)
     parser.add_argument("--ref-lines", type=int, default=12)
+    parser.add_argument("--neuron-models", nargs="*", default=[], help="MLP neuron shifts, top-k by Fisher ratio")
+    parser.add_argument("--neuron-k", nargs="+", type=int, default=[256, 1024])
+    parser.add_argument("--select-lines", type=int, default=48, help="lines per reference speaker for ranking neurons")
     parser.add_argument("--per-rule", type=int, default=0, help="0: the config's validation.per_rule")
     args = parser.parse_args()
 
@@ -80,7 +83,10 @@ def main() -> None:
     (cache / "references.json").write_text(json.dumps(refs, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"{len(rows)} rows, {len(set(texts))} texts, {len(refs)} reference speakers", flush=True)
 
-    neutral = cached_neutrals(cache, texts + ref_texts, args.gen_model, device)
+    select = reference_lines(triplets, args.ref_speakers, args.select_lines) if args.neuron_models else {}
+    select_texts = [line for lines in select.values() for line in lines]
+    neutral = cached_neutrals(cache, texts + ref_texts + select_texts, args.gen_model, device)
+    # hidden-state and conditional caches index this list; texts added later go after it, never into it
     unique = list(dict.fromkeys(texts + ref_texts))
     position = {text: i for i, text in enumerate(unique)}
     row_index = np.array([position[text] for text in texts])
@@ -95,6 +101,7 @@ def main() -> None:
         layers = sorted({max(1, round(f * depth)) for f in args.layer_fractions})
         if npz.exists():
             stored = np.load(npz)
+            assert len(stored[f"t{layers[0]}"]) == len(unique), f"{npz} was built for other texts"
         else:
             plain = hidden_means(unique, tokenizer, model, layers)
             flat = hidden_means(neutral_texts, tokenizer, model, layers)
@@ -120,9 +127,38 @@ def main() -> None:
             torch.cuda.empty_cache()
         methods[f"cond_{tag}"] = np.load(npy)[row_index]
 
+    full = list(dict.fromkeys(unique + select_texts))
+    full_position = {text: i for i, text in enumerate(full)}
+    for path in args.neuron_models:
+        tag = model_tag(path)
+        npz = cache / f"neurons_{tag}_{len(select)}x{args.select_lines}.npz"
+        tokenizer, model = load_lm(path, device)
+        depth = model.config.num_hidden_layers
+        layers = sorted({max(1, round(f * depth)) for f in args.layer_fractions})
+        if npz.exists():
+            stored = np.load(npz)
+        else:
+            plain = neuron_means(full, tokenizer, model, layers)
+            flat = neuron_means([neutral[text] for text in full], tokenizer, model, layers)
+            stored = {f"d{layer}": (plain[layer].astype(np.float32) - flat[layer]).astype(np.float16)
+                      for layer in layers}
+            np.savez(npz, **stored)
+        del model
+        torch.cuda.empty_cache()
+        rows_at = np.array([full_position[text] for text in texts])
+        for layer in layers:
+            diff = stored[f"d{layer}"].astype(np.float32)
+            score, scale = fisher_neurons({name: diff[[full_position[line] for line in lines]]
+                                           for name, lines in select.items()})
+            ranked = np.argsort(-score)
+            np.save(cache / f"neuron_rank_{tag}_l{layer}.npy", np.stack([ranked, score[ranked]]))
+            methods[f"neuronall_{tag}_l{layer}"] = diff[rows_at] / scale
+            for k in args.neuron_k:
+                methods[f"neuron_{tag}_l{layer}_k{k}"] = diff[rows_at][:, ranked[:k]] / scale[ranked[:k]]
+
     table = []
     for name, embeddings in methods.items():
-        run_dir = workspace_dir() / "outputs" / "runs" / f"frozen_{args.tag}__{name}"
+        run_dir = workspace_dir() / "outputs" / "runs" / f"frozen_{args.tag}__{name}__s0"
         out_dir = run_dir / "validation"
         out_dir.mkdir(parents=True, exist_ok=True)
         embeddings = embeddings.astype(np.float32)
@@ -131,7 +167,10 @@ def main() -> None:
         metrics = run_metrics(run_dir, []) or {}
         table.append({"method": name, **{key: metrics.get(key) for key in HEADLINE}})
         print(pd.DataFrame(table[-1:]).to_string(index=False, header=len(table) == 1, float_format="%.3f"), flush=True)
-    pd.DataFrame(table).to_csv(cache / "summary.csv", index=False)
+    summary_path = cache / "summary.csv"
+    old = pd.read_csv(summary_path) if summary_path.exists() else pd.DataFrame(columns=["method"])
+    new = pd.DataFrame(table)
+    pd.concat([old[~old["method"].isin(new["method"])], new]).to_csv(summary_path, index=False)
 
 
 if __name__ == "__main__":

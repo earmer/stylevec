@@ -129,6 +129,46 @@ def hidden_means(texts: list[str], tokenizer, model, layers: list[int], batch_si
     return out
 
 
+@torch.no_grad()
+def neuron_means(texts: list[str], tokenizer, model, layers: list[int], batch_size: int = 64,
+                 max_length: int = 192) -> dict[int, np.ndarray]:
+    """Mean-pooled MLP neuron activations (the input to down_proj) of decoder layer `layer` - 1, so layer L
+    pairs with hidden_states[L]. float16: a 4B model has 9728 neurons a layer."""
+    tokenizer.padding_side = "right"
+    width = model.config.intermediate_size
+    out = {layer: np.zeros((len(texts), width), dtype=np.float16) for layer in layers}
+    captured: dict[int, torch.Tensor] = {}
+    hooks = [
+        model.model.layers[layer - 1].mlp.down_proj.register_forward_pre_hook(
+            lambda _module, inputs, layer=layer: captured.__setitem__(layer, inputs[0]))
+        for layer in layers
+    ]
+    try:
+        order = _by_length(texts)
+        for start in range(0, len(order), batch_size):
+            index = order[start:start + batch_size]
+            encoded = tokenizer([texts[i] for i in index], return_tensors="pt", padding=True, truncation=True,
+                                max_length=max_length).to(model.device)
+            model.model(**encoded)
+            mask = encoded["attention_mask"].unsqueeze(-1).float()
+            for layer in layers:
+                pooled = (captured[layer].float() * mask).sum(1) / mask.sum(1).clamp_min(1.0)
+                out[layer][index] = pooled.cpu().numpy().astype(np.float16)
+    finally:
+        for hook in hooks:
+            hook.remove()
+    return out
+
+
+def fisher_neurons(diff_by_speaker: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Per neuron: variance of the speakers' mean shifts over the mean within-speaker variance (how well the
+    neuron's line-minus-rewrite shift tells speakers apart), and the pooled within-speaker std. Neurons are
+    ranked on training speakers only."""
+    means = np.stack([d.mean(0) for d in diff_by_speaker.values()])
+    within = np.stack([d.var(0) for d in diff_by_speaker.values()]).mean(0)
+    return means.var(0) / np.clip(within, 1e-6, None), np.sqrt(np.clip(within, 1e-6, None))
+
+
 def persona_coordinates(diff: np.ndarray, reference: dict[str, np.ndarray]) -> np.ndarray:
     """Cosine of each row's diff to each reference speaker's mean diff, after removing the mean over speakers."""
     centres = np.stack([vectors.mean(0) for vectors in reference.values()])
