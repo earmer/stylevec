@@ -290,3 +290,10 @@ frozen_a: >
   speakers x 48 lines; half = line - 0.5 rewrite; resid = what a ridge map from the rewrite's hidden state cannot
   predict. Run 1 had the English prompt translate 7.6% of Chinese lines (fixed, rows recomputed); run 2 filled
   the box disk saving all neurons (now only the top columns are kept); run 3 has the final numbers.
+  RESULT (run 3; ours = nce_clean_twin 0.184 top-1, 0.357 whitened, 0.707 leak): no frozen method beats it at
+  matched leak. raw last layer 0.25-0.26 top-1 at leak 0.96-0.97 (content); half 0.25 at 0.89; diff (StyleVector)
+  best 0.154 at 0.689; resid 0.136 at 0.708 (whitened 0.343); persona 0.08-0.11 at 0.57-0.63; cond 0.12 at
+  0.79-0.83; neuron best (4B l27 / 1.7B l21, k1024) 0.184 top-1 but leak 0.78, whitened 0.17. Pooled lines
+  (speaker_aggregate, k=32): ours 0.76, raw 0.92 (content), half 0.87-0.90, neuron 0.41-0.44, diff 0.36, cond 0.32.
+  dim_attribution on ours: dropping the top 128 of 256 flagged dims cuts leak 0.707 -> 0.659 at top-1 0.181
+  (random: 0.709); the leak is spread, not in a few dims. Box about 3.5 h in all, about ¥10.
