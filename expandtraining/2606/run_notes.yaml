@@ -311,3 +311,11 @@ frozen_b: >
   1.7B l21, 0.6B l28 with their lines, rewrites and speakers); rneuron = ridge residual in neuron space; rboth =
   resid and rneuron concatenated; wout / wresid = diff and resid in the span of the top-k neurons' down_proj
   columns; dim_attribution on the best neuron method, to flag content-leaking neurons.
+  RESULT 2026-11-02 (box about 2 h with two restarts; rneuron 5 of 9, rboth skipped for budget): nothing beats
+  nce_clean_twin. rneuron leak 0.88-0.91 (worse than neuron's 0.76: a linear map from the rewrite misses
+  nonlinear neuron content); wout behaves like diff (best 1.7B l21 0.146 top-1 at 0.699 leak); wresid best
+  whitened 0.325 at top-1 0.057. Neuron pruning on the 4B l27 neurons looked like a win when picked on held-out
+  speakers (drop 512: 0.201 top-1 at 0.700 leak) but picked on seen speakers it does nothing (0.178 at 0.772):
+  selection on the test set. On nce_clean_twin, dims picked on seen speakers do transfer (drop 128: leak
+  0.664 at top-1 0.183). The neuron report is readable: 4B l27 top neurons are "?!" surprise (Itto, Amber,
+  Klee), soft particles and trailing ellipses (Klee, Kachina), sighs and hesitation, a clipped "嗯。" opener.
