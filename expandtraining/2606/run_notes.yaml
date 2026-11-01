@@ -312,6 +312,13 @@ head_a_1gpu__notwin__s42: >
   HEAD A: nce_clean_twin with the content head trained on pair rules only (content_twin_pairs off, ~31% of rows
   instead of ~63%). Between nohead and nce_clean_twin: does the twin-pair coverage carry the leak?
   Launched 2026-11-02 after nohead (the user approved the last ~CNY 4).
+  RESULT 2026-11-02 (about 80 min, about CNY 4): every metric identical to nce_clean_twin to the last digit
+  (top-1 0.184, whitened 0.357, leak 0.707, rank 14.6). Cause: a bug, not a finding. With
+  infonce_twin_temperature > 0 the twins are encoded in the main forward (twin_mode grad), and split_roles never
+  returned twin_content, so content_twin_pairs was a silent no-op. In nce_clean_twin, nce_on_twin, scene4/8,
+  cap_a mid_layers / mid_layers_norm / lora_mlp and burst_1000_twin the head trained on pair rules only;
+  their metrics stand, the description does not. Fixed in model.split_roles (test added). The run doubles as a
+  determinism check: same seed and config give bit-identical results.
 frozen_b: >
   FROZEN B (same cache as frozen_a, one short box session): the readable neuron report (top neurons of 4B l27,
   1.7B l21, 0.6B l28 with their lines, rewrites and speakers); rneuron = ridge residual in neuron space; rboth =

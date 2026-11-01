@@ -171,3 +171,25 @@ def test_content_twin_pairs_train_on_twin_rows_and_the_orthogonal_term_reaches_b
     loss.backward()
     assert torch.count_nonzero(model.content_head.weight.grad) > 0
     assert torch.count_nonzero(model.projection.weight.grad) > 0
+
+
+def test_content_twin_pairs_also_train_when_infonce_scores_the_twins() -> None:
+    # "grad" twin mode encodes the twins in the main forward; the content head must still see them.
+    from train import twin_mode
+
+    model = encoder(2)
+    batch = {
+        **token_batch(),
+        "twin": token_batch()["positive"],
+        "has_twin": torch.tensor([False, True]), "twin_is_negative": torch.tensor([True, False]),
+        "rule": ["same_speaker_real", "same_speaker_real"],
+        "anchor_text": ["a", "b"], "positive_text": ["c", "d"], "negative_text": ["a2", "e"],
+    }
+    regularization = {"content_weight": 1.0, "content_twin_pairs": True}
+    config = {"model": {"content_dim": 2}, "train": {"loss": "infonce", "infonce_twin_temperature": 0.05},
+              "regularization": regularization}
+    assert twin_mode(config) == "grad"
+    outputs = encode_triplet_outputs(model, batch)
+    assert "twin_content" in outputs
+    _, stats = content_step_loss(outputs, batch, content_settings_from_config(config), model)
+    assert stats["pairs"] == 1

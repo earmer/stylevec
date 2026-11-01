@@ -343,6 +343,8 @@ def split_roles(roles: list[dict[str, torch.Tensor]]) -> dict[str, Any]:
     outputs["pre_norm"] = torch.cat([role["pre_norm"] for role in roles[:3]])
     if len(roles) > 3:
         outputs["twin"] = roles[3]["embeddings"]
+        if "content" in roles[3]:  # content_twin_pairs reads it (detached) in "grad" twin mode too
+            outputs["twin_content"] = roles[3]["content"]
     return outputs
 
 
