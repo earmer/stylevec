@@ -78,6 +78,7 @@ arms:
     data.genshin_topic_matched_variants: 3
     regularization.content_twin_pairs: false
 comparisons:
-  - {arm: nohead, against: notwin, isolates: the content head on pair rules}
+  - {arm: nohead, against: notwin, isolates: the content head on pair rules,
+     keys: [model.content_dim, regularization.content_weight, regularization.content_leak_weight]}
 headline: [heldout_top1_macro, whitened_top1, line_leak_heldout, cgap:origin_vs_para, para_beats_own_heldout,
            gap:same_speaker_topic_matched, effective_rank, content_rel_line]
