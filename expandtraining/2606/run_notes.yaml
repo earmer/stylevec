@@ -303,9 +303,15 @@ head_a_1gpu__nohead__s42: >
   (content_dim 0, content and leak weights 0). Judged against nce_clean_twin (line leak 0.707, top-1 0.184,
   whitened 0.357, rank 14.6). Free check first: the old hinge-only run with no head (infonce_a center) had leak
   0.600 at top-1 0.108; across all runs leak rises with top-1, so that decides nothing.
+  Done 2026-11-02 (about 80 min, about CNY 4): line leak 0.662 at 2100 (nce_clean_twin 0.707; 0.618 at 500,
+  0.629 at 1050, 0.639 at 1500); top-1 0.178 (0.184), whitened 0.244 (0.357), rank 13.1 (14.6), topic gap 0.060
+  (0.105), para_beats_own 0.470; pooled 32 lines 0.648 (0.758). The head is a partial source: removing it cuts
+  about a fifth of the leak above 0.5, but the leak still climbs through training (InfoNCE itself), and the head
+  was carrying whitened top-1 and pooled accuracy. notwin not run (budget).
 head_a_1gpu__notwin__s42: >
   HEAD A: nce_clean_twin with the content head trained on pair rules only (content_twin_pairs off, ~31% of rows
   instead of ~63%). Between nohead and nce_clean_twin: does the twin-pair coverage carry the leak?
+  Not run: dropped for budget after nohead (2026-11-02).
 frozen_b: >
   FROZEN B (same cache as frozen_a, one short box session): the readable neuron report (top neurons of 4B l27,
   1.7B l21, 0.6B l28 with their lines, rewrites and speakers); rneuron = ridge residual in neuron space; rboth =
