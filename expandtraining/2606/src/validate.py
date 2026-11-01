@@ -301,6 +301,51 @@ def untrained_projection(model: torch.nn.Module, seed: int = 0) -> None:
             model.projection.bias.zero_()
 
 
+def write_validation_outputs(
+    out_dir: Path,
+    rows: pd.DataFrame,
+    embeddings: np.ndarray,
+    summary: dict[str, float],
+    config: dict[str, Any],
+    label: str,
+    final: bool,
+) -> None:
+    """Rows, embeddings and every report file of one validation; `label` names what made the embeddings."""
+    rows.to_parquet(out_dir / "rows.parquet", index=False)
+    np.save(out_dir / "embeddings.npy", embeddings)
+    (out_dir / "cosine_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    if final:
+        write_umap_outputs(rows, embeddings, out_dir)
+    table = per_rule_table(rows, embeddings)
+    retrieval = {
+        "heldout speakers": speaker_retrieval(rows, embeddings, heldout=True),
+        "seen speakers": speaker_retrieval(rows, embeddings, heldout=False),
+    }
+    probe = provenance_probe(rows, embeddings)
+    extra = diagnostics(rows, embeddings, hub_speakers(config))
+    table.to_csv(out_dir / "per_rule.csv", index=False)
+    (out_dir / "retrieval_probe.json").write_text(
+        json.dumps({"retrieval": retrieval, "provenance": probe, "diagnostics": extra}, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    report = [
+        "# Validation Report",
+        "",
+        f"- checkpoint: `{label}`",
+        f"- rows: `{len(rows)}`",
+        f"- embedding_dim: `{embeddings.shape[1]}`",
+        f"- positive cosine mean: `{summary['pos_cos_mean']:.4f}`",
+        f"- negative cosine mean: `{summary['neg_cos_mean']:.4f}`",
+        f"- violation proxy ratio: `{summary['violation_proxy_ratio']:.4f}`",
+        f"- PCA top component ratio: `{summary['pca_top_component_ratio']:.4f}`",
+        f"- length linear R2: `{summary['length_linear_r2']:.4f}`",
+        f"- length/cosine delta corr: `{summary['length_cosine_delta_corr']:.4f}`",
+        f"- same-bucket cosine lift: `{summary['length_same_minus_diff_cos']:.4f}`",
+    ]
+    report += [""] + render_report(table, retrieval, probe, extra)
+    (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+
+
 def run_validation(
     config_path: str,
     run_name: str,
@@ -354,39 +399,8 @@ def run_validation(
         combine_forward=bool(config["train"].get("combine_triplet_forward", False)),
         non_blocking=False,
     )
-    rows.to_parquet(out_dir / "rows.parquet", index=False)
-    np.save(out_dir / "embeddings.npy", embeddings)
-    (out_dir / "cosine_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
-    if final:
-        write_umap_outputs(rows, embeddings, out_dir)
-    table = per_rule_table(rows, embeddings)
-    retrieval = {
-        "heldout speakers": speaker_retrieval(rows, embeddings, heldout=True),
-        "seen speakers": speaker_retrieval(rows, embeddings, heldout=False),
-    }
-    probe = provenance_probe(rows, embeddings)
-    extra = diagnostics(rows, embeddings, hub_speakers(config))
-    table.to_csv(out_dir / "per_rule.csv", index=False)
-    (out_dir / "retrieval_probe.json").write_text(
-        json.dumps({"retrieval": retrieval, "provenance": probe, "diagnostics": extra}, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
-    report = [
-        "# Validation Report",
-        "",
-        f"- checkpoint: `{'untrained baseline (base model, random projection)' if untrained else checkpoint_dir}`",
-        f"- rows: `{len(rows)}`",
-        f"- embedding_dim: `{embeddings.shape[1]}`",
-        f"- positive cosine mean: `{summary['pos_cos_mean']:.4f}`",
-        f"- negative cosine mean: `{summary['neg_cos_mean']:.4f}`",
-        f"- violation proxy ratio: `{summary['violation_proxy_ratio']:.4f}`",
-        f"- PCA top component ratio: `{summary['pca_top_component_ratio']:.4f}`",
-        f"- length linear R2: `{summary['length_linear_r2']:.4f}`",
-        f"- length/cosine delta corr: `{summary['length_cosine_delta_corr']:.4f}`",
-        f"- same-bucket cosine lift: `{summary['length_same_minus_diff_cos']:.4f}`",
-    ]
-    report += [""] + render_report(table, retrieval, probe, extra)
-    (out_dir / "report.md").write_text("\n".join(report) + "\n", encoding="utf-8")
+    label = "untrained baseline (base model, random projection)" if untrained else str(checkpoint_dir)
+    write_validation_outputs(out_dir, rows, embeddings, summary, config, label, final)
     if final:
         log_final_metrics(config, run_name, run_dir)
     return out_dir
