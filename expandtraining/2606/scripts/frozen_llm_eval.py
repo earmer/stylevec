@@ -25,7 +25,7 @@ import torch
 
 from ablation import run_metrics
 from config import load_config, workspace_dir
-from frozen_llm import (conditional_scores, fisher_neurons, hidden_means, language_kept, load_lm, neuron_means,
+from frozen_llm import (conditional_scores, content_residual, fisher_neurons, hidden_means, language_kept, load_lm, neuron_means,
                         neutralize, persona_coordinates, reference_lines, summary_of, validation_rows)
 from prebuilt import load_or_build
 from report import heldout_speaker_set
@@ -110,6 +110,9 @@ def main() -> None:
     now_hash = text_hash(neutral_texts)
     old_hash = text_hash([neutral_before.get(text, "") for text in unique])
 
+    held = heldout_speaker_set(rows)
+    fit = np.unique(np.concatenate([row_index[~rows["speaker"].isin(held).to_numpy()],
+                                    [position[text] for text in ref_texts]]))
     methods: dict[str, np.ndarray] = {}
     for path in args.enc_models:
         tag = model_tag(path)
@@ -141,6 +144,8 @@ def main() -> None:
             methods[f"raw_{tag}_l{layer}"] = plain[row_index]
             methods[f"diff_{tag}_l{layer}"] = diff[row_index]
             methods[f"persona_{tag}_l{layer}"] = persona_coordinates(diff, reference)[row_index]
+            methods[f"half_{tag}_l{layer}"] = (plain - 0.5 * flat)[row_index]
+            methods[f"resid_{tag}_l{layer}"] = content_residual(plain, flat, fit)[row_index]
 
     for path in args.cond_models:
         tag = model_tag(path)
@@ -168,30 +173,31 @@ def main() -> None:
     full_position = {text: i for i, text in enumerate(full)}
     for path in args.neuron_models:
         tag = model_tag(path)
-        npz = cache / f"neurons_{tag}_{len(select)}x{args.select_lines}.npz"
-        tokenizer, model = load_lm(path, device)
-        depth = model.config.num_hidden_layers
-        layers = sorted({max(1, round(f * depth)) for f in args.layer_fractions})
-        if npz.exists():
-            stored = np.load(npz)
-        else:
+        top = max(args.neuron_k)
+        npz = cache / f"neurons_{tag}_{len(select)}x{args.select_lines}_top{top}.npz"
+        if not npz.exists():  # all neurons of every text would fill the disk: keep the top-ranked columns
+            tokenizer, model = load_lm(path, device)
+            depth = model.config.num_hidden_layers
+            layers = sorted({max(1, round(f * depth)) for f in args.layer_fractions})
             plain = neuron_means(full, tokenizer, model, layers)
             flat = neuron_means([neutral[text] for text in full], tokenizer, model, layers)
-            stored = {f"d{layer}": (plain[layer].astype(np.float32) - flat[layer]).astype(np.float16)
-                      for layer in layers}
+            del model
+            torch.cuda.empty_cache()
+            stored = {}
+            for layer in layers:
+                diff = plain.pop(layer).astype(np.float32) - flat.pop(layer)
+                score, scale = fisher_neurons({name: diff[[full_position[line] for line in lines]]
+                                               for name, lines in select.items()})
+                ranked = np.argsort(-score)
+                np.save(cache / f"neuron_rank_{tag}_l{layer}.npy", np.stack([ranked, score[ranked]]))
+                keep = ranked[:top]
+                stored[f"d{layer}"] = (diff[:, keep] / scale[keep]).astype(np.float16)
             np.savez(npz, **stored)
-        del model
-        torch.cuda.empty_cache()
+        stored = np.load(npz)
         rows_at = np.array([full_position[text] for text in texts])
-        for layer in layers:
-            diff = stored[f"d{layer}"].astype(np.float32)
-            score, scale = fisher_neurons({name: diff[[full_position[line] for line in lines]]
-                                           for name, lines in select.items()})
-            ranked = np.argsort(-score)
-            np.save(cache / f"neuron_rank_{tag}_l{layer}.npy", np.stack([ranked, score[ranked]]))
-            methods[f"neuronall_{tag}_l{layer}"] = diff[rows_at] / scale
+        for key in stored.files:
             for k in args.neuron_k:
-                methods[f"neuron_{tag}_l{layer}_k{k}"] = diff[rows_at][:, ranked[:k]] / scale[ranked[:k]]
+                methods[f"neuron_{tag}_l{key[1:]}_k{k}"] = stored[key][rows_at, :k].astype(np.float32)
 
     table = []
     for name, embeddings in methods.items():

@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from frozen_llm import persona_coordinates, reference_lines, validation_rows
+from frozen_llm import content_residual, persona_coordinates, reference_lines, validation_rows
 from records import TripletRecord
 
 
@@ -36,3 +36,12 @@ def test_validation_rows_carry_full_text_and_reference_lines_skip_heldout():
     assert rows["db_id"][0] == 7 and rows["speaker"][2] == "乙"
     refs = reference_lines(triplets, speakers=4, lines=3)
     assert list(refs) == ["甲"] and len(refs["甲"]) == 3
+
+
+def test_content_residual_removes_what_the_rewrite_predicts():
+    rng = np.random.default_rng(0)
+    flat = rng.normal(size=(400, 16)).astype(np.float32)
+    style = rng.normal(size=(400, 16)).astype(np.float32)
+    plain = flat @ rng.normal(size=(16, 16)).astype(np.float32) + style
+    resid = content_residual(plain, flat, np.arange(400), ridge=1e-6)
+    assert np.corrcoef(resid.ravel(), style.ravel())[0, 1] > 0.95

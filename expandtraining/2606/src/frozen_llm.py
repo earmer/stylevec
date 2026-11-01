@@ -183,6 +183,16 @@ def fisher_neurons(diff_by_speaker: dict[str, np.ndarray]) -> tuple[np.ndarray, 
     return means.var(0) / np.clip(within, 1e-6, None), np.sqrt(np.clip(within, 1e-6, None))
 
 
+def content_residual(plain: np.ndarray, flat: np.ndarray, fit: np.ndarray, ridge: float = 1e-2) -> np.ndarray:
+    """What of each line's hidden state a ridge map from its rewrite's hidden state cannot predict: a softer
+    "line minus rewrite" that learns how much of each content direction to remove. Fit on rows `fit` (no labels)."""
+    f_mean, p_mean = flat[fit].mean(0), plain[fit].mean(0)
+    f, p = (flat[fit] - f_mean).astype(np.float64), (plain[fit] - p_mean).astype(np.float64)
+    gram = f.T @ f
+    weight = np.linalg.solve(gram + ridge * np.trace(gram) / len(gram) * np.eye(len(gram)), f.T @ p)
+    return ((plain - p_mean) - (flat - f_mean) @ weight).astype(np.float32)
+
+
 def persona_coordinates(diff: np.ndarray, reference: dict[str, np.ndarray]) -> np.ndarray:
     """Cosine of each row's diff to each reference speaker's mean diff, after removing the mean over speakers."""
     centres = np.stack([vectors.mean(0) for vectors in reference.values()])
