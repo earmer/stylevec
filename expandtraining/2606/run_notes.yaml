@@ -286,3 +286,7 @@ frozen_a: >
   persona = cosine of diff to 32 training speakers' mean diffs; cond = log p(line | neutral rewrite, 12 lines of
   one reference speaker), centred over 32 speakers. Encoders Qwen3-0.6B (our backbone), 1.7B, 4B-Instruct at
   1/2, 3/4 and all layers. Judged against nce_clean_twin (line leak 0.707, top-1 0.184) and the raw floor.
+  neuron = MLP neuron shift (line minus rewrite) of the top 256 / 1024 neurons by Fisher ratio on 32 training
+  speakers x 48 lines; half = line - 0.5 rewrite; resid = what a ridge map from the rewrite's hidden state cannot
+  predict. Run 1 had the English prompt translate 7.6% of Chinese lines (fixed, rows recomputed); run 2 filled
+  the box disk saving all neurons (now only the top columns are kept); run 3 has the final numbers.
