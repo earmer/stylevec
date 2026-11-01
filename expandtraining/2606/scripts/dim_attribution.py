@@ -2,7 +2,8 @@
 
 Random masking: each trial zeroes a random half of the dimensions and rescores held-out top-1 (macro) and line
 leak. A dimension's effect on a metric is its mean with the dimension kept minus its mean with it dropped
-(over trials, every dimension is kept about half the time); ridge and lasso fits of each metric on all masks
+(over trials, every dimension is kept about half the time; --select-on seen measures them on training speakers
+so the held-out ones only confirm); ridge and lasso fits of each metric on all masks
 at once are reported beside it. Dimensions are ranked by leak removed per top-1 lost (ratio, denominator floored
 at the noise) or by the difference in noise units (score); the last step drops the top-ranked ones together and
 rescores against as many random ones. --basis pca masks principal axes instead (a rotation: cosines unchanged).
@@ -22,12 +23,18 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LassoCV, RidgeCV
 
-from report import heldout_top1_by_speaker, line_leak
+from report import heldout_top1_by_speaker, line_leak, speaker_retrieval
 
 
 def score(rows: pd.DataFrame, embeddings: np.ndarray) -> tuple[float, float]:
     top1 = np.mean(list(heldout_top1_by_speaker(rows, embeddings).values()))
     return float(top1), line_leak(rows, embeddings)["line_leak_heldout"]
+
+
+def score_seen(rows: pd.DataFrame, embeddings: np.ndarray) -> tuple[float, float]:
+    """The same two numbers on speakers seen in training, so dimensions can be picked without the held-out ones."""
+    return (speaker_retrieval(rows, embeddings, heldout=False)["top1"],
+            line_leak(rows, embeddings, heldout=False)["line_leak_seen"])
 
 
 def main() -> None:
@@ -38,6 +45,8 @@ def main() -> None:
     parser.add_argument("--names", help="optional text file, one dimension name per line")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--basis", choices=["axis", "pca"], default="axis")
+    parser.add_argument("--select-on", choices=["heldout", "seen"], default="heldout",
+                        help="seen: rank dimensions on training speakers, confirm on held-out ones")
     args = parser.parse_args()
     validation = Path(args.run) / "validation"
     rows = pd.read_parquet(validation / "rows.parquet")
@@ -54,7 +63,7 @@ def main() -> None:
     results = np.zeros((args.trials, 2))
     for trial in range(args.trials):
         masks[trial, rng.permutation(dims)[:dims // 2]] = True  # True = kept
-        results[trial] = score(rows, embeddings * masks[trial])
+        results[trial] = (score_seen if args.select_on == "seen" else score)(rows, embeddings * masks[trial])
         if (trial + 1) % 50 == 0:
             print(f"  {trial + 1} trials", flush=True)
     kept = masks.sum(0)
@@ -74,7 +83,8 @@ def main() -> None:
     table["score"] = table["leak_ridge"] / noise["leak"] - table["top1_ridge"].clip(lower=0) / noise["top1"]
     table["flagged"] = table["leak_ridge"] > 2 * noise["leak"]
     table = table.sort_values("ratio", ascending=False)
-    out = validation / f"dim_attribution_{args.basis}.csv"
+    suffix = "_seen" if args.select_on == "seen" else ""
+    out = validation / f"dim_attribution_{args.basis}{suffix}.csv"
     table.to_csv(out, index=False)
     print(f"effect noise (1 se): top1 {noise['top1']:.4f}, leak {noise['leak']:.4f}; "
           f"{int(table['flagged'].sum())} dims flagged, lasso keeps {int((table['leak_lasso'] > 0).sum())} "
