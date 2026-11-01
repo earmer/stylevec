@@ -66,6 +66,18 @@ def stale_rows(stored: dict, fallback: np.ndarray, now: np.ndarray) -> np.ndarra
     return np.flatnonzero(stored.pop("nhash", fallback) != now)
 
 
+def down_proj(path: str, layer: int) -> np.ndarray:
+    """Decoder layer `layer` - 1's MLP down_proj weight (hidden_states[layer] is that layer's output), read
+    straight from the safetensors shards."""
+    from safetensors import safe_open
+    name = f"model.layers.{layer - 1}.mlp.down_proj.weight"
+    for shard in sorted(Path(path).glob("*.safetensors")):
+        with safe_open(str(shard), framework="pt") as handle:
+            if name in handle.keys():
+                return handle.get_tensor(name).float().numpy()
+    raise KeyError(name)
+
+
 def model_tag(path: str) -> str:
     return Path(path).name.replace("qwen-3-", "q").replace("-instruct", "i").replace(".", "")
 
@@ -84,6 +96,7 @@ def main() -> None:
     parser.add_argument("--neuron-models", nargs="*", default=[], help="MLP neuron shifts, top-k by Fisher ratio")
     parser.add_argument("--neuron-k", nargs="+", type=int, default=[256, 1024])
     parser.add_argument("--select-lines", type=int, default=48, help="lines per reference speaker for ranking neurons")
+    parser.add_argument("--only", nargs="*", default=[], help="write only methods with these prefixes")
     parser.add_argument("--per-rule", type=int, default=0, help="0: the config's validation.per_rule")
     args = parser.parse_args()
 
@@ -114,6 +127,7 @@ def main() -> None:
     fit = np.unique(np.concatenate([row_index[~rows["speaker"].isin(held).to_numpy()],
                                     [position[text] for text in ref_texts]]))
     methods: dict[str, np.ndarray] = {}
+    hidden_diff: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
     for path in args.enc_models:
         tag = model_tag(path)
         npz = cache / f"hidden_{tag}.npz"
@@ -146,6 +160,7 @@ def main() -> None:
             methods[f"persona_{tag}_l{layer}"] = persona_coordinates(diff, reference)[row_index]
             methods[f"half_{tag}_l{layer}"] = (plain - 0.5 * flat)[row_index]
             methods[f"resid_{tag}_l{layer}"] = content_residual(plain, flat, fit)[row_index]
+            hidden_diff[(tag, layer)] = (diff[row_index], methods[f"resid_{tag}_l{layer}"])
 
     for path in args.cond_models:
         tag = model_tag(path)
@@ -170,13 +185,15 @@ def main() -> None:
         methods[f"cond_{tag}"] = np.load(base.with_suffix(".npz"))["scores"][row_index]
 
     full = list(dict.fromkeys(unique + select_texts))
+    speaker_of_text = {**dict(zip(texts, rows["speaker"])), **{t: name for name, lines in select.items() for t in lines}}
     full_position = {text: i for i, text in enumerate(full)}
     for path in args.neuron_models:
         tag = model_tag(path)
         top = max(args.neuron_k)
         npz = cache / f"neurons_{tag}_{len(select)}x{args.select_lines}_top{top}.npz"
-        if not npz.exists():  # all neurons of every text would fill the disk: keep the top-ranked columns
-            tokenizer, model = load_lm(path, device)
+        stored = dict(np.load(npz)) if npz.exists() else {}
+        if not any(key.startswith("p") for key in stored):  # all neurons of every text would fill the disk:
+            tokenizer, model = load_lm(path, device)        # keep the top-ranked columns, line and rewrite apart
             depth = model.config.num_hidden_layers
             layers = sorted({max(1, round(f * depth)) for f in args.layer_fractions})
             plain = neuron_means(full, tokenizer, model, layers)
@@ -185,22 +202,46 @@ def main() -> None:
             torch.cuda.empty_cache()
             stored = {}
             for layer in layers:
-                diff = plain.pop(layer).astype(np.float32) - flat.pop(layer)
-                score, scale = fisher_neurons({name: diff[[full_position[line] for line in lines]]
+                line, rewrite = plain.pop(layer).astype(np.float32), flat.pop(layer).astype(np.float32)
+                score, scale = fisher_neurons({name: (line - rewrite)[[full_position[t] for t in lines]]
                                                for name, lines in select.items()})
                 ranked = np.argsort(-score)
                 np.save(cache / f"neuron_rank_{tag}_l{layer}.npy", np.stack([ranked, score[ranked]]))
                 keep = ranked[:top]
-                stored[f"d{layer}"] = (diff[:, keep] / scale[keep]).astype(np.float16)
+                stored[f"p{layer}"] = (line[:, keep] / scale[keep]).astype(np.float16)
+                stored[f"f{layer}"] = (rewrite[:, keep] / scale[keep]).astype(np.float16)
             np.savez(npz, **stored)
-        stored = np.load(npz)
         rows_at = np.array([full_position[text] for text in texts])
-        for key in stored.files:
+        fit_full = np.concatenate([fit, [full_position[t] for t in select_texts]])
+        for key in [key for key in stored if key.startswith("p")]:
+            layer = key[1:]
+            line, rewrite = stored[f"p{layer}"].astype(np.float32), stored[f"f{layer}"].astype(np.float32)
             for k in args.neuron_k:
-                methods[f"neuron_{tag}_l{key[1:]}_k{k}"] = stored[key][rows_at, :k].astype(np.float32)
+                methods[f"neuron_{tag}_l{layer}_k{k}"] = (line - rewrite)[rows_at, :k]
+                rneuron = content_residual(line[:, :k], rewrite[:, :k], fit_full)[rows_at]
+                methods[f"rneuron_{tag}_l{layer}_k{k}"] = rneuron
+                if f"resid_{tag}_l{layer}" in methods:  # resid of the hidden state beside the neuron residual
+                    hidden = methods[f"resid_{tag}_l{layer}"]
+                    methods[f"rboth_{tag}_l{layer}_k{k}"] = np.concatenate(
+                        [hidden / hidden.std(), rneuron / rneuron.std()], axis=1)
+        for key in [key for key in stored if key.startswith("p")]:
+            layer = int(key[1:])
+            if (tag, layer) not in hidden_diff:
+                continue
+            ranked = np.load(cache / f"neuron_rank_{tag}_l{layer}.npy")[0].astype(int)
+            out = down_proj(path, layer)  # [d_model, neurons]: each neuron's write direction
+            diff, resid = hidden_diff[(tag, layer)]
+            for k in args.neuron_k:
+                basis = np.linalg.pinv(out[:, ranked[:k]])  # coordinates in the top neurons' output span
+                methods[f"wout_{tag}_l{layer}_k{k}"] = diff @ basis.T
+                methods[f"wresid_{tag}_l{layer}_k{k}"] = resid @ basis.T
+        pd.DataFrame({"text": full, "neutral": [neutral[t] for t in full],
+                      "speaker": [speaker_of_text.get(t, "") for t in full]}).to_parquet(cache / "full.parquet")
 
     table = []
     for name, embeddings in methods.items():
+        if args.only and not name.startswith(tuple(args.only)):
+            continue
         run_dir = workspace_dir() / "outputs" / "runs" / f"frozen_{args.tag}__{name}__s0"
         out_dir = run_dir / "validation"
         out_dir.mkdir(parents=True, exist_ok=True)

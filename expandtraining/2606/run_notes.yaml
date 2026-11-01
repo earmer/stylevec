@@ -297,3 +297,14 @@ frozen_a: >
   (speaker_aggregate, k=32): ours 0.76, raw 0.92 (content), half 0.87-0.90, neuron 0.41-0.44, diff 0.36, cond 0.32.
   dim_attribution on ours: dropping the top 128 of 256 flagged dims cuts leak 0.707 -> 0.659 at top-1 0.181
   (random: 0.709); the leak is spread, not in a few dims. Box about 3.5 h in all, about ¥10.
+head_a: >
+  HEAD A (branch frozen-llm): is the content head the line-leak source? nce_clean_twin without the content head
+  (nohead) and with the head trained on pair rules only (notwin; twin pairs off). The head pulls each line toward
+  its own paraphrase on the shared encoder, the only term that does. Judged against nce_clean_twin (line leak
+  0.707, top-1 0.184, whitened 0.357, rank 14.6). Free check first: the old hinge-only run with no head
+  (infonce_a center) had leak 0.600 at top-1 0.108; across all runs leak rises with top-1, so it decides nothing.
+frozen_b: >
+  FROZEN B (same cache as frozen_a, one short box session): the readable neuron report (top neurons of 4B l27,
+  1.7B l21, 0.6B l28 with their lines, rewrites and speakers); rneuron = ridge residual in neuron space; rboth =
+  resid and rneuron concatenated; wout / wresid = diff and resid in the span of the top-k neurons' down_proj
+  columns; dim_attribution on the best neuron method, to flag content-leaking neurons.
