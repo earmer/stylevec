@@ -45,3 +45,15 @@ def test_content_residual_removes_what_the_rewrite_predicts():
     plain = flat @ rng.normal(size=(16, 16)).astype(np.float32) + style
     resid = content_residual(plain, flat, np.arange(400), ridge=1e-6)
     assert np.corrcoef(resid.ravel(), style.ravel())[0, 1] > 0.95
+
+
+def test_aggregate_top1_pools_noisy_lines():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from speaker_aggregate import aggregate_top1
+    rng = np.random.default_rng(0)
+    centres = rng.normal(size=(10, 32))
+    lines = {f"s{i}": np.arange(i * 40, i * 40 + 40) for i in range(10)}
+    embeddings = np.repeat(centres, 40, axis=0) + 4.0 * rng.normal(size=(400, 32))
+    one, _ = aggregate_top1(embeddings, lines, 1)
+    many, used = aggregate_top1(embeddings, lines, 16)
+    assert used == 10 and many > 0.9 > one
