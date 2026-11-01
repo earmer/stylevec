@@ -31,6 +31,19 @@ NEUTRAL_PROMPT = (
     "emotional particles, no character voice. Keep every piece of information and roughly the same length. Keep "
     "the language of the original (Simplified Chinese stays Simplified Chinese). Reply with the rewrite only."
 )
+# The English prompt translated 7.6% of Chinese lines into English (frozen_a); Chinese lines get a Chinese prompt.
+NEUTRAL_PROMPT_ZH = (
+    "把下面这句话改写成平实、中性的规范书面语：去掉口语、口头禅、语气词和人物腔调，保留全部信息，长度大致相同。"
+    "必须用简体中文输出，不要翻译成其他语言。只输出改写结果。"
+)
+
+
+def is_chinese(text: str) -> bool:
+    return sum("\u4e00" <= ch <= "\u9fff" for ch in text) > 0.3 * max(len(text), 1)
+
+
+def language_kept(text: str, rewrite: str) -> bool:
+    return is_chinese(text) == is_chinese(rewrite)
 
 
 def validation_rows(triplets: list[TripletRecord], per_rule: int) -> tuple[pd.DataFrame, list[str]]:
@@ -96,7 +109,8 @@ def neutralize(texts: list[str], tokenizer, model, batch_size: int = 64) -> list
         index = order[start:start + batch_size]
         prompts = [
             tokenizer.apply_chat_template(
-                [{"role": "system", "content": NEUTRAL_PROMPT}, {"role": "user", "content": texts[i]}],
+                [{"role": "system", "content": NEUTRAL_PROMPT_ZH if is_chinese(texts[i]) else NEUTRAL_PROMPT},
+                 {"role": "user", "content": texts[i]}],
                 tokenize=False, add_generation_prompt=True, enable_thinking=False,
             )
             for i in index

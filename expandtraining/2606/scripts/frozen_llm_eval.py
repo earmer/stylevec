@@ -11,6 +11,7 @@ uv run python expandtraining/2606/scripts/frozen_llm_eval.py --tag a \
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -24,8 +25,8 @@ import torch
 
 from ablation import run_metrics
 from config import load_config, workspace_dir
-from frozen_llm import (conditional_scores, fisher_neurons, hidden_means, load_lm, neuron_means, neutralize,
-                        persona_coordinates, reference_lines, summary_of, validation_rows)
+from frozen_llm import (conditional_scores, fisher_neurons, hidden_means, language_kept, load_lm, neuron_means,
+                        neutralize, persona_coordinates, reference_lines, summary_of, validation_rows)
 from prebuilt import load_or_build
 from report import heldout_speaker_set
 from validate import write_validation_outputs
@@ -34,10 +35,13 @@ HEADLINE = ("heldout_top1_macro", "whitened_top1", "line_leak_heldout", "para_be
             "topic_gap_hub_neg", "topic_gap_other_neg", "content_rel_line")
 
 
-def cached_neutrals(cache: Path, texts: list[str], gen_model: str, device: torch.device) -> dict[str, str]:
+def cached_neutrals(cache: Path, texts: list[str], gen_model: str,
+                    device: torch.device) -> tuple[dict[str, str], dict[str, str]]:
+    """(rewrites now, rewrites as cached before this call). Rewrites that switched language are redone."""
     path = cache / "neutral.parquet"
     known = dict(pd.read_parquet(path).itertuples(index=False)) if path.exists() else {}
-    missing = [text for text in dict.fromkeys(texts) if text not in known]
+    before = dict(known)
+    missing = [text for text in dict.fromkeys(texts) if text not in known or not language_kept(text, known[text])]
     if missing:
         tokenizer, model = load_lm(gen_model, device)
         for start in range(0, len(missing), 1024):  # save as it goes: generation is the slow stage
@@ -47,7 +51,19 @@ def cached_neutrals(cache: Path, texts: list[str], gen_model: str, device: torch
             print(f"neutral: {len(known)} texts", flush=True)
         del model
         torch.cuda.empty_cache()
-    return known
+        flipped = sum(not language_kept(text, known[text]) for text in missing)
+        print(f"neutral: {len(missing)} rewritten, {flipped} still switched language", flush=True)
+    return known, before
+
+
+def text_hash(texts: list[str]) -> np.ndarray:
+    return np.array([int(hashlib.blake2b(t.encode(), digest_size=8).hexdigest(), 16) >> 1 for t in texts],
+                    dtype=np.int64)
+
+
+def stale_rows(stored: dict, fallback: np.ndarray, now: np.ndarray) -> np.ndarray:
+    """Rows whose neutral rewrite changed since the cache was built (caches without a hash predate the repair)."""
+    return np.flatnonzero(stored.pop("nhash", fallback) != now)
 
 
 def model_tag(path: str) -> str:
@@ -85,12 +101,14 @@ def main() -> None:
 
     select = reference_lines(triplets, args.ref_speakers, args.select_lines) if args.neuron_models else {}
     select_texts = [line for lines in select.values() for line in lines]
-    neutral = cached_neutrals(cache, texts + ref_texts + select_texts, args.gen_model, device)
+    neutral, neutral_before = cached_neutrals(cache, texts + ref_texts + select_texts, args.gen_model, device)
     # hidden-state and conditional caches index this list; texts added later go after it, never into it
     unique = list(dict.fromkeys(texts + ref_texts))
     position = {text: i for i, text in enumerate(unique)}
     row_index = np.array([position[text] for text in texts])
     neutral_texts = [neutral[text] for text in unique]
+    now_hash = text_hash(neutral_texts)
+    old_hash = text_hash([neutral_before.get(text, "") for text in unique])
 
     methods: dict[str, np.ndarray] = {}
     for path in args.enc_models:
@@ -100,13 +118,20 @@ def main() -> None:
         depth = model.config.num_hidden_layers
         layers = sorted({max(1, round(f * depth)) for f in args.layer_fractions})
         if npz.exists():
-            stored = np.load(npz)
+            stored = dict(np.load(npz))
             assert len(stored[f"t{layers[0]}"]) == len(unique), f"{npz} was built for other texts"
+            stale = stale_rows(stored, old_hash, now_hash)
+            if stale.size:
+                flat = hidden_means([neutral_texts[i] for i in stale], tokenizer, model, layers)
+                for layer in layers:
+                    stored[f"n{layer}"][stale] = flat[layer]
+                np.savez(npz, nhash=now_hash, **stored)
+                print(f"hidden {tag}: {stale.size} rewrites refreshed", flush=True)
         else:
             plain = hidden_means(unique, tokenizer, model, layers)
             flat = hidden_means(neutral_texts, tokenizer, model, layers)
             stored = {f"{kind}{layer}": data[layer] for kind, data in (("t", plain), ("n", flat)) for layer in layers}
-            np.savez(npz, **stored)
+            np.savez(npz, nhash=now_hash, **stored)
         del model
         torch.cuda.empty_cache()
         for layer in layers:
@@ -119,13 +144,25 @@ def main() -> None:
 
     for path in args.cond_models:
         tag = model_tag(path)
-        npy = cache / f"cond_{tag}_{len(refs)}x{args.ref_lines}.npy"
-        if not npy.exists():
+        base = cache / f"cond_{tag}_{len(refs)}x{args.ref_lines}"
+        if base.with_suffix(".npz").exists():
+            stored = dict(np.load(base.with_suffix(".npz")))
+        elif base.with_suffix(".npy").exists():
+            stored = {"scores": np.load(base.with_suffix(".npy"))}
+        else:
+            stored = {"scores": None}
+        stale = (np.arange(len(unique)) if stored["scores"] is None
+                 else stale_rows(stored, old_hash, now_hash))
+        if stale.size:
             tokenizer, model = load_lm(path, device)
-            np.save(npy, conditional_scores(unique, neutral_texts, refs, tokenizer, model))
+            fresh = conditional_scores([unique[i] for i in stale], [neutral_texts[i] for i in stale], refs,
+                                       tokenizer, model)
+            scores = fresh if stored["scores"] is None else stored["scores"]
+            scores[stale] = fresh
+            np.savez(base.with_suffix(".npz"), scores=scores, nhash=now_hash)
             del model
             torch.cuda.empty_cache()
-        methods[f"cond_{tag}"] = np.load(npy)[row_index]
+        methods[f"cond_{tag}"] = np.load(base.with_suffix(".npz"))["scores"][row_index]
 
     full = list(dict.fromkeys(unique + select_texts))
     full_position = {text: i for i, text in enumerate(full)}
