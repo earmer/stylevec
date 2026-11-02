@@ -193,6 +193,49 @@ def content_residual(plain: np.ndarray, flat: np.ndarray, fit: np.ndarray, ridge
     return ((plain - p_mean) - (flat - f_mean) @ weight).astype(np.float32)
 
 
+def style_head(features: np.ndarray, content: np.ndarray, labels: np.ndarray, fit: np.ndarray, dim: int = 64,
+               leak_weight: float = 0.0, temperature: float = 0.1, steps: int = 600, batch: int = 1024,
+               content_dims: int = 128, seed: int = 0) -> np.ndarray:
+    """A linear head trained on frozen features (rows `fit`, speaker `labels`): supervised contrastive loss over
+    speakers, plus leak_weight times the summed squared correlation of the head's outputs with the top principal
+    axes of `content` (each row's rewrite: what the line says, not how). Returns every row's embedding."""
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    mean, std = features[fit].mean(0), features[fit].std(0) + 1e-6
+    x = torch.tensor((features - mean) / std, dtype=torch.float32)
+    c = content[fit] - content[fit].mean(0)
+    _, _, vt = np.linalg.svd(c, full_matrices=False)
+    c = torch.tensor(c @ vt[:content_dims].T, dtype=torch.float32)
+    c = (c - c.mean(0)) / (c.std(0) + 1e-6)
+    _, y = np.unique(labels[fit], return_inverse=True)
+    y = torch.tensor(y)
+    head = torch.nn.Linear(x.shape[1], dim, bias=False)
+    optimizer = torch.optim.AdamW(head.parameters(), lr=1e-3, weight_decay=1e-2)
+    xf = x[fit]
+    for _ in range(steps):
+        pick = torch.tensor(rng.choice(len(fit), size=min(batch, len(fit)), replace=False))
+        z = head(xf[pick])
+        unit = torch.nn.functional.normalize(z, dim=1)
+        logits = unit @ unit.T / temperature
+        eye = torch.eye(len(pick), dtype=torch.bool)
+        logits = logits.masked_fill(eye, -1e9)
+        positive = (y[pick][:, None] == y[pick][None, :]) & ~eye
+        log_prob = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+        has = positive.any(1)
+        loss = -(log_prob * positive).sum(1)[has] / positive.sum(1)[has]
+        loss = loss.mean()
+        if leak_weight > 0.0:
+            zs = (z - z.mean(0)) / (z.std(0) + 1e-6)
+            cb = c[pick]
+            corr = zs.T @ (cb - cb.mean(0)) / (cb.std(0) + 1e-6) / len(pick)
+            loss = loss + leak_weight * (corr ** 2).sum(1).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    with torch.no_grad():
+        return head(x).numpy()
+
+
 def persona_coordinates(diff: np.ndarray, reference: dict[str, np.ndarray]) -> np.ndarray:
     """Cosine of each row's diff to each reference speaker's mean diff, after removing the mean over speakers."""
     centres = np.stack([vectors.mean(0) for vectors in reference.values()])

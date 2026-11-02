@@ -57,3 +57,31 @@ def test_aggregate_top1_pools_noisy_lines():
     one, _ = aggregate_top1(embeddings, lines, 1)
     many, used = aggregate_top1(embeddings, lines, 16)
     assert used == 10 and many > 0.9 > one
+
+
+def test_style_head_keeps_speakers_and_the_leak_weight_drops_content():
+    from frozen_llm import style_head
+
+    rng = np.random.default_rng(0)
+    speakers = np.repeat(np.arange(20), 30)
+    voice = rng.normal(size=(20, 8))[speakers]
+    content = rng.normal(size=(20, 8))[speakers] + 0.5 * rng.normal(size=(600, 8))  # speakers' habitual topics
+    rewrite = np.concatenate([content, rng.normal(size=(600, 8)) * 0.1], axis=1).astype(np.float32)
+    line = np.concatenate([voice + rng.normal(size=(600, 8)), 3 * content], axis=1).astype(np.float32)
+    features = line
+    labels = speakers.astype(str)
+    fit = np.arange(400)  # speakers 0-13; the rest are unseen
+
+    def content_r2(z):
+        z, c = z[400:] - z[400:].mean(0), content[400:] - content[400:].mean(0)
+        coef, *_ = np.linalg.lstsq(c, z, rcond=None)
+        return 1 - ((z - c @ coef) ** 2).sum() / (z ** 2).sum()
+
+    plain = style_head(features, rewrite, labels, fit, dim=8, steps=300, batch=256, content_dims=8)
+    penalised = style_head(features, rewrite, labels, fit, dim=8, leak_weight=4.0, steps=300, batch=256,
+                           content_dims=8)
+    assert content_r2(penalised) < content_r2(plain) - 0.1
+    unseen = penalised[400:] / np.linalg.norm(penalised[400:], axis=1, keepdims=True)
+    sim = unseen @ unseen.T
+    np.fill_diagonal(sim, -1)
+    assert (speakers[400:][sim.argmax(1)] == speakers[400:]).mean() > 0.5

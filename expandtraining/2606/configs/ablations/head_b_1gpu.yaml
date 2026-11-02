@@ -1,0 +1,92 @@
+# HEAD B: two follow-ups to head_a, on nce_clean_twin's recipe.
+#   twinfix  the content head with twin pairs actually on. head_a's notwin found content_twin_pairs was a no-op
+#            whenever twin InfoNCE is on (split_roles dropped twin_content; fixed): nce_clean_twin's head trained on
+#            pair rules only. Does a head that pulls each line toward its paraphrase change the line leak?
+#   adv      what nce_clean_twin really ran (head on pair rules) plus leak_adversary's probe at weight 0.5: an MLP
+#            picks each anchor's content twin from its style embedding and the encoder makes the pick uniform. The
+#            largest leak fix on the old origin_vs_para measure (infonce_d era), never scored on line leak.
+# Judge against nce_clean_twin by line_leak_heldout, then top-1, whitened top-1, rank (0.707 / 0.184 / 0.357 / 14.6).
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/head_b_1gpu.yaml
+name: head_b_1gpu
+description: >
+  nce_clean_twin with the content head's twin pairs really on (twinfix), and with the content-twin adversary at
+  weight 0.5 (adv). Compare with nce_clean_twin on line_leak_heldout, then top-1, whitened top-1 and rank.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.content_dim
+  - model.gradient_checkpointing
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - train.infonce_tiers
+  - train.infonce_twin_temperature
+  - train.stop_at_step
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - regularization.content_twin_pairs
+  - model.leak_probe_hidden
+  - regularization.leak_method
+  - regularization.leak_weight
+  - regularization.leak_queue
+  - regularization.leak_probe_temperature
+  - regularization.leak_probe_warmup
+  - validation.matryoshka_dims
+  - data.genshin_source
+  - data.genshin_scene_neighbors
+  - data.genshin_topic_matched_variants
+common:
+  train.grad_accum: 8
+  train.stop_at_step: 2100
+  train.keep_weights_at: [0.1667, 0.35, 0.5, 0.70]
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 0
+  train.infonce_tiers: [clean]
+  train.infonce_twin_temperature: 0.05
+  model.gradient_checkpointing: true
+  validation.matryoshka_dims: [32, 64, 128]
+  model.content_dim: 64
+  regularization.content_weight: 0.5
+  regularization.content_temperature: 0.1
+  regularization.content_leak_weight: 0.05
+  regularization.content_twin_pairs: true
+  curriculum.mode: staged
+  curriculum.grouping: cleanliness
+  curriculum.stages:
+    - {until: 0.20, tiers: {clean: 1.0}}
+    - {until: 0.60, tiers: {clean: 0.6, topic: 0.4}}
+    - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+  curriculum.rule_shares: {trait_positive_vs_negative: 0.25, trait_cross_feature_hard: 0.25,
+                          length_course_genshin: 0.1, length_course_msynthstel: 0.1}
+  data.genshin_source: v2
+  # conv_a's evaluation set (built from its common data); every arm trains on v2_hard's negatives.
+  data.genshin_scene_neighbors: 3
+  data.genshin_topic_matched_variants: 1
+arms:
+  twinfix:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+  adv:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    regularization.content_twin_pairs: false
+    model.leak_probe_hidden: 256
+    regularization.leak_method: adversary
+    regularization.leak_weight: 0.5
+    regularization.leak_queue: 512
+    regularization.leak_probe_temperature: 0.1
+    regularization.leak_probe_warmup: 200
+comparisons:
+  - {arm: adv, against: twinfix, isolates: twin pairs on the head vs the content-twin adversary,
+     keys: [regularization.content_twin_pairs, model.leak_probe_hidden, regularization.leak_method,
+            regularization.leak_weight, regularization.leak_queue, regularization.leak_probe_temperature,
+            regularization.leak_probe_warmup]}
+headline: [heldout_top1_macro, whitened_top1, line_leak_heldout, cgap:origin_vs_para, para_beats_own_heldout,
+           gap:same_speaker_topic_matched, effective_rank, content_rel_line]

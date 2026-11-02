@@ -26,7 +26,7 @@ import torch
 from ablation import run_metrics
 from config import load_config, workspace_dir
 from frozen_llm import (conditional_scores, content_residual, fisher_neurons, hidden_means, language_kept, load_lm, neuron_means,
-                        neutralize, persona_coordinates, reference_lines, summary_of, validation_rows)
+                        neutralize, persona_coordinates, reference_lines, style_head, summary_of, validation_rows)
 from prebuilt import load_or_build
 from report import heldout_speaker_set
 from validate import write_validation_outputs
@@ -97,6 +97,8 @@ def main() -> None:
     parser.add_argument("--neuron-k", nargs="+", type=int, default=[256, 1024])
     parser.add_argument("--select-lines", type=int, default=48, help="lines per reference speaker for ranking neurons")
     parser.add_argument("--only", nargs="*", default=[], help="write only methods with these prefixes")
+    parser.add_argument("--head-leak", nargs="*", type=float, default=[],
+                        help="fhead: a linear head on line and rewrite neurons per leak weight (needs --only fhead)")
     parser.add_argument("--per-rule", type=int, default=0, help="0: the config's validation.per_rule")
     args = parser.parse_args()
 
@@ -220,6 +222,15 @@ def main() -> None:
                 methods[f"neuron_{tag}_l{layer}_k{k}"] = (line - rewrite)[rows_at, :k]
                 rneuron = content_residual(line[:, :k], rewrite[:, :k], fit_full)[rows_at]
                 methods[f"rneuron_{tag}_l{layer}_k{k}"] = rneuron
+                if args.head_leak and args.only and any(p.startswith("fhead") for p in args.only):
+                    labelled = np.array([i for i in fit_full if speaker_of_text.get(full[i])])
+                    labels = np.array([speaker_of_text.get(text, "") for text in full])
+                    counts = pd.Series(labels[labelled]).value_counts()
+                    labelled = labelled[np.isin(labels[labelled], counts[counts >= 2].index)]
+                    features = np.concatenate([line[:, :k], rewrite[:, :k]], axis=1)
+                    for weight in args.head_leak:
+                        head = style_head(features, rewrite[:, :k], labels, labelled, leak_weight=weight)
+                        methods[f"fhead_{tag}_l{layer}_k{k}_w{weight:g}"] = head[rows_at]
                 if f"resid_{tag}_l{layer}" in methods:  # resid of the hidden state beside the neuron residual
                     hidden = methods[f"resid_{tag}_l{layer}"]
                     methods[f"rboth_{tag}_l{layer}_k{k}"] = np.concatenate(
