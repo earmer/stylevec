@@ -336,11 +336,15 @@ head_b_1gpu__twinfix__s42: >
   HEAD B: nce_clean_twin with the content head's twin pairs really on (the split_roles fix: in every earlier
   twin-InfoNCE run the head trained on pair rules only). Does a head that pulls each line toward its own
   paraphrase on the shared encoder raise or cut the line leak? Judged against nce_clean_twin (line leak 0.707,
-  top-1 0.184, whitened 0.357, rank 14.6) and nohead (0.662).
+  top-1 0.184, whitened 0.357, rank 14.6) and nohead (0.662). Result: line leak 0.721, top-1 0.195, fisher_sep
+  2.45, sep_diff 2.50, sep_para 3.46: the same as nce_clean_twin (0.707 / 0.184 / 2.43 / 2.42 / 3.50); the bug
+  fix changes nothing measurable. Done.
 head_b_1gpu__adv__s42: >
   HEAD B: nce_clean_twin as it really ran (head on pair rules) plus leak_adversary's content-twin probe at weight
   0.5 (MLP probe picks each anchor's twin among 512 queued; the encoder makes the pick uniform). Best leak fix on
   the old origin_vs_para measure, never scored on line leak. Judged against nce_clean_twin (0.707 / 0.184).
+  Result: line leak 0.732, top-1 0.188, fisher_sep 2.55, sep_diff 2.57, sep_para 3.59: no leak cut (slightly
+  worse); the adversary does not remove line content. Done (resumed after the account ran dry).
 frozen_c: >
   FROZEN C (frozen_a's cache, no LM training): fhead = a 64-d linear head on frozen MLP neurons (line and rewrite,
   top 1024 by Fisher ratio, Qwen3 1.7B and 4B-Instruct) trained on training speakers only (supervised
