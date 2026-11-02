@@ -364,3 +364,6 @@ head_c_1gpu__episode__s42: >
 seed_b_1gpu__nohead__s43: >
   SEED B: head_a's nohead at seed 43. The run-to-run noise floor on line leak, top-1 and Fisher separability for
   every one-seed comparison since phase 6 (nohead s42: 0.662 / 0.178 / 1.92).
+  Result: line leak 0.645, top-1 0.162, fisher_sep 1.68, sep_orig 2.92, sep_para 2.77, sep_diff 2.69, rank 5.2.
+  Seed gaps: leak 0.017, top-1 0.016, sep 0.24, sep_orig 0.57, sep_para 0.08, sep_diff 0.04. Leak gaps of 0.05+
+  are real; Fisher separability differences under ~0.5 are not. Done.
