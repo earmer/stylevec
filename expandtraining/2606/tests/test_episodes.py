@@ -58,3 +58,15 @@ def test_episode_infonce_rewards_voice_shared_across_a_speakers_lines_and_ignore
     embeddings = good.clone().requires_grad_(True)
     episode_infonce(embeddings, speakers, k, 0.1)[0].backward()
     assert embeddings.grad.abs().sum() > 0
+
+
+def test_episode_infonce_uses_the_other_speakers_same_half_episodes_as_negatives():
+    speakers, k, dim = 3, 2, 8
+    basis = torch.eye(dim)
+    halves = torch.stack([basis[0], basis[0], basis[1], basis[1], basis[2], basis[2]])  # each speaker's halves agree
+    clean = halves[:, None, :].expand(-1, k, -1).reshape(-1, dim)
+    clash = clean.reshape(speakers, 2, k, dim).clone()
+    clash[1, 0] = basis[0]  # speaker 1's first half looks exactly like speaker 0's first half
+    loss_clean, _ = episode_infonce(clean, speakers, k, 0.1)
+    loss_clash, stats = episode_infonce(clash.reshape(-1, dim), speakers, k, 0.1)
+    assert loss_clash > loss_clean + 1.0 and float(stats["episode_accuracy"]) < 1.0

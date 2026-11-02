@@ -2,14 +2,15 @@
 # off the other speakers' lines; where voices overlap, line content is the cheapest tie-breaker, and the line leak
 # climbs through training (nohead: 0.618 at 500 -> 0.662 at 2100) even with no content head. Here line InfoNCE is
 # off (the hinge alone on lines, as after 1050 in v2_hard) and InfoNCE runs between speakers on episodes: each step
-# 12 training speakers x 2 x 4 real lines from different scenes (db ids >= 150 apart), each half averaged first.
+# 16 training speakers x 2 x 3 real lines from different scenes (db ids >= 150 apart), each half averaged first;
+# InfoNCE over all 32 episodes at T 0.07 (Gemini 4 Argon's second review: more negatives, warmer for pooled means).
 #   episode  nohead's recipe with train.loss triplet and episode_weight 1
 # Judge against nohead (line leak 0.662, top-1 0.178, fisher_sep 1.92, fisher_sep_diff 2.73, pooled k8 0.341) by
 # line_leak_heldout, top-1, fisher_sep / fisher_sep_diff / fisher_sep_para, pooled top-1; not by whitened top-1.
 # uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/head_c_1gpu.yaml
 name: head_c_1gpu
 description: >
-  nohead with line-level InfoNCE replaced by episode InfoNCE (12 speakers x 2 x 4 cross-scene lines, pooled
+  nohead with line-level InfoNCE replaced by episode InfoNCE (16 speakers x 2 x 3 cross-scene lines, pooled
   before the loss). Compare with nohead on line_leak_heldout, top-1 and Fisher separability.
 base: configs/remote_5090x2.yaml
 world_size: 1
@@ -79,9 +80,9 @@ arms:
     train.loss: triplet
     train.infonce_twin_temperature: 0.0
     train.episode_weight: 1.0
-    train.episode_speakers: 12
-    train.episode_k: 4
-    train.episode_temperature: 0.05
+    train.episode_speakers: 16
+    train.episode_k: 3
+    train.episode_temperature: 0.07
     train.episode_min_gap: 150
 comparisons: []
 headline: [heldout_top1_macro, line_leak_heldout, fisher_sep, fisher_rank, fisher_sep_diff, fisher_sep_para,

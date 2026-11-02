@@ -353,8 +353,8 @@ frozen_c: >
   decorrelation from the rewrite does not touch line-specific content. Pooled k32 up to 0.85 (content).
 head_c_1gpu__episode__s42: >
   HEAD C: nohead with line-level InfoNCE replaced by episode InfoNCE (src/episodes.py; Gemini's review): each
-  step 12 training speakers x 2 x 4 real lines from different scenes, each half pooled, InfoNCE between speakers
-  on the pooled episodes at T 0.05; the hinge alone on lines. Tests whether line InfoNCE's use of line content
+  step 16 training speakers x 2 x 3 real lines from different scenes, each half pooled, InfoNCE over all 32
+  episodes at T 0.07 (other speakers' halves on both sides are negatives); the hinge alone on lines. Tests whether line InfoNCE's use of line content
   as a tie-breaker drives the leak. Judged against nohead (line leak 0.662, top-1 0.178, fisher_sep 1.92,
   fisher_sep_diff 2.73, pooled k8 0.341) and seed_b's noise floor; not by whitened top-1.
 seed_b_1gpu__nohead__s43: >

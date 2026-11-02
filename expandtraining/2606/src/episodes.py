@@ -3,8 +3,8 @@
 Line-level InfoNCE at a low temperature pushes each line away from the other speakers' lines; when two
 speakers' voices overlap, utterance content is the cheapest tie-breaker, and the line leak grows with it.
 Here each step draws P training speakers and 2k of each one's real lines from different scenes (db ids at
-least `min_gap` apart), embeds them, averages each speaker's two halves into a query and a key episode, and
-runs InfoNCE between speakers on the episodes: line-specific content averages out before the loss sees it.
+least `min_gap` apart), embeds them, averages each speaker's two halves into two episodes, and runs InfoNCE over
+all 2P episodes (the other half is the positive): line-specific content averages out before the loss sees it.
 """
 from __future__ import annotations
 
@@ -22,9 +22,9 @@ def episode_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
     train = config["train"]
     return {
         "weight": float(train.get("episode_weight", 0.0)),
-        "speakers": int(train.get("episode_speakers", 12)),
-        "k": int(train.get("episode_k", 4)),
-        "temperature": float(train.get("episode_temperature", 0.05)),
+        "speakers": int(train.get("episode_speakers", 16)),
+        "k": int(train.get("episode_k", 3)),
+        "temperature": float(train.get("episode_temperature", 0.07)),
         "min_gap": int(train.get("episode_min_gap", 150)),
     }
 
@@ -85,17 +85,19 @@ class EpisodeSampler:
 
 def episode_infonce(embeddings: torch.Tensor, speakers: int, k: int,
                     temperature: float) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Symmetric InfoNCE between each speaker's query episode and every speaker's key episode (the mean of k
-    unit line embeddings, renormalised)."""
+    """InfoNCE over all 2P episodes (each the mean of k unit line embeddings, renormalised): an episode's
+    positive is the other half of its speaker, its negatives the 2P - 2 episodes of the other speakers."""
     with torch.autocast(device_type=embeddings.device.type, enabled=False):
-        lines = F.normalize(embeddings.float(), dim=-1).reshape(speakers, 2, k, -1)
-        episodes = F.normalize(lines.mean(dim=2), dim=-1)
-        logits = episodes[:, 0] @ episodes[:, 1].T / float(temperature)
-    targets = torch.arange(speakers, device=embeddings.device)
-    loss = 0.5 * (F.cross_entropy(logits, targets) + F.cross_entropy(logits.T, targets))
+        lines = F.normalize(embeddings.float(), dim=-1).reshape(speakers * 2, k, -1)
+        episodes = F.normalize(lines.mean(dim=1), dim=-1)
+        cos = episodes @ episodes.T
+        logits = (cos / float(temperature)).masked_fill(
+            torch.eye(2 * speakers, dtype=torch.bool, device=cos.device), float("-inf"))
+    targets = torch.arange(2 * speakers, device=embeddings.device) ^ 1
+    loss = F.cross_entropy(logits, targets)
     return loss, {"episode_loss": loss.detach(),
                   "episode_accuracy": (logits.argmax(dim=1) == targets).float().mean().detach(),
-                  "episode_pos_cos": torch.diagonal(logits).mean().detach() * float(temperature)}
+                  "episode_pos_cos": cos[torch.arange(2 * speakers), targets].mean().detach()}
 
 
 def episode_step_loss(model: torch.nn.Module, tokenizer: Any, sampler: EpisodeSampler | None, max_length: int,
