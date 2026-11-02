@@ -257,5 +257,6 @@ def test_fisher_separability_splits_voice_from_speaker_habitual_content() -> Non
     plain = fisher_separability(*build(0.0), pcs=12)
     habitual = fisher_separability(*build(1.0), pcs=12)
     assert plain["fisher_sep_para"] < 0.5 * plain["fisher_sep_diff"]  # paraphrases carry no speaker
+    assert plain["fisher_diff_norm"] > 0.0
     assert habitual["fisher_sep_para"] > 2 * plain["fisher_sep_para"]  # unless topics follow the speaker
     assert 1.0 <= plain["fisher_rank"] <= 6.0

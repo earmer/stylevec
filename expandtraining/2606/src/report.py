@@ -353,7 +353,8 @@ def fisher_separability(rows: pd.DataFrame, embeddings: np.ndarray, pcs: int = F
     fisher_sep / fisher_rank on their real lines (how many directions separate speakers, unlike
     effective rank, which also counts within-speaker spread); on their origin_vs_para anchors, fisher_sep_orig
     on the lines, fisher_sep_para on their neutral paraphrases (what survives a rewrite: speaker-habitual
-    content, or voice it kept) and fisher_sep_diff on line minus own paraphrase (shared content cancels)."""
+    content, or voice it kept) and fisher_sep_diff on line minus own paraphrase (shared content cancels), beside fisher_diff_norm, the mean
+    distance between a line's and its paraphrase's unit embeddings."""
     unseen = heldout_speaker_set(rows)
     keep = (~rows["heldout"].astype(bool) & ~rows["speaker"].isin(unseen)).to_numpy(dtype=bool)
     fit = embeddings[keep].astype(np.float64)
@@ -378,6 +379,12 @@ def fisher_separability(rows: pd.DataFrame, embeddings: np.ndarray, pcs: int = F
         result = _fisher([build(group) for _speaker, group in groups])
         if result is not None:
             out[key] = result[0]
+    if len(pairs):  # sep_diff is 0/0 noise when a model maps a line and its paraphrase to the same point
+        a = embeddings[pairs["anchor"].to_numpy()].astype(np.float64)
+        b = embeddings[pairs["para"].to_numpy()].astype(np.float64)
+        a /= np.linalg.norm(a, axis=1, keepdims=True)
+        b /= np.linalg.norm(b, axis=1, keepdims=True)
+        out["fisher_diff_norm"] = float(np.linalg.norm(a - b, axis=1).mean())
     return out
 
 
