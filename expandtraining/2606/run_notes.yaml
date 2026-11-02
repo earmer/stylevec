@@ -347,3 +347,7 @@ frozen_c: >
   contrastive over speakers), plus a penalty on the outputs' squared correlation with the rewrite's top 128
   principal axes, at weights 0, 1 and 4. Asks whether a little training on frozen features beats nce_clean_twin
   (0.184 top-1 at 0.707 line leak) at matched leak.
+  RESULT 2026-11-02 (CPU on the box beside head_b, ~8 min): no. Best top-1 0.259 (4B l27, weight 0), whitened
+  0.270, but line leak 0.94-0.98 everywhere: worse than the frozen neuron diff (0.78) and far from ours (0.707).
+  The content penalty (weights 1, 4) costs 0.02-0.04 top-1 and moves leak by at most 0.008: a linear
+  decorrelation from the rewrite does not touch line-specific content. Pooled k32 up to 0.85 (content).
