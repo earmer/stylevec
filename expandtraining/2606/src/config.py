@@ -111,6 +111,13 @@ def validate_loss_config(config: dict[str, Any]) -> None:
         raise ValueError("train.infonce_triplet_weight must be non-negative")
     if float(config["train"].get("infonce_twin_temperature", 0.0)) < 0.0:
         raise ValueError("train.infonce_twin_temperature must be non-negative (0 = off)")
+    if float(config["train"].get("episode_weight", 0.0)) < 0.0:
+        raise ValueError("train.episode_weight must be non-negative (0 = off)")
+    if float(config["train"].get("episode_weight", 0.0)) > 0.0:
+        if float(config["train"].get("episode_temperature", 0.05)) <= 0.0:
+            raise ValueError("train.episode_temperature must be positive")
+        if int(config["train"].get("episode_k", 4)) < 1 or int(config["train"].get("episode_speakers", 12)) < 2:
+            raise ValueError("train.episode_k must be >= 1 and train.episode_speakers >= 2")
     max_steps = int(config["train"].get("max_steps", 0))
     for key in ("infonce_until_step", "stop_at_step", "infonce_from_step"):
         value = int(config["train"].get(key, 0))

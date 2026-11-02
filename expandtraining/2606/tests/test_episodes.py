@@ -1,0 +1,60 @@
+from __future__ import annotations
+
+import random
+import sys
+from pathlib import Path
+
+import pytest
+import torch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from episodes import EpisodeSampler, episode_infonce, episode_pool, spread_lines
+from records import TripletRecord
+
+
+def record(speaker: str, anchor: str, a_id: int, positive: str, p_id: int, rule: str = "same_speaker_real",
+           split: str = "train", heldout: bool = False) -> TripletRecord:
+    return TripletRecord(anchor, positive, "neg", rule, 1.0, 0.1, split,
+                         {"speaker": speaker, "heldout": heldout, "anchor_db_id": a_id, "positive_db_id": p_id})
+
+
+def test_pool_keeps_training_speakers_real_lines_only():
+    rows = [record("A", "a1", 0, "a2", 500), record("A", "a1", 0, "a3", 900, rule="same_speaker_topic_matched"),
+            record("B", "b1", 0, "b2", 400, split="val"), record("C", "c1", 0, "c2", 400, heldout=True),
+            record("D", "d1", 0, "d2", 400, rule="trait_positive_vs_negative")]
+    assert episode_pool(rows) == {"A": {"a1": 0, "a2": 500, "a3": 900}}
+
+
+def test_spread_lines_come_from_different_scenes():
+    lines = {f"l{i}": i * 50 for i in range(40)}  # every third line is 150 ids on
+    picked = spread_lines(lines, 6, 150, random.Random(0))
+    ids = sorted(lines[t] for t in picked)
+    assert len(picked) == 6 and all(b - a >= 150 for a, b in zip(ids, ids[1:]))
+    assert spread_lines(lines, 20, 150, random.Random(0)) is None
+
+
+def test_sampler_returns_whole_episodes_and_skips_speakers_without_enough_scenes():
+    pool = {f"s{i}": {f"s{i}_{j}": j * 200 for j in range(8)} for i in range(5)}
+    pool["narrow"] = {f"n{j}": j for j in range(8)}  # one scene: never usable
+    sampler = EpisodeSampler(pool, {"speakers": 4, "k": 2, "min_gap": 150, "temperature": 0.05, "weight": 1.0})
+    texts = sampler.sample()
+    assert len(texts) == 16 and not any(t.startswith("n") for t in texts)
+    for block in range(4):
+        assert len({t.split("_")[0] for t in texts[block * 4:(block + 1) * 4]}) == 1
+    with pytest.raises(ValueError):
+        EpisodeSampler(pool, {"speakers": 7, "k": 2, "min_gap": 150, "temperature": 0.05, "weight": 1.0})
+
+
+def test_episode_infonce_rewards_voice_shared_across_a_speakers_lines_and_ignores_line_content():
+    torch.manual_seed(0)
+    speakers, k, dim = 8, 4, 32
+    voice = torch.randn(speakers, 1, 1, dim)
+    content = torch.randn(speakers, 2, k, dim) * 2.0  # every line says something else
+    good = (voice * 3 + content).reshape(-1, dim)
+    loss_good, stats = episode_infonce(good, speakers, k, 0.1)
+    loss_bad, _ = episode_infonce(content.reshape(-1, dim), speakers, k, 0.1)
+    assert loss_good < loss_bad and float(stats["episode_accuracy"]) == 1.0
+    embeddings = good.clone().requires_grad_(True)
+    episode_infonce(embeddings, speakers, k, 0.1)[0].backward()
+    assert embeddings.grad.abs().sum() > 0

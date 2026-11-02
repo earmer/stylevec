@@ -1,0 +1,88 @@
+# HEAD C: episode InfoNCE (Gemini's review; see src/episodes.py). Line-level InfoNCE at T 0.05 pushes each line
+# off the other speakers' lines; where voices overlap, line content is the cheapest tie-breaker, and the line leak
+# climbs through training (nohead: 0.618 at 500 -> 0.662 at 2100) even with no content head. Here line InfoNCE is
+# off (the hinge alone on lines, as after 1050 in v2_hard) and InfoNCE runs between speakers on episodes: each step
+# 12 training speakers x 2 x 4 real lines from different scenes (db ids >= 150 apart), each half averaged first.
+#   episode  nohead's recipe with train.loss triplet and episode_weight 1
+# Judge against nohead (line leak 0.662, top-1 0.178, fisher_sep 1.92, fisher_sep_diff 2.73, pooled k8 0.341) by
+# line_leak_heldout, top-1, fisher_sep / fisher_sep_diff / fisher_sep_para, pooled top-1; not by whitened top-1.
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/head_c_1gpu.yaml
+name: head_c_1gpu
+description: >
+  nohead with line-level InfoNCE replaced by episode InfoNCE (12 speakers x 2 x 4 cross-scene lines, pooled
+  before the loss). Compare with nohead on line_leak_heldout, top-1 and Fisher separability.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.content_dim
+  - model.gradient_checkpointing
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - train.infonce_tiers
+  - train.infonce_twin_temperature
+  - train.stop_at_step
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - regularization.content_twin_pairs
+  - validation.matryoshka_dims
+  - data.genshin_source
+  - data.genshin_scene_neighbors
+  - data.genshin_topic_matched_variants
+  - train.episode_weight
+  - train.episode_speakers
+  - train.episode_k
+  - train.episode_temperature
+  - train.episode_min_gap
+common:
+  train.grad_accum: 8
+  train.stop_at_step: 2100
+  train.keep_weights_at: [0.1667, 0.35, 0.5, 0.70]
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 0
+  train.infonce_tiers: [clean]
+  train.infonce_twin_temperature: 0.05
+  model.gradient_checkpointing: true
+  validation.matryoshka_dims: [32, 64, 128]
+  model.content_dim: 64
+  regularization.content_weight: 0.5
+  regularization.content_temperature: 0.1
+  regularization.content_leak_weight: 0.05
+  regularization.content_twin_pairs: true
+  curriculum.mode: staged
+  curriculum.grouping: cleanliness
+  curriculum.stages:
+    - {until: 0.20, tiers: {clean: 1.0}}
+    - {until: 0.60, tiers: {clean: 0.6, topic: 0.4}}
+    - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+  curriculum.rule_shares: {trait_positive_vs_negative: 0.25, trait_cross_feature_hard: 0.25,
+                          length_course_genshin: 0.1, length_course_msynthstel: 0.1}
+  data.genshin_source: v2
+  # conv_a's evaluation set (built from its common data); every arm trains on v2_hard's negatives.
+  data.genshin_scene_neighbors: 3
+  data.genshin_topic_matched_variants: 1
+arms:
+  episode:
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    model.content_dim: 0
+    regularization.content_weight: 0.0
+    regularization.content_leak_weight: 0.0
+    regularization.content_twin_pairs: false
+    train.loss: triplet
+    train.infonce_twin_temperature: 0.0
+    train.episode_weight: 1.0
+    train.episode_speakers: 12
+    train.episode_k: 4
+    train.episode_temperature: 0.05
+    train.episode_min_gap: 150
+comparisons: []
+headline: [heldout_top1_macro, line_leak_heldout, fisher_sep, fisher_rank, fisher_sep_diff, fisher_sep_para,
+           effective_rank, gap:same_speaker_topic_matched, content_rel_line]

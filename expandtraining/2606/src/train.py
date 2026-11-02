@@ -29,6 +29,7 @@ from config import (
 )
 from dataset import TripletTextDataset, make_triplet_collate
 from conversation_batches import conversation_group, conversation_stats, group_by_conversation
+from episodes import EpisodeSampler, episode_pool, episode_settings_from_config, episode_step_loss
 from curriculum import curriculum_order, rule_tier, schedule_summary
 from losses import (
     content_pair_loss,
@@ -388,6 +389,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     eval_val_loader = val_loader
     raw_train_triplets = [row for row in triplets if row.split == "train"]
     write_run_records(config, run_dir, train_dataset.triplets, raw_train_triplets)
+    episode_settings = episode_settings_from_config(config)
+    episode_sampler = (EpisodeSampler(episode_pool(raw_train_triplets), episode_settings, seed=int(config["runtime"]["seed"]))
+                       if episode_settings["weight"] > 0.0 else None)
 
     requested_device = str(config["runtime"]["device"])
     use_accelerate = str(config["runtime"].get("distributed", "none")) == "accelerate" or int(os.environ.get("WORLD_SIZE", "1")) > 1
@@ -515,6 +519,11 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
                     trait_loss, trait_stats = trait_direction_loss(trait_state, outputs, batch)
                     loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss + trait_loss
+                    episode_loss, episode_stats = episode_step_loss(
+                        model, tokenizer, episode_sampler, int(config["model"]["max_length"]), anchor.device)
+                    if episode_loss is not None:
+                        loss = loss + episode_loss
+                        stats = {**stats, **episode_stats}
                     if grad_accum > 1:
                         window_size = accumulation_window(batch_index, total_batches, grad_accum)
                         loss = loss * (float(grad_accum) / float(window_size))
@@ -585,6 +594,11 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     leak_loss, leak_stats = leak_step_loss(leak_state, outputs, batch, global_step)
                     trait_loss, trait_stats = trait_direction_loss(trait_state, outputs, batch)
                     loss = loss + spread_loss + matryoshka_loss + content_loss + leak_loss + trait_loss
+                    episode_loss, episode_stats = episode_step_loss(
+                        model, tokenizer, episode_sampler, int(config["model"]["max_length"]), anchor.device)
+                    if episode_loss is not None:
+                        loss = loss + episode_loss
+                        stats = {**stats, **episode_stats}
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
                     scaled_loss = loss / float(window_size)
                 scaled_loss.backward()
@@ -973,6 +987,9 @@ def log_train_step(
                 "twin_fraction", "query_fraction"):
         if key in stats:
             writer.add_scalar(f"infonce/{key}", float(stats[key].float().cpu().item()), global_step)
+    for key, value in stats.items():
+        if key.startswith("episode_"):
+            writer.add_scalar(f"episode/{key[len('episode_'):]}", float(value.float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():
         writer.add_scalar(f"matryoshka/{key}", float(value.float().cpu().item()), global_step)
     for key, value in content_stats.items():
