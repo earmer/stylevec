@@ -320,6 +320,67 @@ def line_leak(rows: pd.DataFrame, embeddings: np.ndarray, heldout: bool = True) 
     return {f"line_leak_{tag}": float(np.mean(shares)), f"n_line_leak_{tag}": float(len(shares))}
 
 
+REAL_RULES = ("same_speaker_real", "same_speaker_topic_matched")  # origin_vs_para holds paraphrases
+FISHER_PCS = 64
+
+
+def heldout_real_lines(rows: pd.DataFrame) -> dict[str, np.ndarray]:
+    """Row indices of each held-out speaker's distinct real lines."""
+    held = heldout_speaker_set(rows)
+    real = rows[rows["rule"].isin(REAL_RULES) & rows["speaker"].isin(held)]
+    real = real.drop_duplicates(["speaker", "text_preview"])
+    return {speaker: group.index.to_numpy() for speaker, group in real.groupby("speaker")}
+
+
+def _fisher(groups: list[np.ndarray], ridge: float = 0.1) -> tuple[float, float] | None:
+    """(separability tr(Sw^-1 Sb), its participation ratio: how many directions carry it), Sw ridged."""
+    groups = [group for group in groups if len(group) >= 4]
+    if len(groups) < 2:
+        return None
+    means = np.stack([group.mean(axis=0) for group in groups])
+    dims = means.shape[1]
+    within = sum((g - g.mean(axis=0)).T @ (g - g.mean(axis=0)) for g in groups) / sum(len(g) for g in groups)
+    between = (means - means.mean(axis=0)).T @ (means - means.mean(axis=0)) / len(groups)
+    within = within + ridge * np.trace(within) / dims * np.eye(dims)
+    values = np.clip(np.linalg.eigvals(np.linalg.solve(within, between)).real, 0.0, None)
+    if values.sum() <= 0:
+        return 0.0, 0.0
+    return float(values.sum()), float(values.sum() ** 2 / (values ** 2).sum())
+
+
+def fisher_separability(rows: pd.DataFrame, embeddings: np.ndarray, pcs: int = FISHER_PCS) -> dict[str, float]:
+    """Speaker separability among held-out speakers, in the top `pcs` principal axes of seen-speaker rows:
+    fisher_sep / fisher_rank on their real lines (how many directions separate speakers, unlike
+    effective rank, which also counts within-speaker spread); on their origin_vs_para anchors, fisher_sep_orig
+    on the lines, fisher_sep_para on their neutral paraphrases (what survives a rewrite: speaker-habitual
+    content, or voice it kept) and fisher_sep_diff on line minus own paraphrase (shared content cancels)."""
+    unseen = heldout_speaker_set(rows)
+    keep = (~rows["heldout"].astype(bool) & ~rows["speaker"].isin(unseen)).to_numpy(dtype=bool)
+    fit = embeddings[keep].astype(np.float64)
+    if len(fit) < 3:
+        return {}
+    mean = fit.mean(axis=0)
+    _u, _s, vt = np.linalg.svd(fit - mean, full_matrices=False)
+    project = lambda index: (embeddings[index].astype(np.float64) - mean) @ vt[:pcs].T  # noqa: E731
+    out: dict[str, float] = {}
+    real = _fisher([project(index) for index in heldout_real_lines(rows).values()])
+    if real is not None:
+        out["fisher_sep"], out["fisher_rank"] = real
+    frame = rows[(rows["rule"] == "origin_vs_para") & (rows["role"] == "anchor") & rows["speaker"].isin(unseen)]
+    index = {(tid, role): i for i, (tid, role) in enumerate(zip(rows["triplet_id"], rows["role"]))}
+    pairs = pd.DataFrame([(rows.at[i, "speaker"], rows.at[i, "text_preview"], index[(tid, "anchor")],
+                           index[(tid, "negative")]) for i, tid in zip(frame.index, frame["triplet_id"])],
+                         columns=["speaker", "text", "anchor", "para"]).drop_duplicates("text")
+    groups = list(pairs.groupby("speaker"))
+    for key, build in (("fisher_sep_orig", lambda g: project(g["anchor"].to_numpy())),
+                       ("fisher_sep_para", lambda g: project(g["para"].to_numpy())),
+                       ("fisher_sep_diff", lambda g: project(g["anchor"].to_numpy()) - project(g["para"].to_numpy()))):
+        result = _fisher([build(group) for _speaker, group in groups])
+        if result is not None:
+            out[key] = result[0]
+    return out
+
+
 NULLSPACE_DIMS = (8, 32)
 
 
@@ -465,8 +526,14 @@ def diagnostics(rows: pd.DataFrame, embeddings: np.ndarray, hubs: frozenset[str]
         ovp = frame[frame["rule"] == "origin_vs_para"] if not frame.empty else frame
         if len(ovp):
             out["whitened_gap_origin_vs_para"] = float((ovp["pos"] - ovp["neg"]).mean())
+        # diagnostic only: whitening rescales the low-variance axes, where line content sits, so whitened
+        # top-1 overstates voice (line leak ~0.99 on every trained run)
+        leak = line_leak(rows, white)
+        if leak:
+            out["whitened_line_leak"] = leak["line_leak_heldout"]
     out.update(paraphrase_rank(rows, embeddings))
     out.update(line_leak(rows, embeddings))
+    out.update(fisher_separability(rows, embeddings))
     out.update(content_relation(rows, embeddings))
     for dims in NULLSPACE_DIMS:
         projected = within_speaker_nullspace(rows, embeddings, dims)

@@ -20,17 +20,7 @@ sys.path.insert(0, str(SRC))
 import numpy as np
 import pandas as pd
 
-from report import heldout_speaker_set
-
-REAL_RULES = ("same_speaker_real", "same_speaker_topic_matched")  # origin_vs_para holds paraphrases
-
-
-def speaker_lines(rows: pd.DataFrame) -> dict[str, np.ndarray]:
-    """Row indices of each held-out speaker's distinct real lines."""
-    held = heldout_speaker_set(rows)
-    real = rows[rows["rule"].isin(REAL_RULES) & rows["speaker"].isin(held)]
-    real = real.drop_duplicates(["speaker", "text_preview"])
-    return {speaker: group.index.to_numpy() for speaker, group in real.groupby("speaker")}
+from report import heldout_real_lines
 
 
 def aggregate_top1(embeddings: np.ndarray, lines: dict[str, np.ndarray], k: int, trials: int = 50,
@@ -68,7 +58,7 @@ def main() -> None:
         if not (validation / "embeddings.npy").exists():
             continue
         rows = pd.read_parquet(validation / "rows.parquet")
-        lines = speaker_lines(rows)
+        lines = heldout_real_lines(rows)
         embeddings = np.load(validation / "embeddings.npy", mmap_mode="r")
         result = {"run": Path(run).name}
         for k in args.ks:

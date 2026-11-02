@@ -231,3 +231,31 @@ def test_paraphrase_nullspace_removes_the_shared_content_axis() -> None:
     rows["heldout"] = False
     projected = paraphrase_nullspace(rows, emb, 2)
     assert projected.shape == emb.shape and np.allclose(np.linalg.norm(projected, axis=1), 1.0)
+
+
+def test_fisher_separability_splits_voice_from_speaker_habitual_content() -> None:
+    from report import fisher_separability
+
+    rng = np.random.default_rng(0)
+
+    def build(habitual: float):
+        recs, vecs = [], []
+        for s in range(16):
+            held = s < 6
+            voice, topic = rng.normal(size=12) * np.r_[np.ones(4), np.zeros(8)], rng.normal(size=12) * habitual
+            for i in range(12):
+                content = topic + rng.normal(size=12) * np.r_[np.zeros(4), np.ones(8)]
+                line, para = voice + content, content + rng.normal(size=12) * 0.05
+                rule = "origin_vs_para" if i % 2 else "same_speaker_real"
+                for role, vec in (("anchor", line), ("positive", voice + rng.normal(size=12)),
+                                  ("negative", para if rule == "origin_vs_para" else rng.normal(size=12))):
+                    recs.append({"triplet_id": f"{s}_{i}", "role": role, "rule": rule, "heldout": held,
+                                 "speaker": f"h{s}" if held else f"s{s}", "text_preview": f"{s}_{i}_{role}"})
+                    vecs.append(vec)
+        return pd.DataFrame(recs), np.stack(vecs)
+
+    plain = fisher_separability(*build(0.0), pcs=12)
+    habitual = fisher_separability(*build(1.0), pcs=12)
+    assert plain["fisher_sep_para"] < 0.5 * plain["fisher_sep_diff"]  # paraphrases carry no speaker
+    assert habitual["fisher_sep_para"] > 2 * plain["fisher_sep_para"]  # unless topics follow the speaker
+    assert 1.0 <= plain["fisher_rank"] <= 6.0
