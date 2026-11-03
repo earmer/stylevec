@@ -1,10 +1,12 @@
 """Label texts with the named style traits of src/traits.py through Jev.
 
     uv run python expandtraining/2606/scripts/jev_label.py <out.jsonl> <dataset triplets.jsonl> [--split val] [--pairs N]
+    uv run python expandtraining/2606/scripts/jev_label.py <out.jsonl> --texts <rows.jsonl> [--budget USD]
 
 Takes the Genshin speaker rules' texts (anchors, positives, origin_vs_para paraphrases, twins) of the given
 split, skips texts already in <out.jsonl>, and appends one {"text", "scores": {trait: [score, confidence]}}
-row per text, so a rerun resumes. TYPESAFE_API_KEY comes from the environment and is never printed.
+row per text, so a rerun resumes. With --texts, rows {"text", ...} are labelled as given and their other
+fields are kept. --budget stops submitting once this run's spend reaches it (in-flight requests still finish). TYPESAFE_API_KEY comes from the environment and is never printed.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from traits import judge
+from traits import JEV_MODEL, judge
 
 RULES = {"same_speaker_real", "same_speaker_topic_matched", "origin_vs_para"}
 
@@ -50,7 +52,9 @@ def texts_of(paths: list[str], split: str, pairs: int = 0) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("out")
-    parser.add_argument("triplets", nargs="+")
+    parser.add_argument("triplets", nargs="*")
+    parser.add_argument("--texts", help="jsonl rows with a text field, labelled as given")
+    parser.add_argument("--budget", type=float, default=0.0, help="stop at this many USD for this run")
     parser.add_argument("--split", default="train")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--pairs", type=int, default=0, help="only N (line, own paraphrase) pairs")
@@ -58,22 +62,36 @@ def main() -> None:
     done = set()
     if Path(args.out).exists():
         done = {json.loads(line)["text"] for line in open(args.out, encoding="utf-8")}
-    todo = [text for text in texts_of(args.triplets, args.split, args.pairs) if text not in done]
+    extra: dict[str, dict] = {}
+    if args.texts:
+        for line in open(args.texts, encoding="utf-8"):
+            row = json.loads(line)
+            extra.setdefault(row["text"], {k: v for k, v in row.items() if k != "text"})
+    todo = [text for text in (list(extra) if args.texts else texts_of(args.triplets, args.split, args.pairs))
+            if text not in done]
     print(f"{len(done)} labelled, {len(todo)} to go", flush=True)
-    lock, started, tokens, count = threading.Lock(), time.time(), 0, 0
+    lock, started, tokens, count, stopped = threading.Lock(), time.time(), 0, 0, False
     with open(args.out, "a", encoding="utf-8") as handle, \
             concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
         futures = {pool.submit(judge, text): text for text in todo}
         for future in concurrent.futures.as_completed(futures):
             text = futures[future]
+            if future.cancelled():
+                continue
             try:
                 result = future.result()
             except Exception as error:  # noqa: BLE001 - one bad text must not stop the run; a rerun retries it
                 print(f"failed: {text[:30]!r}: {error}", flush=True)
                 continue
             with lock:
-                handle.write(json.dumps({"text": text, "scores": result["scores"]}, ensure_ascii=False) + "\n")
+                handle.write(json.dumps({"text": text, **extra.get(text, {}), "scores": result["scores"],
+                                         "model": JEV_MODEL}, ensure_ascii=False) + "\n")
                 tokens += result["input_tokens"]
+                if args.budget and tokens / 1e6 * 0.042 >= args.budget and not stopped:
+                    stopped = True
+                    print(f"budget USD {args.budget} reached; cancelling the rest", flush=True)
+                    for pending in futures:
+                        pending.cancel()
                 count += 1
                 if count % 1000 == 0:
                     handle.flush()

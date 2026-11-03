@@ -15,6 +15,9 @@ import urllib.request
 from typing import Any
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
+# Pinned: "jev-latest" moves, and labels from different versions must not be mixed silently. Labels made before
+# 2026-11-03 used jev-latest, which resolved to jev-1.14.0 that day.
+JEV_MODEL = "jev-1.14.0"
 NOT_APPLICABLE = ("If this trait does not apply to this text's language or situation, or the text gives no "
                   "signal either way, choose the neutral middle level.")
 
@@ -132,7 +135,7 @@ def questions(names: list[str] | None = None) -> dict[str, Any]:
 
 def judge(text: str, api_key: str | None = None, names: list[str] | None = None, retries: int = 8) -> dict[str, Any]:
     """One Jev request: every trait scored on `text`. Returns {name: (score 0..4, confidence)} plus usage."""
-    body = json.dumps({"state": text, "model": "jev-latest", "questions": questions(names)}).encode()
+    body = json.dumps({"state": text, "model": JEV_MODEL, "questions": questions(names)}).encode()
     headers = {"Content-Type": "application/json",
                "Authorization": "Bearer " + (api_key or os.environ["TYPESAFE_API_KEY"])}
     for attempt in range(retries):
