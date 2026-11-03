@@ -118,6 +118,13 @@ def validate_loss_config(config: dict[str, Any]) -> None:
             raise ValueError("train.episode_temperature must be positive")
         if int(config["train"].get("episode_k", 4)) < 1 or int(config["train"].get("episode_speakers", 12)) < 2:
             raise ValueError("train.episode_k must be >= 1 and train.episode_speakers >= 2")
+    if float(config["train"].get("named_trait_weight", 0.0)) < 0.0:
+        raise ValueError("train.named_trait_weight must be non-negative (0 = off)")
+    if float(config["train"].get("named_trait_weight", 0.0)) > 0.0:
+        if not config["train"].get("named_trait_files"):
+            raise ValueError("train.named_trait_weight needs train.named_trait_files (scripts/jev_label.py output)")
+        if int(config["train"].get("named_trait_batch", 64)) < 8:
+            raise ValueError("train.named_trait_batch must be >= 8 for a correlation")
     max_steps = int(config["train"].get("max_steps", 0))
     for key in ("infonce_until_step", "stop_at_step", "infonce_from_step"):
         value = int(config["train"].get(key, 0))

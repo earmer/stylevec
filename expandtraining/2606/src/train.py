@@ -30,6 +30,7 @@ from config import (
 from dataset import TripletTextDataset, make_triplet_collate
 from conversation_batches import conversation_group, conversation_stats, group_by_conversation
 from episodes import EpisodeSampler, episode_pool, episode_settings_from_config, episode_step_loss
+from named_traits import NamedTraitSampler, named_trait_settings_from_config, named_trait_step_loss
 from curriculum import curriculum_order, rule_tier, schedule_summary
 from losses import (
     content_pair_loss,
@@ -392,6 +393,9 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     episode_settings = episode_settings_from_config(config)
     episode_sampler = (EpisodeSampler(episode_pool(raw_train_triplets), episode_settings, seed=int(config["runtime"]["seed"]))
                        if episode_settings["weight"] > 0.0 else None)
+    named_trait_settings = named_trait_settings_from_config(config)
+    named_trait_sampler = (NamedTraitSampler(named_trait_settings, seed=int(config["runtime"]["seed"]))
+                           if named_trait_settings["weight"] > 0.0 else None)
 
     requested_device = str(config["runtime"]["device"])
     use_accelerate = str(config["runtime"].get("distributed", "none")) == "accelerate" or int(os.environ.get("WORLD_SIZE", "1")) > 1
@@ -524,6 +528,11 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     if episode_loss is not None:
                         loss = loss + episode_loss
                         stats = {**stats, **episode_stats}
+                    named_loss, named_stats = named_trait_step_loss(
+                        model, tokenizer, named_trait_sampler, int(config["model"]["max_length"]), anchor.device)
+                    if named_loss is not None:
+                        loss = loss + named_loss
+                        stats = {**stats, **named_stats}
                     if grad_accum > 1:
                         window_size = accumulation_window(batch_index, total_batches, grad_accum)
                         loss = loss * (float(grad_accum) / float(window_size))
@@ -599,6 +608,11 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
                     if episode_loss is not None:
                         loss = loss + episode_loss
                         stats = {**stats, **episode_stats}
+                    named_loss, named_stats = named_trait_step_loss(
+                        model, tokenizer, named_trait_sampler, int(config["model"]["max_length"]), anchor.device)
+                    if named_loss is not None:
+                        loss = loss + named_loss
+                        stats = {**stats, **named_stats}
                     window_size = accumulation_window(batch_index, total_batches, grad_accum)
                     scaled_loss = loss / float(window_size)
                 scaled_loss.backward()
@@ -990,6 +1004,8 @@ def log_train_step(
     for key, value in stats.items():
         if key.startswith("episode_"):
             writer.add_scalar(f"episode/{key[len('episode_'):]}", float(value.float().cpu().item()), global_step)
+        if key.startswith("named_trait_"):
+            writer.add_scalar(f"named_trait/{key[len('named_trait_'):]}", float(value.float().cpu().item()), global_step)
     for key, value in matryoshka_stats.items():
         writer.add_scalar(f"matryoshka/{key}", float(value.float().cpu().item()), global_step)
     for key, value in content_stats.items():
