@@ -361,9 +361,19 @@ head_c_1gpu__episode__s42: >
   episodes at T 0.07 (other speakers' halves on both sides are negatives); the hinge alone on lines. Tests whether line InfoNCE's use of line content
   as a tie-breaker drives the leak. Judged against nohead (line leak 0.662, top-1 0.178, fisher_sep 1.92,
   fisher_sep_diff 2.73, pooled k8 0.341) and seed_b's noise floor; not by whitened top-1.
+  Result: line leak 0.754, top-1 0.225, para top-1 0.232, fisher_sep 2.11, sep_para 2.55, sep_diff 2.39, rank 7.2;
+  pooled 8-line top-1 0.352 (nohead 0.306, nce_clean_twin 0.359). Top-1 up 0.05 (3x the seed gap) but the leak up
+  0.09 too: pooling across scenes does not stop line content; it lands where nce_clean_twin does. Training episode
+  accuracy hit 1.0 (80 speakers are memorised). Done (cost cap stopped it at step 2085; resumed for validation).
 seed_b_1gpu__nohead__s43: >
   SEED B: head_a's nohead at seed 43. The run-to-run noise floor on line leak, top-1 and Fisher separability for
   every one-seed comparison since phase 6 (nohead s42: 0.662 / 0.178 / 1.92).
   Result: line leak 0.645, top-1 0.162, fisher_sep 1.68, sep_orig 2.92, sep_para 2.77, sep_diff 2.69, rank 5.2.
   Seed gaps: leak 0.017, top-1 0.016, sep 0.24, sep_orig 0.57, sep_para 0.08, sep_diff 0.04. Leak gaps of 0.05+
   are real; Fisher separability differences under ~0.5 are not. Done.
+head_d_1gpu__named__s42: >
+  HEAD D: nohead plus named trait dimensions (src/named_traits.py): embedding dims 0..16 trained to correlate
+  with Jev's 17 style traits (src/traits.py) on 10k training lines and their own paraphrases, a 64-text side
+  batch per step at weight 0.5. Tests whether explainable trait axes can sit in the embedding without hurting
+  speaker retrieval or raising the leak. Judged against nohead s42/s43 (leak 0.662/0.645, top-1 0.178/0.162)
+  and by per-trait correlation of dim t with Jev on held-out speakers.

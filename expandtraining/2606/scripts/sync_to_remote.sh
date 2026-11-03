@@ -109,6 +109,11 @@ echo "== code"
 echo "== inputs"
 "${rsync_base[@]}" -R "${inputs[@]}" "$HOST:$DATA_ROOT/"
 
+if [[ -d data/traits ]]; then  # Jev trait labels for train.named_trait_files (scripts/jev_label.py)
+  echo "== trait labels"
+  "${rsync_base[@]}" -R data/traits/ "$HOST:$DATA_ROOT/"
+fi
+
 echo "== base model"
 "${rsync_base[@]}" -R "$model/" "$HOST:$DATA_ROOT/"
 
