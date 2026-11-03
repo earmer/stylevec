@@ -10,15 +10,17 @@ Sources included:
   douban_side  : Douban book/movie/music reviews by user_id (Chinese)
   cped         : CPED TV-drama dialogue utterances by speaker (Chinese)
   reddit       : Reddit comments of 10,000 prolific authors, 2015-2019 (English)
+  authbench    : AuthBench train split, zh/en/ja documents with 2-4 docs/author (min_texts 2, see _SOURCE_MIN_TEXTS)
+  ao3          : AO3 fan-fiction of the most prolific authors, cut into 200-600 char passages (English)
 
 Excluded:
-  authbench         : max 5 docs/author, cannot meet min_texts=20
   streamprofilebench: prediction-task benchmark format, not a raw text corpus
 """
 from __future__ import annotations
 
 import hashlib
 import html
+import itertools
 import json
 import re
 import sys
@@ -53,8 +55,9 @@ def clean_text(raw: str) -> str:
 
 
 def is_bot_like(text: str) -> bool:
-    """True when the text looks automated: empty or character-diversity ratio < 0.15."""
-    stripped = text.replace(" ", "")
+    """True when the text looks automated: empty or character-diversity ratio < 0.15 over the first 100 characters
+    (an alphabet has ~60 distinct characters, so over a whole long passage the ratio is low for ordinary prose)."""
+    stripped = text.replace(" ", "")[:100]
     if not stripped:
         return True
     return len(stripped) > 6 and len(set(stripped)) / len(stripped) < 0.15
@@ -238,6 +241,97 @@ def _load_reddit(base: Path, min_chars: int) -> list[dict[str, Any]]:
     return rows
 
 
+
+_AUTHBENCH_LANGS = {"zh", "en", "ja"}
+_AUTHBENCH_MAX_CHARS = 2000  # a few wikisource/arxiv documents run past 10k chars
+_WATERMARK = re.compile(r"▬[^▬\n]*▬|◗[^◗◖\n]*◖")  # exorde appends "▬tag▬ ◗id◖" blocks
+_WIKI_MARKUP = re.compile(r"={2,}|\{\{|-\{")  # wikisource headings and templates
+
+
+def _is_markup_noise(text: str) -> bool:
+    """True for wiki-markup rows and rows where over 30% of the non-space characters are not letters or digits."""
+    if _WIKI_MARKUP.search(text):
+        return True
+    stripped = re.sub(r"\s", "", text)
+    return not stripped or 1 - sum(ch.isalnum() for ch in stripped) / len(stripped) > 0.30
+
+
+def _load_authbench(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """AuthBench zh/en/ja documents with input_split == "train". Only train/documents.jsonl is opened (never dev/ or
+    test/); that file also carries dev/test-tagged rows, and authors who appear in any of them are dropped whole."""
+    with open(base / "train" / "documents.jsonl", encoding="utf-8") as fh:
+        docs = [json.loads(line) for line in fh]
+    held_out = {d["author_id"] for d in docs if d.get("input_split") != "train"}
+    rows: list[dict[str, Any]] = []
+    for doc in docs:
+        if doc.get("input_split") != "train" or doc["author_id"] in held_out or doc.get("lang") not in _AUTHBENCH_LANGS:
+            continue
+        text = clean_text(_WATERMARK.sub(" ", str(doc.get("content", "") or "")))
+        if not min_chars <= len(text) <= _AUTHBENCH_MAX_CHARS or _is_markup_noise(text):
+            continue
+        rows.append({
+            "source": "authbench",
+            "author_id": f"authbench:{doc['author_id'][:16]}",
+            "text": text,
+            "lang": doc["lang"],
+            "created": "",
+            "meta": json.dumps({"genre": str(doc.get("genre", "")), "origin": str(doc.get("source", ""))}),
+        })
+    return rows
+
+
+_AO3_LANGS = {"English": "en", "Italiano": "it", "Español": "es", "Русский": "ru", "Français": "fr"}
+_SENTENCE = re.compile(r"[^.!?。！？]+[.!?。！？]+[\"”'’」』]*|[^.!?。！？]+$")
+
+
+def split_passages(text: str, low: int = 200, high: int = 600) -> list[str]:
+    """Pack consecutive sentences into passages of low..high chars; a short tail is dropped.
+    Many AO3 dumps have no paragraph breaks, so sentences (not paragraphs) are the unit."""
+    units: list[str] = []
+    for sentence in (s.strip() for s in _SENTENCE.findall(text)):
+        while len(sentence) > high:  # a run-on sentence is wrapped at the last space before high
+            cut = sentence.rfind(" ", 0, high) + 1 or high
+            units.append(sentence[:cut].strip())
+            sentence = sentence[cut:].strip()
+        if sentence:
+            units.append(sentence)
+    passages: list[str] = []
+    current = ""
+    for unit in units:
+        if current and len(current) + 1 + len(unit) > high:
+            if len(current) >= low:
+                passages.append(current)
+            current = unit
+        else:
+            current = f"{current} {unit}".strip()
+    if len(current) >= low:
+        passages.append(current)
+    return passages
+
+
+def _load_ao3(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """AO3 works of the top-150 authors as 200-600 char passages. Each author's passages are interleaved across
+    works, so the per-author cap spreads over every work instead of keeping only the first one."""
+    df = pd.read_parquet(base / "top150_authors.parquet")
+    per_author: defaultdict[str, list[list[dict[str, Any]]]] = defaultdict(list)
+    for work_id, title, metadata, text, author in zip(df["id"], df["title"], df["metadata"], df["text"], df["author"]):
+        lang = _AO3_LANGS.get(str((metadata or {}).get("Language") or ""))
+        author = str(author or "").strip()
+        if lang is None or not author:
+            continue
+        meta = json.dumps({"work_id": str(work_id), "title": str(title or "")}, ensure_ascii=False)
+        passages = [clean_text(p) for p in split_passages(str(text or ""))]
+        per_author[author].append([
+            {"source": "ao3", "author_id": f"ao3:{author}", "text": p, "lang": lang, "created": "", "meta": meta}
+            for p in passages if len(p) >= min_chars and not _is_markup_noise(p)
+        ])
+    rows: list[dict[str, Any]] = []
+    for author in sorted(per_author):
+        for group in itertools.zip_longest(*per_author[author]):
+            rows.extend(row for row in group if row is not None)
+    return rows
+
+
 _SOURCE_SUBDIR: dict[str, str] = {
     "reddit": "reddit_authorship",
     "weibo": "weibo_users",
@@ -245,7 +339,10 @@ _SOURCE_SUBDIR: dict[str, str] = {
     "douban_short": "douban_short",
     "douban_side": "douban_side",
     "cped": "CPED",
+    "authbench": "authbench",
+    "ao3": "corpora/ao3_random_subset",
 }
+_SOURCE_MIN_TEXTS: dict[str, int] = {"authbench": 2}  # AuthBench has at most 5 docs per author
 
 
 def build_unified_parquet(
@@ -266,7 +363,7 @@ def build_unified_parquet(
       - Global exact-duplicate text removal (case-folded)
       - Bot-like filter (char-diversity < 0.15 for long texts)
       - min_chars length floor (cped_min_chars for CPED)
-      - Authors with < min_texts retained texts are dropped
+      - Authors with < min_texts retained texts are dropped (_SOURCE_MIN_TEXTS overrides it per source)
       - At most texts_per_author texts kept per author (deterministic: first N in source order)
     """
     loaders: list[tuple[str, Any, int]] = [
@@ -276,6 +373,8 @@ def build_unified_parquet(
         ("douban_side",  _load_douban_side,  min_chars),
         ("cped",         _load_cped,         cped_min_chars),
         ("reddit",       _load_reddit,       min_chars),
+        ("authbench",    _load_authbench,    min_chars),
+        ("ao3",          _load_ao3,          min_chars),
     ]
 
     all_rows: list[dict[str, Any]] = []
@@ -307,7 +406,7 @@ def build_unified_parquet(
         if author_cap is not None and authors_used >= author_cap:
             break
         rows = by_author[author_id]
-        if len(rows) < min_texts:
+        if len(rows) < _SOURCE_MIN_TEXTS.get(rows[0]["source"], min_texts):
             continue
         split = author_split(author_id, heldout_pct=heldout_pct, val_pct=val_pct)
         for row in rows[:texts_per_author]:
@@ -394,12 +493,14 @@ def load_authorcorpora_samples(config: dict[str, Any]) -> tuple[list[SampleRecor
             continue
         seen_texts.add(key)
         meta_raw = str(row.get("meta", "{}") or "{}")
-        by_author[author_id].append({"text": text, "lang": lang, "split": split, "meta": meta_raw})
+        by_author[author_id].append({
+            "text": text, "lang": lang, "split": split, "meta": meta_raw, "source": str(row.get("source", "")),
+        })
 
     samples: list[SampleRecord] = []
     authors_kept = 0
     for author_id, rows in sorted(by_author.items()):
-        if len(rows) < min_texts:
+        if len(rows) < _SOURCE_MIN_TEXTS.get(rows[0]["source"], min_texts):
             filter_counts["below_min_texts"] += len(rows)
             continue
         if author_cap is not None and authors_kept >= author_cap:

@@ -342,3 +342,90 @@ def test_reddit_loader_drops_quotes_link_targets_and_removed(tmp_path):
     rows = _load_reddit(tmp_path, 10)
     assert [r["text"] for r in rows] == ["My own reply, see the docs please.", "Short but fine answer here."]
     assert rows[0]["author_id"] == "reddit:a" and rows[0]["lang"] == "en"
+
+
+def _write_authbench(tmp_path, docs):
+    (tmp_path / "train").mkdir()
+    (tmp_path / "test").mkdir()
+    base = {"genre": "social_media/x", "source": "ytcomments", "input_split": "train"}
+    with open(tmp_path / "train" / "documents.jsonl", "w", encoding="utf-8") as fh:
+        for doc in docs:
+            fh.write(json.dumps({**base, **doc}, ensure_ascii=False) + "\n")
+    # an evaluation file that must never be read: invalid JSON would blow up a loader that opened it
+    (tmp_path / "test" / "documents.jsonl").write_text("not json\n")
+
+
+def test_authbench_loader_langs_markup_and_meta(tmp_path):
+    from import_authorcorpora import _load_authbench
+    watermark = "\n\n▬نمشؾ▬\n◗TMM127◖"
+    _write_authbench(tmp_path, [
+        {"author_id": "a" * 64, "lang": "zh", "content": "今天天气很好，我们去公园玩。"},
+        {"author_id": "a" * 64, "lang": "en", "content": "A perfectly fine English sentence." + watermark},
+        {"author_id": "b" * 64, "lang": "ja", "content": "これは日本語の文章です。"},
+        {"author_id": "b" * 64, "lang": "ar", "content": "نص عربي طويل بما يكفي للاختبار"},
+        {"author_id": "c" * 64, "lang": "en", "content": "===Chapter heading=== some wiki text here"},
+        {"author_id": "c" * 64, "lang": "en", "content": "!!! ??? --- *** ### @@@ ... +++ ~~~ x1"},
+    ])
+    rows = _load_authbench(tmp_path, 10)
+    assert [r["lang"] for r in rows] == ["zh", "en", "ja"]
+    assert rows[1]["text"] == "A perfectly fine English sentence."
+    assert rows[0]["author_id"] == "authbench:" + "a" * 16
+    assert json.loads(rows[0]["meta"]) == {"genre": "social_media/x", "origin": "ytcomments"}
+
+
+def test_authbench_loader_reads_only_train_split(tmp_path):
+    from import_authorcorpora import _load_authbench
+    _write_authbench(tmp_path, [
+        {"author_id": "a" * 64, "lang": "en", "content": "Train row of an author that is train only."},
+        {"author_id": "b" * 64, "lang": "en", "content": "Test-tagged row inside the train file.", "input_split": "test"},
+        {"author_id": "b" * 64, "lang": "en", "content": "Train row of an author that also has a dev row."},
+        {"author_id": "d" * 64, "lang": "en", "content": "Dev-tagged row inside the train file.", "input_split": "dev"},
+    ])
+    rows = _load_authbench(tmp_path, 10)  # test/documents.jsonl holds invalid JSON: opening it would raise
+    assert [r["text"] for r in rows] == ["Train row of an author that is train only."]
+
+
+def test_split_passages_sizes_and_tail():
+    from import_authorcorpora import split_passages
+    text = " ".join(f"Sentence number {i} says something plain." for i in range(60))
+    passages = split_passages(text, 200, 600)
+    assert len(passages) >= 3
+    assert all(200 <= len(p) <= 600 for p in passages)
+    assert split_passages("Too short to keep.", 200, 600) == []
+
+
+def test_split_passages_wraps_run_on_sentence_without_breaks():
+    from import_authorcorpora import split_passages
+    passages = split_passages("word " * 400, 200, 600)  # no terminator anywhere
+    assert passages and all(200 <= len(p) <= 600 for p in passages)
+
+
+def test_ao3_loader_passages_authors_and_meta(tmp_path):
+    from import_authorcorpora import _load_ao3
+    body = " ".join(f"Line {i} of the story goes on a little." for i in range(40))
+    pd.DataFrame({
+        "id": ["w1", "w2", "w3"], "title": ["One", "Two", "Three"],
+        "metadata": [{"Language": "English"}, {"Language": "English"}, {"Language": "Klingon"}],
+        "text": [body, body.replace("Line", "Row"), body], "author": ["amy", "amy", "bob"],
+    }).to_parquet(tmp_path / "top150_authors.parquet")
+    rows = _load_ao3(tmp_path, 10)
+    assert {r["author_id"] for r in rows} == {"ao3:amy"}  # unknown language skipped
+    assert {r["lang"] for r in rows} == {"en"}
+    assert all(200 <= len(r["text"]) <= 600 for r in rows)
+    assert [json.loads(r["meta"])["work_id"] for r in rows[:2]] == ["w1", "w2"]  # interleaved across works
+
+
+def test_load_samples_authbench_authors_need_only_two_texts(tmp_path):
+    rows = _synthetic_rows(["authbench:a"], texts_per_author=2) + _synthetic_rows(["weibo:b"], texts_per_author=2)
+    for row in rows:
+        row["source"] = row["author_id"].split(":")[0]
+    samples, filters = load_authorcorpora_samples(_make_config(str(_make_parquet(tmp_path, rows))))
+    assert {s.style_id for s in samples} == {"authbench:a"}  # min_texts=3 still applies to weibo
+    assert filters["below_min_texts"] == 2
+
+
+def test_is_bot_like_long_prose_passes_but_repetition_does_not() -> None:
+    prose = "The quick brown fox jumps over the lazy dog while the band plays on and on. " * 8
+    assert not is_bot_like(prose)
+    assert is_bot_like("哈" * 300)
+    assert is_bot_like("hunted, " * 80)
