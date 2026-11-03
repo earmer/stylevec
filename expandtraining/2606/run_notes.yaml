@@ -377,3 +377,10 @@ head_d_1gpu__named__s42: >
   batch per step at weight 0.5. Tests whether explainable trait axes can sit in the embedding without hurting
   speaker retrieval or raising the leak. Judged against nohead s42/s43 (leak 0.662/0.645, top-1 0.178/0.162)
   and by per-trait correlation of dim t with Jev on held-out speakers.
+  RESULT: leak 0.665, top-1 0.176 (both within seed noise of nohead); separability fell (orig 3.49 -> 2.72,
+  para 2.85 -> 1.69, line - para 2.73 -> 1.49, Fisher rank 6.1 -> 5.2). The named dims work: on 4,196
+  held-out texts from 176 speakers, dim t correlates with Jev trait t at mean r 0.69 per line, 0.74 per
+  speaker and 0.49 on line - own paraphrase differences (register traits 0.6-0.8; tone traits weak: swagger
+  0.11, valence 0.16, irony 0.21, deference 0.24, warmth 0.24). But dims 0..16 hold only 1.6% of the squared
+  norm (6.6% if uniform): correlation is scale-free, so they shrank and barely enter cosine. Next: paired loss
+  with tone twins (head_e) and a norm floor on the named block.
