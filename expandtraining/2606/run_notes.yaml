@@ -384,7 +384,8 @@ head_e_1gpu__paired__s42: >
   Result vs nohead/head_d at 1050: leak 0.640 (0.629/0.655), top-1 0.167 (0.173/0.174), sep_diff 1.94
   (2.62/1.55), sep_orig 3.22 (3.38/2.84). Named norm share 0.102 (head_d 0.015): the floor works.
   Named r vs Jev fell: line 0.58 (head_d 0.69), speaker 0.81 (0.89), line - paraphrase 0.47 (0.53),
-  tone traits on the difference 0.31 (0.34). Fails the go rule (diff r 0.58, tone 0.38, sep_diff 2.2).head_f_1gpu__data__s42: >
+  tone traits on the difference 0.31 (0.34). Fails the go rule (diff r 0.58, tone 0.38, sep_diff 2.2).
+head_f_1gpu__data__s42: >
   HEAD F: nohead's recipe on wider data, stopped at 1050: 579 training speakers (was 80; speakers_top600.json,
   same 20 held out), scene neighbors 8, 3 topic-matched variants, plus 20k same_author_real rows from the
   author corpora (340,887 triplets). Same shared eval set as nohead. Tests whether more voices alone lower the
