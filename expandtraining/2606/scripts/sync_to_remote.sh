@@ -68,6 +68,7 @@ rsync_retry() {
 inputs=(
   data/genshin/genshin.db
   data/paratarget/speakers_top100.json
+  data/paratarget/speakers_top600.json
   data/paratarget/generations_pairwise_validation_2p5cny.jsonl
   data/datasets/msynthstel/data/train-00000-of-00001.parquet
   data/datasets/msynthstel/data/test-00000-of-00001.parquet

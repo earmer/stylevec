@@ -196,7 +196,7 @@ def check_spec(spec: dict[str, Any], shared: dict[str, Any], arms: dict[str, dic
         split_changes = [key for key in SPLIT_KEYS if flat[arm].get(key) != shared_flat.get(key)]
         if split_changes and not same_heldout(config, shared):
             errors.append(f"{arm}: changes {', '.join(split_changes)}, which would leak identities into the shared "
-                          "held-out set")
+                          "held-out set (or a speaker list it names cannot be read here)")
         changed_validation = sorted(k for k in set(flat[arm]) | set(shared_flat)
                                     if k.startswith("validation.") and flat[arm].get(k) != shared_flat.get(k))
         if changed_validation:
