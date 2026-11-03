@@ -391,6 +391,9 @@ head_f_1gpu__data__s42: >
   author corpora (340,887 triplets). Same shared eval set as nohead. Tests whether more voices alone lower the
   line leak and lift held-out top-1. Judged against nohead at 1050 (leak 0.629, top-1 0.173, sep_diff 2.62);
   seed gaps leak 0.017, top-1 0.016. The control for episodes, push and both.
+  Result at 1050: top-1 0.198 (nohead 0.173, +0.025 > seed gap), leak 0.635 (0.629; near-copy 0.856, restyled
+  0.415), sep 1.99 (1.94), sep_diff 2.65 (2.62). Reddit voice-over-topic 0.533 (chance 0.5). More voices lift
+  top-1, not the leak.
 head_f_1gpu__episodes__s42: >
   HEAD F: data plus episode InfoNCE (weight 0.5, T 0.07) on Reddit training authors: 16 authors x 2 x 3
   comments per micro-batch, every comment of an author's pair from a different subreddit
@@ -398,6 +401,9 @@ head_f_1gpu__episodes__s42: >
   frozen during episode forwards. Unlike head_c's Genshin episodes, the halves share voice and not topic.
   Judged against data: leak, top-1, sep_diff, and the voice-versus-topic probe (3,112 items, held-out Reddit
   authors, length-matched, no catch-all subreddits; scripts/voice_topic_probe.py).
+  Result at 1050 (cost cap stopped it at 1000; resumed): voice-over-topic 0.571 (data 0.533, +0.038, ~4 SE), sep
+  2.24 (1.99), sep_orig 4.27 (3.54), sep_diff 2.86 (2.65); top-1 0.191 (0.198) and leak 0.640 (0.635) within
+  noise. Episodes teach cross-topic voice.
 head_f_1gpu__push__s42: >
   HEAD F: data with the line-vs-own-paraphrase push weighted per pair by span-02's judged style change (mean
   |trait difference|, 43k labelled pairs; scripts/twin_style_delta.py, a mild surface gate for near-identical
@@ -405,6 +411,12 @@ head_f_1gpu__push__s42: >
   origin_vs_para own-negative logit and its hinge (Gemini caught that the twin logit alone missed the query
   rows). Near-copies (lowest 10%) are not pushed. Tests the user's idea that pushing near-copies apart teaches
   content, not voice. Judged against data: leak split near-copy/restyled, top-1, sep_diff.
+  Result at 1050: leak 0.653 (data 0.635, +0.018 ~ seed gap), near-copy leak 0.874 (0.856), restyled 0.432
+  (0.415): unpushed near-copies stay close, the extra push on restyled pairs does not lower their leak. top-1
+  0.188 (0.198), sep_diff 2.83 (2.65), voice-over-topic 0.529. No gain.
 head_f_1gpu__both__s42: >
   HEAD F: episodes and push together; with data, episodes and push a 2 x 2. Judged against data and the two
   single arms.
+  Result at 1050: top-1 0.210 (data 0.198, within noise; best of head_f), sep 2.53, sep_orig 4.66, sep_para
+  3.58, sep_diff 3.19 (all highest), leak 0.652 (push's rise), voice-over-topic 0.556 (episodes 0.571). Episodes
+  carry the gains; push adds leak.
