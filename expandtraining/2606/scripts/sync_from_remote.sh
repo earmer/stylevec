@@ -53,7 +53,7 @@ REMOTE_ROOT="${REMOTE_ROOT%/}"
 stop_if_started() {
   if (( started_here )); then
     echo "== stopping $INSTANCE"
-    autodl_cli stop "$INSTANCE" >/dev/null || echo "WARNING: stop failed; $INSTANCE may still be billing" >&2
+    stop_with_retry "$INSTANCE"
   elif [[ -n "$INSTANCE" ]]; then
     echo "WARNING: $INSTANCE was already running, so it was left running (billing); stop it with: autodl stop $INSTANCE" >&2
   fi

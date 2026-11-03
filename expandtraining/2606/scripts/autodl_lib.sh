@@ -16,6 +16,28 @@ instance_status() {
   autodl_cli info "$1" --json | instance_field 'd["instance"]["status"]'
 }
 
+# The status, retried through API hiccups (a failed call prints nothing): "unknown" only after 10 failures, so a
+# caller waiting for "not running" never mistakes a dropped request for a stopped box.
+instance_status_retry() {
+  local status _
+  for _ in $(seq 1 10); do
+    status="$(instance_status "$1" 2>/dev/null)" && [[ -n "$status" ]] && { echo "$status"; return 0; }
+    sleep 15
+  done
+  echo unknown
+}
+
+# Stop an instance and confirm it is no longer running; retries a failed request (the API drops some).
+stop_with_retry() {
+  local id="$1" _
+  for _ in $(seq 1 20); do
+    autodl_cli stop "$id" >/dev/null 2>&1
+    case "$(instance_status_retry "$id")" in running|starting|unknown) sleep 15 ;; *) return 0 ;; esac
+  done
+  echo "WARNING: could not confirm $id stopped; it may still be billing" >&2
+  return 1
+}
+
 # Start an instance, retrying every START_RETRY_SECONDS (default 15) for as long as it takes: a Pro box
 # with no free GPU on its host refuses to start until one frees up. Errors that waiting cannot fix (bad
 # token, unknown instance) stop it. Billing begins when a start succeeds.

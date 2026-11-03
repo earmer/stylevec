@@ -54,6 +54,17 @@ rsync_base=(
 [[ "${CHECKSUM:-0}" == 1 ]] && rsync_base+=(--checksum)
 export RSYNC_CHECKSUM_LIST="${RSYNC_CHECKSUM_LIST:-xxh128 xxh3 xxh64 md5}"
 
+# The link drops now and then (rsync: broken pipe); --partial-dir keeps what arrived, so a retry resumes.
+rsync_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "${rsync_base[@]}" "$@" && return 0
+    echo "   rsync failed (attempt $attempt); retrying in 15s" >&2
+    sleep 15
+  done
+  return 1
+}
+
 inputs=(
   data/genshin/genshin.db
   data/paratarget/speakers_top100.json
@@ -99,30 +110,30 @@ fi
 
 echo "== code"
 # --delete keeps the remote tree identical to ours; excluded paths (run outputs) are never touched.
-"${rsync_base[@]}" --delete \
+rsync_retry --delete \
   --exclude outputs/ --exclude tf-logs/ --exclude __pycache__/ --exclude '*.py[cod]' \
   --exclude .venv/ --exclude .pytest_cache/ --exclude .ruff_cache/ \
   expandtraining/2606/ "$HOST:$ROOT/expandtraining/2606/"
 # The uv project lives at the repo root; remote_setup.sh builds the environment from it.
-"${rsync_base[@]}" pyproject.toml uv.lock "$HOST:$ROOT/"
+rsync_retry pyproject.toml uv.lock "$HOST:$ROOT/"
 
 echo "== inputs"
-"${rsync_base[@]}" -R "${inputs[@]}" "$HOST:$DATA_ROOT/"
+rsync_retry -R "${inputs[@]}" "$HOST:$DATA_ROOT/"
 
 if [[ -d data/traits ]]; then  # Jev trait labels for train.named_trait_files (scripts/jev_label.py)
   echo "== trait labels"
-  "${rsync_base[@]}" -R data/traits/ "$HOST:$DATA_ROOT/"
+  rsync_retry -R data/traits/ "$HOST:$DATA_ROOT/"
 fi
 
 echo "== base model"
-"${rsync_base[@]}" -R "$model/" "$HOST:$DATA_ROOT/"
+rsync_retry -R "$model/" "$HOST:$DATA_ROOT/"
 
 if (( ${#datasets[@]} )); then
   echo "== datasets: $*"
-  "${rsync_base[@]}" -R "${datasets[@]/%//}" "$HOST:$DATA_ROOT/"
+  rsync_retry -R "${datasets[@]/%//}" "$HOST:$DATA_ROOT/"
 fi
 
 if [[ "${BOOKRAW:-0}" == 1 ]]; then
   echo "== bookraw -> $BOOKRAW_DST"
-  "${rsync_base[@]}" "$BOOKRAW_SRC" "$HOST:$DATA_ROOT/$BOOKRAW_DST"
+  rsync_retry "$BOOKRAW_SRC" "$HOST:$DATA_ROOT/$BOOKRAW_DST"
 fi

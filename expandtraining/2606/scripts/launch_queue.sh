@@ -39,7 +39,7 @@ launched=0
 cleanup() {
   if (( started_here && !launched )) && [[ "${KEEP_UP:-0}" != 1 ]]; then
     echo "== launch failed; stopping $INSTANCE" >&2
-    autodl_cli stop "$INSTANCE" >/dev/null || echo "WARNING: stop failed; $INSTANCE may still be billing" >&2
+    stop_with_retry "$INSTANCE"
   fi
 }
 trap cleanup EXIT
