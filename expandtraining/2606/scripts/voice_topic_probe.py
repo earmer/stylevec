@@ -87,6 +87,7 @@ def embed(texts: list[str], run_name: str, checkpoint: str) -> np.ndarray:
 
     run_dir = workspace_dir() / "outputs" / "runs" / run_name
     config = load_config(str(run_dir / "config.yaml"))
+    config["runtime"]["device"] = "auto"  # runs trained on CUDA are probed wherever the weights were pulled
     tokenizer = AutoTokenizer.from_pretrained(config["model"]["base_model_path"], local_files_only=True,
                                               trust_remote_code=True)
     if tokenizer.pad_token is None:
