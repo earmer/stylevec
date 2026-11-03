@@ -260,3 +260,92 @@ def test_fisher_separability_splits_voice_from_speaker_habitual_content() -> Non
     assert plain["fisher_diff_norm"] > 0.0
     assert habitual["fisher_sep_para"] > 2 * plain["fisher_sep_para"]  # unless topics follow the speaker
     assert 1.0 <= plain["fisher_rank"] <= 6.0
+
+
+def test_twin_weight_scales_the_twin_in_the_denominator() -> None:
+    twin = unit([0.95, 0.05, 0], [0, 0, 1])
+    has = torch.tensor([True, True])
+    full, _ = nce(twin, has, 0.03)
+    anchor, positive = unit([1, 0, 0], [0, 1, 0]), unit([0.9, 0.1, 0], [0.1, 0.9, 0])
+    negative, args = unit([0, 0, 1], [0, 0.2, 1]), (torch.full((2,), 0.1), torch.ones(2), torch.tensor([0, 1]),
+                                                     torch.tensor([-1, -2]), 0.05)
+
+    def weighted(w: list[float]):
+        return info_nce_loss(anchor, positive, negative, *args, twin=twin, has_twin=has, twin_temperature=0.03,
+                             twin_weight=torch.tensor(w))
+
+    _, ones = weighted([1.0, 1.0])
+    _, half = weighted([0.5, 0.0])
+    _, off = nce(twin, torch.tensor([False, False]), 0.03)
+    assert torch.allclose(ones["raw_loss"], nce(twin, has, 0.03)[1]["raw_loss"])
+    assert off["raw_loss"][1] == pytest.approx(float(half["raw_loss"][1]))
+    assert off["raw_loss"][0] < half["raw_loss"][0] < ones["raw_loss"][0]
+    assert half["twin_weight"] == pytest.approx(0.25)
+
+
+def test_twin_columns_carry_the_twin_weight() -> None:
+    rows = [row("same_speaker_real", "别人", "改写"), row("trait_x", "别人", None)]
+    rows[0].meta["twin_weight"] = 0.3
+    assert twin_columns(rows, lambda texts: texts)["twin_weight"].tolist() == pytest.approx([0.3, 1.0])
+
+
+def test_apply_twin_weights_reads_the_file_and_defaults_the_rest(tmp_path: Path) -> None:
+    import json
+
+    from twin_weights import apply_twin_weights
+
+    path = tmp_path / "w.jsonl"
+    path.write_text(json.dumps({"text": "锚点", "twin_text": "改写", "weight": 0.2}, ensure_ascii=False) + "\n")
+    rows = [row("same_speaker_real", "别人", "改写"), row("same_speaker_real", "别人", "另一改写"),
+            row("trait_x", "别人", None)]
+    counts = apply_twin_weights({"train": {"twin_weight_file": str(path), "twin_weight_default": 0.6}}, rows)
+    assert counts == {"labelled": 1, "default": 1}
+    assert [r.meta.get("twin_weight") for r in rows] == [0.2, 0.6, None]
+    assert apply_twin_weights({"train": {}}, rows) == {}
+
+
+def test_twin_style_delta_maps_near_copies_to_zero_and_restyles_to_one() -> None:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from twin_style_delta import style_delta, weights
+
+    assert style_delta({"a": [1, 0.9], "b": [2, 0.5]}, {"a": [3, 0.8], "b": [2, 0.5], "c": [0, 1]}) == 1.0
+    w, low, high = weights(np.array([0.0, 0.1, 0.2, 0.3, 0.4]), 0.25, 0.75)
+    assert (low, high) == pytest.approx((0.1, 0.3))
+    assert w.tolist() == pytest.approx([0.0, 0.0, 0.5, 1.0, 1.0])
+
+
+def test_twin_weight_on_the_own_negative_when_the_twin_is_the_negative() -> None:
+    anchor, positive = unit([1, 0, 0], [0, 1, 0]), unit([0.9, 0.1, 0], [0.1, 0.9, 0])
+    negative = unit([0.95, 0.05, 0], [0, 0.2, 1])
+    args = (torch.full((2,), 0.1), torch.ones(2), torch.tensor([0, 1]), torch.tensor([-1, -2]), 0.05)
+
+    def loss(w: list[float] | None):
+        return info_nce_loss(anchor, positive, negative, *args, twin_weight=None if w is None else torch.tensor(w),
+                             twin_is_negative=torch.tensor([True, False]))[1]
+
+    plain, zero, double = loss(None), loss([0.0, 0.0]), loss([2.0, 2.0])
+    assert zero["raw_loss"][0] < plain["raw_loss"][0] < double["raw_loss"][0]
+    assert torch.allclose(zero["raw_loss"][1], plain["raw_loss"][1]) and torch.allclose(double["raw_loss"][1],
+                                                                                         plain["raw_loss"][1])
+    anchor0 = unit([1, 0, 0])[0]
+    cands = torch.cat([positive, unit([0, 1, 0]), negative]) @ anchor0 / 0.05
+    cands[3] += torch.log(torch.tensor(2.0))
+    assert torch.allclose(double["raw_loss"][0], -torch.log_softmax(cands, dim=0)[0], atol=1e-5)
+    assert double["twin_weight"] == pytest.approx(2.0)
+
+
+def test_hinge_weights_follow_the_twin_weight_only_where_the_twin_is_the_negative() -> None:
+    from train import push_weighted
+
+    batch = {"weight": torch.tensor([1.0, 2.0, 1.0]), "twin_weight": torch.tensor([0.0, 0.5, 3.0]),
+             "twin_is_negative": torch.tensor([True, True, False])}
+    assert push_weighted(batch).tolist() == [0.0, 1.0, 1.0]
+    assert push_weighted({"weight": torch.ones(2)}).tolist() == [1.0, 1.0]
+
+
+def test_surface_gate_spares_real_rewrites_and_damps_near_copies() -> None:
+    from twin_style_delta import surface_gate
+
+    assert surface_gate("哈，什么械动式垂直拉升装置，只是凡众所造的粗砺机关罢了。", "哈，什么械动式垂直拉升装置，只是凡人制造的粗糙机关罢了。") < 1.0
+    assert surface_gate("一样的句子", "一样的句子") == 0.0
+    assert surface_gate("奴家这就去办。", "我马上就去做这件事。") == 1.0

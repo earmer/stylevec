@@ -25,7 +25,7 @@ from report import per_rule_table
 
 NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 # Changing these moves identities between training and the shared held-out evaluation.
-SPLIT_KEYS = ("data.speakers", "data.heldout_speakers")
+SPLIT_KEYS = ("data.speakers", "data.heldout_speakers", "paths.top_speakers")
 DEFAULT_HEADLINE = ["heldout_top1_lift", "provenance_acc", "gap:same_speaker_topic_matched"]
 DEFAULT_FOCUS_RULES = [
     "same_speaker_topic_matched",
@@ -170,6 +170,19 @@ def eval_config(shared: dict[str, Any], arm: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def same_heldout(config: dict[str, Any], shared: dict[str, Any]) -> bool:
+    """A wider speaker list is fine when it holds out exactly the shared held-out speakers (they end both lists),
+    so no shared held-out identity is trained on. False when either list cannot be read."""
+    from import_genshin import heldout_speakers, load_top_speakers
+
+    try:
+        arm_heldout = heldout_speakers(config, load_top_speakers(config))
+        shared_heldout = heldout_speakers(shared, load_top_speakers(shared))
+    except (OSError, ValueError, KeyError):
+        return False
+    return bool(shared_heldout) and arm_heldout == shared_heldout
+
+
 def check_spec(spec: dict[str, Any], shared: dict[str, Any], arms: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     errors: list[str] = []
     flat = {arm: comparable(config) for arm, config in arms.items()}
@@ -180,9 +193,10 @@ def check_spec(spec: dict[str, Any], shared: dict[str, Any], arms: dict[str, dic
             errors.append(f"{arm}: curriculum.enabled must be true so every arm shares one budget accounting")
         if float(config["train"].get("max_seconds", 0) or 0) > 0:
             errors.append(f"{arm}: train.max_seconds > 0 can stop a run before its late stages; use max_steps only")
-        for key in SPLIT_KEYS:
-            if flat[arm].get(key) != shared_flat.get(key):
-                errors.append(f"{arm}: changes {key}, which would leak identities into the shared held-out set")
+        split_changes = [key for key in SPLIT_KEYS if flat[arm].get(key) != shared_flat.get(key)]
+        if split_changes and not same_heldout(config, shared):
+            errors.append(f"{arm}: changes {', '.join(split_changes)}, which would leak identities into the shared "
+                          "held-out set")
         changed_validation = sorted(k for k in set(flat[arm]) | set(shared_flat)
                                     if k.startswith("validation.") and flat[arm].get(k) != shared_flat.get(k))
         if changed_validation:

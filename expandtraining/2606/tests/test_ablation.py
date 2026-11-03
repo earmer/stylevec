@@ -145,3 +145,18 @@ def test_measured_tiers_prefer_heldout_rows() -> None:
         {"rule": "z", "heldout": False, "n": 3, "violation": 0.00},
     ])
     assert measured_tiers(table) == {"x": "hard", "y": "mid", "z": "easy"}
+
+
+@pytest.mark.parametrize(("tail", "ok"), [(["s8", "s9"], True), (["s9", "s8x"], False)])
+def test_a_wider_speaker_list_must_hold_out_the_same_speakers(tmp_path: Path, tail: list, ok: bool) -> None:
+    narrow, wide = tmp_path / "narrow.json", tmp_path / "wide.json"
+    narrow.write_text(json.dumps([f"s{i}" for i in range(10)]))
+    wide.write_text(json.dumps([f"s{i}" for i in range(8)] + [f"w{i}" for i in range(10)] + tail))
+    spec = write_spec(tmp_path, arms={"a": {}, "b": {"paths.top_speakers": str(wide), "data.speakers": 20}},
+                      comparisons=[], common={"paths.top_speakers": str(narrow)},
+                      new_keys=["paths.top_speakers"])
+    if ok:
+        plan(spec, check_paths=False, write=False)
+    else:
+        with pytest.raises(SpecError, match="leak identities"):
+            plan(spec, check_paths=False, write=False)

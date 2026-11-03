@@ -128,8 +128,30 @@ TRAITS: dict[str, tuple[str, list[str]]] = {
 }
 
 
-def questions(names: list[str] | None = None) -> dict[str, Any]:
-    return {name: {"type": "score", "instructions": f"{what} {NOT_APPLICABLE}", "criteria": levels}
+# Clarifications for the cases cheaper judges (OpenRouter's span-02) got wrong against Jev and by reading;
+# they lift span-02's agreement with Jev. Jev itself is asked without them, so its labels stay comparable.
+CLARIFICATIONS = {
+    "irony": "Irony means meaning the opposite of what is said, or mocking the listener. Sincere praise, polite "
+             "reassurance and friendly teasing are NOT ironic; mock-scolding a friend is playfulness, not irony.",
+    "playfulness": "Teasing, mock-scolding, nicknames, jokes, wry remarks and cute particles (喵, ~, 嘛) are playful. "
+                   "Modest, formal or factual statements are serious.",
+    "warmth": "Praising, welcoming, thanking or encouraging the listener is warm, even when brief.",
+    "deference": "Judge the speaker's self-reference and address: humble self-terms (奴家, 在下, 晚辈, 小的) mean humble "
+                 "even in archaic speech; asking a favour (拜托, please) is not commanding.",
+    "swagger": "A set-up for a self-deprecating joke (everyone expected me to be big and strong, but...) is "
+               "self-effacing, not boastful.",
+    "spokenness": "Fillers (嗯, 呃, 啊, um), tildes, ellipses and fragments mark spontaneous speech. A short, everyday "
+                  "spoken line is at least neutral, not composed prose.",
+    "ornament": "A short, plain line with no imagery or rhetoric is evidence of plain language (level 1), not an "
+                "absence of signal.",
+    "softness": "A grunt like Hmph or a curt tone is somewhat rough even when the content is sad.",
+}
+
+
+def questions(names: list[str] | None = None, clarified: bool = False) -> dict[str, Any]:
+    return {name: {"type": "score", "criteria": levels,
+                   "instructions": f"{what} {NOT_APPLICABLE}" + (f" {CLARIFICATIONS[name]}"
+                                                                 if clarified and name in CLARIFICATIONS else "")}
             for name, (what, levels) in TRAITS.items() if names is None or name in names}
 
 
@@ -147,6 +169,31 @@ def judge(text: str, api_key: str | None = None, names: list[str] | None = None,
             if error.code not in (429, 500, 502, 503, 529) or attempt == retries - 1:
                 raise RuntimeError(f"Jev HTTP {error.code}: {error.read()[:300]!r}") from None
         except Exception:  # the link drops connections now and then (IncompleteRead, RemoteDisconnected)
+            if attempt == retries - 1:
+                raise
+        time.sleep(min(60, 2 ** attempt))
+    raise AssertionError("unreachable")
+
+
+OPENROUTER_URL = "https://openrouter.ai/api/alpha/decisions"
+
+
+def judge_openrouter(text: str, model: str, api_key: str | None = None, retries: int = 8) -> dict[str, Any]:
+    """One OpenRouter decision request (e.g. respan/span-02) with the clarified questions. Same shape as judge(),
+    plus the billed USD (usage.cost); confidence is None when the model gives none."""
+    body = json.dumps({"model": model, "state": [text], "questions": questions(clarified=True)}).encode()
+    headers = {"Content-Type": "application/json",
+               "Authorization": "Bearer " + (api_key or os.environ["OPENROUTER_API_KEY"])}
+    for attempt in range(retries):
+        try:
+            reply = json.load(urllib.request.urlopen(urllib.request.Request(OPENROUTER_URL, body, headers), timeout=90))
+            usage = reply.get("usage", {})
+            return {"scores": {k: (v["score"], v.get("confidence")) for k, v in reply["answers"].items()},
+                    "input_tokens": usage.get("input_tokens", 0), "cost": float(usage.get("cost", 0.0))}
+        except urllib.error.HTTPError as error:
+            if error.code not in (429, 500, 502, 503, 529) or attempt == retries - 1:
+                raise RuntimeError(f"OpenRouter HTTP {error.code}: {error.read()[:300]!r}") from None
+        except Exception:
             if attempt == retries - 1:
                 raise
         time.sleep(min(60, 2 ** attempt))

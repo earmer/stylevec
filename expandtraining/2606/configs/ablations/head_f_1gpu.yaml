@@ -1,0 +1,115 @@
+# HEAD F: more voices. Every model so far learned to tell 80 Genshin speakers apart (41k unique lines). head_f
+# trains nohead's recipe on 580 training speakers (the old 80 plus 500 more with 50+ lines, junk names dropped;
+# data/paratarget/speakers_top600.json) with the SAME 20 held-out speakers, so evaluation stays comparable, and
+# adds the author corpora (Reddit, Douban, Weibo, CommentR, CPED, AuthBench train, AO3; same_author_real rows).
+#   data      nohead on the wider data
+#   episodes  data plus episode InfoNCE on Reddit training authors, each episode's comments from different
+#             subreddits (src/episodes.py, data/episodes/reddit_train.jsonl): voice that survives a change of topic
+#   push      data with the paraphrase repulsion (the twin logit) weighted per pair by how much span-02 says the
+#             style changed (scripts/twin_style_delta.py, mean weight 1: the same total push, moved off
+#             near-copies onto restyled paraphrases)
+#   both      episodes and push together (a 2 x 2 with data)
+# Judge each arm against data and against nohead at step 1050 (head_a validation_step_01050): top-1, Fisher sep
+# (sep_diff), line leak split into near-copy and restyled paraphrases, and the Reddit voice-versus-topic probe
+# (scripts/voice_topic_probe.py, held-out authors).
+# uv run python expandtraining/2606/scripts/preflight.py local expandtraining/2606/configs/ablations/head_f_1gpu.yaml
+name: head_f_1gpu
+description: >
+  nohead on 580 training speakers (was 80) plus the author corpora, then Reddit episode InfoNCE across
+  subreddits, then a paraphrase repulsion scaled by the judged style change. Compare with nohead at step 1050.
+base: configs/remote_5090x2.yaml
+world_size: 1
+seeds: [42]
+new_keys:
+  - model.center
+  - model.content_dim
+  - model.gradient_checkpointing
+  - train.loss
+  - train.infonce_temperature
+  - train.infonce_triplet_weight
+  - train.infonce_until_step
+  - train.infonce_tiers
+  - train.infonce_twin_temperature
+  - train.stop_at_step
+  - regularization.content_weight
+  - regularization.content_temperature
+  - regularization.content_leak_weight
+  - regularization.content_twin_pairs
+  - validation.matryoshka_dims
+  - data.genshin_source
+  - data.genshin_scene_neighbors
+  - data.genshin_topic_matched_variants
+  - data.authorcorpora_enabled
+  - paths.top_speakers
+  - train.episode_weight
+  - train.episode_speakers
+  - train.episode_k
+  - train.episode_temperature
+  - train.episode_file
+  - train.twin_weight_file
+  - train.twin_weight_default
+common:
+  train.grad_accum: 8
+  train.stop_at_step: 1050
+  train.keep_weights_at: [0.1667, 0.35]
+  model.center: running
+  train.loss: infonce
+  train.infonce_temperature: 0.05
+  train.infonce_triplet_weight: 10.0
+  train.infonce_until_step: 0
+  train.infonce_tiers: [clean]
+  train.infonce_twin_temperature: 0.05
+  model.gradient_checkpointing: true
+  validation.matryoshka_dims: [32, 64, 128]
+  model.content_dim: 0
+  regularization.content_weight: 0.0
+  regularization.content_temperature: 0.1
+  regularization.content_leak_weight: 0.0
+  regularization.content_twin_pairs: false
+  curriculum.mode: staged
+  curriculum.grouping: cleanliness
+  curriculum.stages:
+    - {until: 0.20, tiers: {clean: 1.0}}
+    - {until: 0.60, tiers: {clean: 0.6, topic: 0.4}}
+    - {until: 1.00, tiers: {clean: 0.45, topic: 0.45, confounded: 0.10}}
+  curriculum.rule_shares: {trait_positive_vs_negative: 0.25, trait_cross_feature_hard: 0.25,
+                          length_course_genshin: 0.1, length_course_msynthstel: 0.1}
+  data.genshin_source: v2
+  # conv_a's evaluation set (built from its common data, 100 speakers), as for nohead and head_e; every arm
+  # trains on the wider data below.
+  data.genshin_scene_neighbors: 3
+  data.genshin_topic_matched_variants: 1
+arms:
+  data: &wide
+    data.genshin_scene_neighbors: 8
+    data.genshin_topic_matched_variants: 3
+    paths.top_speakers: data/paratarget/speakers_top600.json
+    data.speakers: 600
+    data.max_triplets: 400000
+    data.authorcorpora_enabled: true
+  episodes:
+    <<: *wide
+    train.episode_weight: 0.5
+    train.episode_speakers: 16
+    train.episode_k: 3
+    train.episode_temperature: 0.07
+    train.episode_file: data/episodes/reddit_train.jsonl
+  push:
+    <<: *wide
+    train.twin_weight_file: data/traits/twins/weights.jsonl
+    train.twin_weight_default: 1.0
+  both:
+    <<: *wide
+    train.episode_weight: 0.5
+    train.episode_speakers: 16
+    train.episode_k: 3
+    train.episode_temperature: 0.07
+    train.episode_file: data/episodes/reddit_train.jsonl
+    train.twin_weight_file: data/traits/twins/weights.jsonl
+    train.twin_weight_default: 1.0
+comparisons:
+  - {arm: episodes, against: data, keys: [train.episode_weight, train.episode_speakers, train.episode_k,
+                                          train.episode_temperature, train.episode_file]}
+  - {arm: push, against: data, keys: [train.twin_weight_file, train.twin_weight_default]}
+headline: [heldout_top1_macro, line_leak_heldout, fisher_sep, fisher_rank, fisher_sep_diff, fisher_sep_para,
+           effective_rank, gap:same_speaker_topic_matched]

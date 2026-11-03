@@ -125,6 +125,11 @@ if [[ -d data/traits ]]; then  # Jev trait labels for train.named_trait_files (s
   rsync_retry -R data/traits/ "$HOST:$DATA_ROOT/"
 fi
 
+if [[ -d data/episodes ]]; then  # train.episode_file (scripts/build_episode_file.py) and the voice/topic probe
+  echo "== episodes"
+  rsync_retry -R data/episodes/ "$HOST:$DATA_ROOT/"
+fi
+
 echo "== base model"
 rsync_retry -R "$model/" "$HOST:$DATA_ROOT/"
 

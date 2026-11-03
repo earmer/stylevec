@@ -384,4 +384,26 @@ head_e_1gpu__paired__s42: >
   Result vs nohead/head_d at 1050: leak 0.640 (0.629/0.655), top-1 0.167 (0.173/0.174), sep_diff 1.94
   (2.62/1.55), sep_orig 3.22 (3.38/2.84). Named norm share 0.102 (head_d 0.015): the floor works.
   Named r vs Jev fell: line 0.58 (head_d 0.69), speaker 0.81 (0.89), line - paraphrase 0.47 (0.53),
-  tone traits on the difference 0.31 (0.34). Fails the go rule (diff r 0.58, tone 0.38, sep_diff 2.2).
+  tone traits on the difference 0.31 (0.34). Fails the go rule (diff r 0.58, tone 0.38, sep_diff 2.2).head_f_1gpu__data__s42: >
+  HEAD F: nohead's recipe on wider data, stopped at 1050: 579 training speakers (was 80; speakers_top600.json,
+  same 20 held out), scene neighbors 8, 3 topic-matched variants, plus 20k same_author_real rows from the
+  author corpora (340,887 triplets). Same shared eval set as nohead. Tests whether more voices alone lower the
+  line leak and lift held-out top-1. Judged against nohead at 1050 (leak 0.629, top-1 0.173, sep_diff 2.62);
+  seed gaps leak 0.017, top-1 0.016. The control for episodes, push and both.
+head_f_1gpu__episodes__s42: >
+  HEAD F: data plus episode InfoNCE (weight 0.5, T 0.07) on Reddit training authors: 16 authors x 2 x 3
+  comments per micro-batch, every comment of an author's pair from a different subreddit
+  (data/episodes/reddit_train.jsonl: 153,638 comments, 3,864 authors), batch-mean centred, running center
+  frozen during episode forwards. Unlike head_c's Genshin episodes, the halves share voice and not topic.
+  Judged against data: leak, top-1, sep_diff, and the voice-versus-topic probe (3,112 items, held-out Reddit
+  authors, length-matched, no catch-all subreddits; scripts/voice_topic_probe.py).
+head_f_1gpu__push__s42: >
+  HEAD F: data with the line-vs-own-paraphrase push weighted per pair by span-02's judged style change (mean
+  |trait difference|, 43k labelled pairs; scripts/twin_style_delta.py, a mild surface gate for near-identical
+  text, rescaled to mean 1 so the total push matches data). The weight reaches the twin logit, the
+  origin_vs_para own-negative logit and its hinge (Gemini caught that the twin logit alone missed the query
+  rows). Near-copies (lowest 10%) are not pushed. Tests the user's idea that pushing near-copies apart teaches
+  content, not voice. Judged against data: leak split near-copy/restyled, top-1, sep_diff.
+head_f_1gpu__both__s42: >
+  HEAD F: episodes and push together; with data, episodes and push a 2 x 2. Judged against data and the two
+  single arms.

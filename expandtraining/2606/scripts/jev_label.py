@@ -7,6 +7,8 @@ Takes the Genshin speaker rules' texts (anchors, positives, origin_vs_para parap
 split, skips texts already in <out.jsonl>, and appends one {"text", "scores": {trait: [score, confidence]}}
 row per text, so a rerun resumes. With --texts, rows {"text", ...} are labelled as given and their other
 fields are kept. --budget stops submitting once this run's spend reaches it (in-flight requests still finish). TYPESAFE_API_KEY comes from the environment and is never printed.
+--judge openrouter:<model> (e.g. openrouter:respan/span-02) asks that OpenRouter decision model instead, with
+the clarified questions, billed by usage.cost; OPENROUTER_API_KEY comes from the environment.
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from traits import JEV_MODEL, judge
+from traits import JEV_MODEL, judge, judge_openrouter
 
 RULES = {"same_speaker_real", "same_speaker_topic_matched", "origin_vs_para"}
 
@@ -58,7 +60,17 @@ def main() -> None:
     parser.add_argument("--split", default="train")
     parser.add_argument("--workers", type=int, default=16)
     parser.add_argument("--pairs", type=int, default=0, help="only N (line, own paraphrase) pairs")
+    parser.add_argument("--judge", default="jev", help="jev or openrouter:<model>")
     args = parser.parse_args()
+    if args.judge == "jev":
+        ask, model = judge, JEV_MODEL
+    elif args.judge.startswith("openrouter:"):
+        model = args.judge.split(":", 1)[1]
+
+        def ask(text: str) -> dict:
+            return judge_openrouter(text, model)
+    else:
+        parser.error(f"unknown --judge {args.judge!r}")
     done = set()
     if Path(args.out).exists():
         done = {json.loads(line)["text"] for line in open(args.out, encoding="utf-8")}
@@ -70,10 +82,10 @@ def main() -> None:
     todo = [text for text in (list(extra) if args.texts else texts_of(args.triplets, args.split, args.pairs))
             if text not in done]
     print(f"{len(done)} labelled, {len(todo)} to go", flush=True)
-    lock, started, tokens, count, stopped = threading.Lock(), time.time(), 0, 0, False
-    with open(args.out, "a", encoding="utf-8") as handle, \
+    lock, started, tokens, count, stopped, spent = threading.Lock(), time.time(), 0, 0, False, 0.0
+    with open(args.out, "a", encoding="utf-8", buffering=1) as handle, \
             concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
-        futures = {pool.submit(judge, text): text for text in todo}
+        futures = {pool.submit(ask, text): text for text in todo}
         for future in concurrent.futures.as_completed(futures):
             text = futures[future]
             if future.cancelled():
@@ -85,9 +97,10 @@ def main() -> None:
                 continue
             with lock:
                 handle.write(json.dumps({"text": text, **extra.get(text, {}), "scores": result["scores"],
-                                         "model": JEV_MODEL}, ensure_ascii=False) + "\n")
+                                         "model": model}, ensure_ascii=False) + "\n")
                 tokens += result["input_tokens"]
-                if args.budget and tokens / 1e6 * 0.042 >= args.budget and not stopped:
+                spent += result.get("cost", result["input_tokens"] / 1e6 * 0.042)
+                if args.budget and spent >= args.budget and not stopped:
                     stopped = True
                     print(f"budget USD {args.budget} reached; cancelling the rest", flush=True)
                     for pending in futures:
@@ -96,8 +109,9 @@ def main() -> None:
                 if count % 1000 == 0:
                     handle.flush()
                     rate = count / (time.time() - started)
-                    print(f"{count}/{len(todo)} at {rate:.1f}/s, {tokens / 1e6:.1f}M input tokens", flush=True)
-    print(f"done: {count} labelled, {tokens / 1e6:.1f}M input tokens (USD {tokens / 1e6 * 0.042:.2f})", flush=True)
+                    print(f"{count}/{len(todo)} at {rate:.1f}/s, {tokens / 1e6:.1f}M input tokens, USD {spent:.3f}",
+                          flush=True)
+    print(f"done: {count} labelled, {tokens / 1e6:.1f}M input tokens (USD {spent:.3f})", flush=True)
 
 
 if __name__ == "__main__":

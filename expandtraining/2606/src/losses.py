@@ -52,12 +52,18 @@ def info_nce_loss(
     has_twin: torch.Tensor | None = None,
     twin_temperature: float = 0.0,
     queries: torch.Tensor | None = None,
+    twin_weight: torch.Tensor | None = None,
+    twin_is_negative: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """In-batch InfoNCE on cosine / temperature. Row i's candidates: every positive (its own is the target),
     every other anchor, and every mined negative (its own always kept).
 
     twin (with has_twin, twin_temperature > 0) adds one more candidate per row: its own content twin, the
     same content in another voice, at its own (lower = harder) temperature. Rows with has_twin False skip it.
+    twin_weight (batch,) >= 0 counts each twin w times in the denominator (+log w on its logit): a twin
+    whose style barely differs from its anchor's (a near-copy paraphrase) is hardly pushed; 0 drops it. On
+    rows whose twin IS their negative (twin_is_negative: origin_vs_para, where the line's own paraphrase is
+    the mined negative), the weight goes on that negative's logit instead, the same way.
 
     anchor_groups[j] is the style of anchor j and positive j, negative_groups[j] that of negative j. Another
     row's candidate with anchor i's style is a false negative and is dropped from the denominator, not
@@ -96,13 +102,27 @@ def info_nce_loss(
     # Positives share their anchor's style, so one mask covers both the positive and the anchor block.
     mask_style = same_style & ~eye
     mask_n = same_negative & ~eye
+    logit_n = sim_n / float(temperature)
+    if twin_weight is not None and twin_is_negative is not None and bool(twin_is_negative.any()):
+        if twin_weight.shape != (batch,) or twin_is_negative.shape != (batch,):
+            raise ValueError(f"twin_weight and twin_is_negative must be ({batch},)")
+        own = eye & twin_is_negative[:, None]
+        logit_n = logit_n + own.float() * torch.log(twin_weight.float().clamp(min=1e-6))[:, None]
+        mask_n = mask_n | (own & (twin_weight <= 0)[:, None])
     blocked = torch.cat([mask_style, mask_style | eye, mask_n], dim=1)
-    logits = torch.cat([sim_p, sim_a, sim_n], dim=1) / float(temperature)
+    logits = torch.cat([sim_p / float(temperature), sim_a / float(temperature), logit_n], dim=1)
     if use_twin:
         with torch.autocast(device_type=anchor.device.type, enabled=False):
             twin_cos = (a * F.normalize(twin.float(), p=2, dim=-1, eps=1e-8)).sum(dim=-1)
-        logits = torch.cat([logits, (twin_cos / float(twin_temperature))[:, None]], dim=1)
-        blocked = torch.cat([blocked, ~has_twin[:, None]], dim=1)
+        twin_logit = twin_cos / float(twin_temperature)
+        twin_blocked = ~has_twin
+        if twin_weight is not None:
+            if twin_weight.shape != (batch,):
+                raise ValueError(f"twin_weight must be ({batch},), got {tuple(twin_weight.shape)}")
+            twin_logit = twin_logit + torch.log(twin_weight.float().clamp(min=1e-6))
+            twin_blocked = twin_blocked | (twin_weight <= 0)
+        logits = torch.cat([logits, twin_logit[:, None]], dim=1)
+        blocked = torch.cat([blocked, twin_blocked[:, None]], dim=1)
     logits = logits.masked_fill(blocked, torch.finfo(logits.dtype).min)
     targets = torch.arange(batch, device=anchor.device)
     raw = F.cross_entropy(logits, targets, reduction="none")
@@ -125,6 +145,17 @@ def info_nce_loss(
     }
     if queries is not None:
         stats["query_fraction"] = queries.float().mean().detach()
+    if twin_weight is not None:
+        # Mean weight over the rows whose loss a twin weight actually moves (query rows with a twin either way).
+        weighted = torch.zeros(batch, dtype=torch.bool, device=anchor.device)
+        if use_twin:
+            weighted = weighted | has_twin
+        if twin_is_negative is not None:
+            weighted = weighted | twin_is_negative
+        if queries is not None:
+            weighted = weighted & queries
+        if bool(weighted.any()):
+            stats["twin_weight"] = twin_weight[weighted].float().mean().detach()
     if use_twin and bool(has_twin.any()):
         rows = has_twin
         stats["twin_cos"] = twin_cos[rows].mean().detach()

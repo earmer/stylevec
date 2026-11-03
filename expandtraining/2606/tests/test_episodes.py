@@ -70,3 +70,30 @@ def test_episode_infonce_uses_the_other_speakers_same_half_episodes_as_negatives
     loss_clean, _ = episode_infonce(clean, speakers, k, 0.1)
     loss_clash, stats = episode_infonce(clash.reshape(-1, dim), speakers, k, 0.1)
     assert loss_clash > loss_clean + 1.0 and float(stats["episode_accuracy"]) < 1.0
+
+
+def test_file_pool_episodes_take_every_line_from_a_different_topic(tmp_path: Path):
+    import json
+
+    from episodes import episode_pool_from_file
+
+    rows = [{"author": f"a{i}", "topic": f"t{j % 5}", "text": f"a{i}_{j}"} for i in range(4) for j in range(10)]
+    rows += [{"author": "mono", "topic": "t0", "text": f"mono_{j}"} for j in range(10)]  # one topic: never usable
+    path = tmp_path / "episodes.jsonl"
+    path.write_text("\n".join(json.dumps(r) for r in rows))
+    pool = episode_pool_from_file(str(path))
+    assert pool["a0"]["a0_7"] == "t2"
+    texts = EpisodeSampler(pool, {"speakers": 3, "k": 2, "min_gap": 150, "temperature": 0.05, "weight": 1.0}).sample()
+    assert len(texts) == 12 and not any(t.startswith("mono") for t in texts)
+    topic = {r["text"]: r["topic"] for r in rows}
+    for block in range(3):
+        assert len({topic[t] for t in texts[block * 4:(block + 1) * 4]}) == 4
+
+
+def test_centering_removes_a_shared_domain_direction():
+    shared = torch.tensor([10.0, 0, 0, 0])
+    voices = torch.tensor([[0, 1.0, 0, 0], [0, 0, 1.0, 0]])
+    lines = torch.stack([shared + voices[s] + 0.01 * torch.randn(4) for s in (0, 0, 1, 1) for _ in range(2)])
+    plain, _ = episode_infonce(lines, 2, 2, 0.1)
+    centered, stats = episode_infonce(lines, 2, 2, 0.1, center=True)
+    assert centered < plain and stats["episode_accuracy"] == 1.0

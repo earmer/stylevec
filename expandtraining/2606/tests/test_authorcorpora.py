@@ -429,3 +429,10 @@ def test_is_bot_like_long_prose_passes_but_repetition_does_not() -> None:
     assert not is_bot_like(prose)
     assert is_bot_like("哈" * 300)
     assert is_bot_like("hunted, " * 80)
+
+
+def test_load_samples_keeps_heldout_authors_out_of_training(tmp_path: Path) -> None:
+    rows = _synthetic_rows(["weibo:a"], texts_per_author=5) + _synthetic_rows(["weibo:h"], 5, split="heldout")
+    config = _make_config(str(_make_parquet(tmp_path, rows)), enabled=True)
+    samples, _ = load_authorcorpora_samples(config)
+    assert {s.split for s in samples if s.style_id == "weibo:h"} == {"test"}

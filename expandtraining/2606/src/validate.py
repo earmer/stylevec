@@ -36,6 +36,8 @@ def move_batch_to_device(
         moved["twin"] = {name: value.to(device, non_blocking=non_blocking) for name, value in batch["twin"].items()}
         moved["has_twin"] = batch["has_twin"].to(device, non_blocking=non_blocking)
         moved["twin_is_negative"] = batch["twin_is_negative"].to(device, non_blocking=non_blocking)
+        if "twin_weight" in batch:
+            moved["twin_weight"] = batch["twin_weight"].to(device, non_blocking=non_blocking)
     return moved
 
 

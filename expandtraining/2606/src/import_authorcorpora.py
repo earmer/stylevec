@@ -481,6 +481,8 @@ def load_authorcorpora_samples(config: dict[str, Any]) -> tuple[list[SampleRecor
         lang      = normalize_text(str(row.get("lang", "zh")))
         text      = normalize_text(str(row["text"]))
         split     = str(row.get("split", "train"))
+        # unified.parquet's held-out authors stay out of training: "test" is never built into triplets.
+        split     = "test" if split == "heldout" else split
         if not author_id or not text:
             filter_counts["empty_field"] += 1
             continue

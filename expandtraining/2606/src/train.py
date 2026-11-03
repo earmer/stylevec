@@ -29,7 +29,9 @@ from config import (
 )
 from dataset import TripletTextDataset, make_triplet_collate
 from conversation_batches import conversation_group, conversation_stats, group_by_conversation
-from episodes import EpisodeSampler, episode_pool, episode_settings_from_config, episode_step_loss
+from twin_weights import apply_twin_weights
+from episodes import (EpisodeSampler, episode_pool, episode_pool_from_file, episode_settings_from_config,
+                      episode_step_loss)
 from named_traits import NamedTraitSampler, named_trait_settings_from_config, named_trait_step_loss
 from curriculum import curriculum_order, rule_tier, schedule_summary
 from losses import (
@@ -378,6 +380,7 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     triplets, manifest = load_or_build(config, dataset)
+    apply_twin_weights(config, triplets)
     manifest_hash = manifest["manifest_hash"]
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -391,8 +394,11 @@ def train_from_config(config_path: str, run_name: str, resume: str | None = None
     raw_train_triplets = [row for row in triplets if row.split == "train"]
     write_run_records(config, run_dir, train_dataset.triplets, raw_train_triplets)
     episode_settings = episode_settings_from_config(config)
-    episode_sampler = (EpisodeSampler(episode_pool(raw_train_triplets), episode_settings, seed=int(config["runtime"]["seed"]))
-                       if episode_settings["weight"] > 0.0 else None)
+    episode_sampler = None
+    if episode_settings["weight"] > 0.0:
+        pool = (episode_pool_from_file(episode_settings["file"]) if episode_settings["file"]
+                else episode_pool(raw_train_triplets))
+        episode_sampler = EpisodeSampler(pool, episode_settings, seed=int(config["runtime"]["seed"]))
     named_trait_settings = named_trait_settings_from_config(config)
     named_trait_sampler = (NamedTraitSampler(named_trait_settings, seed=int(config["runtime"]["seed"]))
                            if named_trait_settings["weight"] > 0.0 else None)
@@ -835,6 +841,16 @@ def infonce_queries(batch: dict[str, Any], tiers: list[str] | None, device: torc
                         dtype=torch.bool, device=device)
 
 
+def push_weighted(batch: dict[str, Any]) -> torch.Tensor:
+    """Row weights for the hinge: rows whose negative is their own content twin (a line's paraphrase) take
+    meta twin_weight (train.twin_weight_file) on top, so a near-copy paraphrase is not pushed by the hinge
+    either."""
+    weights = batch["weight"]
+    if batch.get("twin_weight") is None or batch.get("twin_is_negative") is None:
+        return weights
+    return torch.where(batch["twin_is_negative"], weights * batch["twin_weight"].to(weights.dtype), weights)
+
+
 def objective_loss(
     anchor: torch.Tensor,
     positive: torch.Tensor,
@@ -847,8 +863,9 @@ def objective_loss(
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """The main objective. twin / has_twin (the batch's content twins) reach InfoNCE only when
     train.infonce_twin_temperature > 0; Matryoshka prefixes never pass them."""
+    hinge_weights = push_weighted(batch)
     if settings["loss"] == "triplet":
-        return weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], batch["weight"])
+        return weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], hinge_weights)
     if settings["loss"] != "infonce":
         raise ValueError(f"unknown train.loss: {settings['loss']!r}")
     anchor_groups, negative_groups = groups if groups is not None else style_group_ids(batch, anchor.device)
@@ -865,13 +882,15 @@ def objective_loss(
         has_twin=has_twin,
         twin_temperature=settings.get("twin_temperature", 0.0),
         queries=infonce_queries(batch, settings.get("tiers"), anchor.device),
+        twin_weight=batch.get("twin_weight"),
+        twin_is_negative=batch.get("twin_is_negative"),
     )
     stats["infonce_loss"] = loss.detach()
     if "infonce_weight" in settings:
         stats["infonce_weight"] = torch.tensor(settings["infonce_weight"], device=loss.device)
         loss = loss * settings["infonce_weight"]
     if settings["triplet_weight"] > 0.0:
-        triplet, _ = weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], batch["weight"])
+        triplet, _ = weighted_triplet_margin_loss(anchor, positive, negative, batch["margin"], hinge_weights)
         stats["triplet_loss"] = triplet.detach()
         loss = loss + triplet * settings["triplet_weight"]
     return loss, stats
@@ -998,7 +1017,7 @@ def log_train_step(
     writer.add_scalar("spread/top_eigen_ratio", float(spread_stats["top_eigen_ratio"].float().cpu().item()), global_step)
     writer.add_scalar("spread/effective_rank", float(spread_stats["effective_rank"].float().cpu().item()), global_step)
     for key in ("masked_fraction", "accuracy", "infonce_loss", "triplet_loss", "twin_cos", "twin_violation",
-                "twin_fraction", "query_fraction"):
+                "twin_fraction", "twin_weight", "query_fraction"):
         if key in stats:
             writer.add_scalar(f"infonce/{key}", float(stats[key].float().cpu().item()), global_step)
     for key, value in stats.items():
