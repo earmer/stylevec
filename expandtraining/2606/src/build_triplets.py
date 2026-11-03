@@ -6,6 +6,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from config import config_hash
+from import_authorcorpora import load_authorcorpora_samples
 from import_bookraw import load_bookraw_samples
 from import_genshin import hub_speakers, load_genshin_samples, load_top_speakers
 from import_msynthstel import load_msynthstel_samples, msynthstel_mode
@@ -20,6 +21,7 @@ def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord]
     paratarget_samples, paratarget_filters = load_paratarget_samples(config, speakers)
     msynthstel_samples, msynthstel_filters = load_msynthstel_samples(config)
     bookraw_samples, bookraw_filters = load_bookraw_samples(config)
+    authorcorpora_samples, authorcorpora_filters = load_authorcorpora_samples(config)
 
     triplets: list[TripletRecord] = []
     triplets.extend(build_genshin_triplets(config, genshin_samples, "train"))
@@ -30,7 +32,9 @@ def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord]
     triplets.extend(build_msynthstel_triplets(config, msynthstel_samples, "val"))
     triplets.extend(build_bookraw_triplets(config, bookraw_samples, "train"))
     triplets.extend(build_bookraw_triplets(config, bookraw_samples, "val"))
-    samples = genshin_samples + paratarget_samples + msynthstel_samples + bookraw_samples
+    triplets.extend(build_authorcorpora_triplets(config, authorcorpora_samples, "train"))
+    triplets.extend(build_authorcorpora_triplets(config, authorcorpora_samples, "val"))
+    samples = genshin_samples + paratarget_samples + msynthstel_samples + bookraw_samples + authorcorpora_samples
     triplets.extend(build_length_course_triplets(config, samples, "train"))
     triplets.extend(build_length_course_triplets(config, samples, "val"))
 
@@ -56,6 +60,7 @@ def build_training_triplets(config: dict[str, Any]) -> tuple[list[TripletRecord]
             "paratarget": paratarget_filters,
             "msynthstel": msynthstel_filters,
             "bookraw": bookraw_filters,
+            "authorcorpora": authorcorpora_filters,
         },
     }
     return triplets, manifest
@@ -77,6 +82,8 @@ def require_rule_coverage(config: dict[str, Any], triplets: list[TripletRecord])
             "bookraw_same_author_cross_work",
             "bookraw_same_language_author_negative",
         }
+    if bool(config["data"].get("authorcorpora_enabled", False)):
+        required["authorcorpora"] = {"same_author_real"}
     present_rules = {row.rule for row in triplets}
     missing = {
         source: sorted(rules.difference(present_rules))
@@ -823,6 +830,62 @@ def bookraw_rule_limit(config: dict[str, Any], split: str) -> int:
         return int(config["data"].get("bookraw_triplets_per_rule", default))
     default = max(1, int(int(config["validation"].get("max_triplets", 100)) * 0.05))
     return int(config["validation"].get("bookraw_triplets_per_rule", default))
+
+
+def build_authorcorpora_triplets(
+    config: dict[str, Any],
+    samples: list[SampleRecord],
+    split: str,
+) -> list[TripletRecord]:
+    """same_author_real: anchor and positive are different texts by the same real-world author;
+    negative is a text from a different author in the same split. OFF by default."""
+    if not samples:
+        return []
+    weights = config["weights"]
+    margins = config["margins"]
+    by_author = by_style(samples, split, "authorcorpora")
+    authors = [a for a, rows in by_author.items() if len(rows) >= 2]
+    if len(authors) < 2:
+        return []
+    all_split = [s for s in samples if s.split == split and s.domain == "authorcorpora"]
+    limit = _authorcorpora_triplets_limit(config, split)
+    triplets: list[TripletRecord] = []
+    count = 0
+    # Round-robin over authors (one anchor each per round), so the cap spreads over every author instead of
+    # spending itself on the first few.
+    rounds = max(len(by_author[author]) for author in authors)
+    for index in range(rounds):
+        for author_index, author in enumerate(authors):
+            if count >= limit:
+                break
+            rows = by_author[author]
+            if index >= len(rows):
+                continue
+            anchor, positive = rows[index], rows[(index + 1) % len(rows)]
+            negative = pick_not_author(all_split, author, author_index + index)
+            if negative is None:
+                continue
+            add_triplet(
+                triplets,
+                anchor.text,
+                positive.text,
+                negative.text,
+                "same_author_real",
+                split,
+                float(weights.get("authorcorpora", 0.50)),
+                float(margins["hard"]),
+                {"author_id": author, "negative_author_id": negative.style_id},
+            )
+            count += 1
+    return triplets
+
+
+def _authorcorpora_triplets_limit(config: dict[str, Any], split: str) -> int:
+    if split == "train":
+        default = max(1, int(int(config["data"]["max_triplets"]) * 0.05))
+        return int(config["data"].get("authorcorpora_triplets_per_split", default))
+    default = max(1, int(int(config["validation"].get("max_triplets", 100)) * 0.05))
+    return int(config["validation"].get("authorcorpora_triplets_per_split", default))
 
 
 def cap_triplets(config: dict[str, Any], triplets: list[TripletRecord]) -> list[TripletRecord]:

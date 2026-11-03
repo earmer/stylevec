@@ -107,6 +107,8 @@ def triplet_styles(rule: str, meta: dict[str, Any]) -> tuple[str | None, str | N
         return _style("msynthstel", meta.get("feature")), _style("msynthstel", meta.get("negative_feature"))
     if rule.startswith("bookraw_"):
         return _style("bookraw", meta.get("author")), _style("bookraw", meta.get("negative_author"))
+    if rule == "same_author_real":
+        return _style("authorcorpora", meta.get("author_id")), _style("authorcorpora", meta.get("negative_author_id"))
     if rule.startswith("length_course_"):
         # Genshin sources are speaker names, so these labels match the Genshin rules above.
         domain = meta.get("domain")

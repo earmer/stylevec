@@ -1,0 +1,442 @@
+"""Load multi-author corpora into SampleRecords from data/authorcorpora/unified.parquet.
+
+Build the parquet once with:
+    uv run python expandtraining/2606/src/import_authorcorpora.py
+
+Sources included:
+  weibo        : original Weibo user posts (Chinese)
+  commentr     : CommentR user comments (Chinese)
+  douban_short : Douban movie reviews by username (Chinese)
+  douban_side  : Douban book/movie/music reviews by user_id (Chinese)
+  cped         : CPED TV-drama dialogue utterances by speaker (Chinese)
+
+Excluded:
+  authbench         : max 5 docs/author, cannot meet min_texts=20
+  streamprofilebench: prediction-task benchmark format, not a raw text corpus
+"""
+from __future__ import annotations
+
+import hashlib
+import html
+import json
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from config import resolve_repo_path
+from records import SampleRecord, normalize_text, stable_id
+
+
+# ---------------------------------------------------------------------------
+# Text cleaning
+# ---------------------------------------------------------------------------
+
+_HTML_TAG = re.compile(r"<[^>]+>")
+_URL = re.compile(r"https?://\S+|www\.\S+")
+_AT_MENTION = re.compile(r"@[一-鿿\w]{1,30}")
+_REPOST_PREFIX = re.compile(r"^(转发微博|//\s*@\S+\s*:)")
+
+
+def clean_text(raw: str) -> str:
+    """Unescape HTML, strip tags/URLs/@mentions/repost prefixes; collapse whitespace."""
+    text = html.unescape(raw)
+    text = _HTML_TAG.sub(" ", text)
+    text = _URL.sub(" ", text)
+    text = _AT_MENTION.sub(" ", text)
+    text = _REPOST_PREFIX.sub("", text)
+    return normalize_text(text)
+
+
+def is_bot_like(text: str) -> bool:
+    """True when the text looks automated: empty or character-diversity ratio < 0.15."""
+    stripped = text.replace(" ", "")
+    if not stripped:
+        return True
+    return len(stripped) > 6 and len(set(stripped)) / len(stripped) < 0.15
+
+
+# ---------------------------------------------------------------------------
+# Deterministic per-author split by SHA-1 hash bucket
+# ---------------------------------------------------------------------------
+
+def author_split(author_id: str, heldout_pct: int = 10, val_pct: int = 10) -> str:
+    """Assign train / val / heldout deterministically from the author_id hash."""
+    bucket = int(hashlib.sha1(author_id.encode()).hexdigest(), 16) % 100
+    if bucket < heldout_pct:
+        return "heldout"
+    if bucket < heldout_pct + val_pct:
+        return "val"
+    return "train"
+
+
+# ---------------------------------------------------------------------------
+# Per-source loaders  →  list[dict] with keys: source, author_id, text, lang, created, meta
+# ---------------------------------------------------------------------------
+
+def _load_weibo(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """Load original Weibo posts. Skips reposts (是否原创 != 'True')."""
+    csv_path = base / "0.数据" / "weibo.csv"
+    df = pd.read_csv(csv_path, encoding="utf-8", low_memory=False)
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        if str(row.get("是否原创", "")).strip() != "True":
+            continue
+        text = clean_text(str(row.get("0", "") or ""))
+        if len(text) < min_chars:
+            continue
+        uid = str(row.get("uid", "")).strip()
+        if not uid or uid == "nan":
+            continue
+        rows.append({
+            "source": "weibo",
+            "author_id": f"weibo:{uid}",
+            "text": text,
+            "lang": "zh",
+            "created": str(row.get("日期", "") or ""),
+            "meta": "{}",
+        })
+    return rows
+
+
+def _load_commentr(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """Load CommentR user comments. Comments.json (~1.3 GB) is loaded in one pass."""
+    with open(base / "Comments.json", encoding="utf-8") as fh:
+        data = json.load(fh)
+    rows: list[dict[str, Any]] = []
+    for item in data:
+        cu = item.get("comment_user")
+        if not isinstance(cu, dict):
+            continue
+        uid = str(cu.get("_id", "")).strip()
+        if not uid or uid == "nan":
+            continue
+        text = clean_text(str(item.get("content", "") or ""))
+        if len(text) < min_chars:
+            continue
+        rows.append({
+            "source": "commentr",
+            "author_id": f"commentr:{uid}",
+            "text": text,
+            "lang": "zh",
+            "created": str(item.get("created_at", "") or ""),
+            "meta": "{}",
+        })
+    return rows
+
+
+def _load_douban_short(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """Load Douban movie reviews. Skips deleted accounts ([已注销], 已注销)."""
+    df = pd.read_csv(base / "DMSC.csv", encoding="utf-8-sig", low_memory=False)
+    _deleted = {"[已注销]", "已注销"}
+    rows: list[dict[str, Any]] = []
+    for _, row in df.iterrows():
+        username = str(row.get("Username", "") or "").strip()
+        if not username or username == "nan" or username in _deleted:
+            continue
+        text = clean_text(str(row.get("Comment", "") or ""))
+        if len(text) < min_chars:
+            continue
+        rows.append({
+            "source": "douban_short",
+            "author_id": f"douban_short:{username}",
+            "text": text,
+            "lang": "zh",
+            "created": str(row.get("Date", "") or ""),
+            "meta": json.dumps({"star": str(row.get("Star", ""))}),
+        })
+    return rows
+
+
+def _load_douban_side(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """Load Douban book/movie/music reviews from TSV files."""
+    txt_dir = base / "douban_dataset(text information)"
+    rows: list[dict[str, Any]] = []
+    for fname in ("bookreviews_cleaned.txt", "moviereviews_cleaned.txt", "musicreviews_cleaned.txt"):
+        fpath = txt_dir / fname
+        if not fpath.exists():
+            continue
+        category = fname.replace("reviews_cleaned.txt", "")
+        df = pd.read_csv(fpath, sep="\t", encoding="utf-8-sig", low_memory=False)
+        for _, row in df.iterrows():
+            uid = str(row.get("user_id", "") or "").strip()
+            if not uid or uid == "nan":
+                continue
+            text = clean_text(str(row.get("comment", "") or ""))
+            if len(text) < min_chars:
+                continue
+            rows.append({
+                "source": "douban_side",
+                "author_id": f"douban_side:{uid}",
+                "text": text,
+                "lang": "zh",
+                "created": str(row.get("time", "") or ""),
+                "meta": json.dumps({"category": category}),
+            })
+    return rows
+
+
+def _load_cped(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """Load CPED TV-drama utterances by speaker (character name)."""
+    cped_dir = base / "data" / "CPED"
+    rows: list[dict[str, Any]] = []
+    for split_name in ("train_split", "valid_split", "test_split"):
+        fpath = cped_dir / f"{split_name}.csv"
+        if not fpath.exists():
+            continue
+        df = pd.read_csv(fpath, encoding="utf-8-sig", low_memory=False)
+        for _, row in df.iterrows():
+            speaker = str(row.get("Speaker", "") or "").strip()
+            if not speaker or speaker == "nan":
+                continue
+            text = clean_text(str(row.get("Utterance", "") or ""))
+            if len(text) < min_chars:
+                continue
+            rows.append({
+                "source": "cped",
+                "author_id": f"cped:{speaker}",
+                "text": text,
+                "lang": "zh",
+                "created": "",
+                "meta": json.dumps({"tv_id": str(row.get("TV_ID", ""))}),
+            })
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# Parquet builder
+# ---------------------------------------------------------------------------
+
+_SOURCE_SUBDIR: dict[str, str] = {
+    "weibo": "weibo_users",
+    "commentr": "commentr",
+    "douban_short": "douban_short",
+    "douban_side": "douban_side",
+    "cped": "CPED",
+}
+
+
+def build_unified_parquet(
+    out_path: Path,
+    datasets_dir: Path,
+    min_chars: int = 10,
+    cped_min_chars: int = 4,
+    min_texts: int = 20,
+    texts_per_author: int = 256,
+    author_cap: int | None = None,
+    heldout_pct: int = 10,
+    val_pct: int = 10,
+) -> dict[str, int]:
+    """Normalise all sources → unified parquet; return per-source counts.
+
+    Cleaning applied:
+      - HTML / URL / @mention / repost-prefix stripping
+      - Global exact-duplicate text removal (case-folded)
+      - Bot-like filter (char-diversity < 0.15 for long texts)
+      - min_chars length floor (cped_min_chars for CPED)
+      - Authors with < min_texts retained texts are dropped
+      - At most texts_per_author texts kept per author (deterministic: first N in source order)
+    """
+    loaders: list[tuple[str, Any, int]] = [
+        ("weibo",        _load_weibo,        min_chars),
+        ("commentr",     _load_commentr,     min_chars),
+        ("douban_short", _load_douban_short, min_chars),
+        ("douban_side",  _load_douban_side,  min_chars),
+        ("cped",         _load_cped,         cped_min_chars),
+    ]
+
+    all_rows: list[dict[str, Any]] = []
+    raw_counts: dict[str, int] = {}
+    for source, fn, mc in loaders:
+        src_dir = datasets_dir / _SOURCE_SUBDIR[source]
+        rows = fn(src_dir, mc)
+        raw_counts[f"raw_{source}"] = len(rows)
+        all_rows.extend(rows)
+
+    # Global exact-text deduplication (case-folded), then bot filter
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for row in all_rows:
+        key = row["text"].casefold()
+        if key not in seen:
+            seen.add(key)
+            if not is_bot_like(row["text"]):
+                deduped.append(row)
+
+    # Group by author; apply min_texts and per-author cap
+    by_author: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in deduped:
+        by_author[row["author_id"]].append(row)
+
+    final: list[dict[str, Any]] = []
+    authors_used = 0
+    for author_id in sorted(by_author):
+        if author_cap is not None and authors_used >= author_cap:
+            break
+        rows = by_author[author_id]
+        if len(rows) < min_texts:
+            continue
+        split = author_split(author_id, heldout_pct=heldout_pct, val_pct=val_pct)
+        for row in rows[:texts_per_author]:
+            final.append({
+                "source":    row["source"],
+                "author_id": author_id,
+                "text":      row["text"],
+                "lang":      row["lang"],
+                "n_chars":   len(row["text"]),
+                "created":   row["created"],
+                "meta":      row["meta"],
+                "split":     split,
+            })
+        authors_used += 1
+
+    df = pd.DataFrame(
+        final,
+        columns=["source", "author_id", "text", "lang", "n_chars", "created", "meta", "split"],
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out_path, index=False)
+
+    result: dict[str, int] = dict(raw_counts)
+    result["total_rows"]    = len(final)
+    result["total_authors"] = authors_used
+    for src in _SOURCE_SUBDIR:
+        result[f"authors_{src}"] = len({r["author_id"] for r in final if r["source"] == src})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Importer (called by build_triplets.py)
+# ---------------------------------------------------------------------------
+
+def load_authorcorpora_samples(config: dict[str, Any]) -> tuple[list[SampleRecord], dict[str, int]]:
+    """Load authorcorpora SampleRecords from the unified parquet.
+
+    Returns ([], {}) when data.authorcorpora_enabled is falsy (default).
+    Raises FileNotFoundError if enabled but the parquet is missing.
+    """
+    if not bool(config["data"].get("authorcorpora_enabled", False)):
+        return [], {}
+
+    parquet_path = resolve_repo_path(
+        str(config["paths"].get("authorcorpora_parquet", "data/authorcorpora/unified.parquet"))
+    )
+    if not parquet_path.exists():
+        raise FileNotFoundError(
+            f"authorcorpora parquet not found: {parquet_path}\n"
+            "Build it first: uv run python expandtraining/2606/src/import_authorcorpora.py"
+        )
+
+    frame = pd.read_parquet(parquet_path)
+    required = {"author_id", "text", "lang", "split"}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(f"authorcorpora parquet missing columns {sorted(missing)}: {parquet_path}")
+
+    min_chars     = int(config["data"].get("authorcorpora_min_chars",     config["data"]["min_chars"]))
+    max_chars     = int(config["data"].get("authorcorpora_max_chars",     config["data"]["max_chars"]))
+    texts_per     = int(config["data"].get("authorcorpora_texts_per_author", 256))
+    min_texts     = int(config["data"].get("authorcorpora_min_texts",     20))
+    author_cap_v  = config["data"].get("authorcorpora_author_cap")
+    author_cap    = int(author_cap_v) if author_cap_v is not None else None
+
+    filter_counts: defaultdict[str, int] = defaultdict(int)
+    by_author: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
+    seen_texts: set[str] = set()
+
+    for _, row in frame.iterrows():
+        author_id = normalize_text(str(row["author_id"]))
+        lang      = normalize_text(str(row.get("lang", "zh")))
+        text      = normalize_text(str(row["text"]))
+        split     = str(row.get("split", "train"))
+        if not author_id or not text:
+            filter_counts["empty_field"] += 1
+            continue
+        if not min_chars <= len(text) <= max_chars:
+            filter_counts["bad_length"] += 1
+            continue
+        key = text.casefold()
+        if key in seen_texts:
+            filter_counts["duplicate_text"] += 1
+            continue
+        seen_texts.add(key)
+        meta_raw = str(row.get("meta", "{}") or "{}")
+        by_author[author_id].append({"text": text, "lang": lang, "split": split, "meta": meta_raw})
+
+    samples: list[SampleRecord] = []
+    authors_kept = 0
+    for author_id, rows in sorted(by_author.items()):
+        if len(rows) < min_texts:
+            filter_counts["below_min_texts"] += len(rows)
+            continue
+        if author_cap is not None and authors_kept >= author_cap:
+            filter_counts["author_cap"] += len(rows)
+            continue
+        for index, rd in enumerate(rows[:texts_per]):
+            try:
+                extra: dict[str, Any] = json.loads(rd["meta"]) if rd["meta"] else {}
+            except (json.JSONDecodeError, TypeError):
+                extra = {}
+            sid = stable_id("authorcorpora", author_id, rd["text"])
+            samples.append(SampleRecord(
+                sample_id=sid,
+                text=rd["text"],
+                style_id=author_id,
+                style_type="author_id",
+                domain="authorcorpora",
+                content_id=stable_id(rd["text"]),
+                source_id=sid,
+                language=rd["lang"],
+                split=rd["split"],
+                quality=1.0,
+                meta={"index": index, **extra},
+            ))
+        authors_kept += 1
+
+    filter_counts["authors_kept"] = authors_kept
+    return samples, dict(filter_counts)
+
+
+# ---------------------------------------------------------------------------
+# CLI: build the parquet
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import argparse
+    import time
+
+    parser = argparse.ArgumentParser(description="Build data/authorcorpora/unified.parquet")
+    parser.add_argument("--datasets-dir",      default="data/datasets",
+                        help="Repo-relative path to datasets dir (default: data/datasets)")
+    parser.add_argument("--out",               default="data/authorcorpora/unified.parquet",
+                        help="Repo-relative output path")
+    parser.add_argument("--min-chars",         type=int, default=10)
+    parser.add_argument("--cped-min-chars",    type=int, default=4)
+    parser.add_argument("--min-texts",         type=int, default=20)
+    parser.add_argument("--texts-per-author",  type=int, default=256)
+    args = parser.parse_args()
+
+    repo_root = Path(__file__).resolve().parents[3]
+    datasets_dir = (repo_root / args.datasets_dir).resolve()
+    out_path     = (repo_root / args.out).resolve()
+
+    print(f"datasets_dir : {datasets_dir}")
+    print(f"out          : {out_path}")
+    t0 = time.time()
+    counts = build_unified_parquet(
+        out_path=out_path,
+        datasets_dir=datasets_dir,
+        min_chars=args.min_chars,
+        cped_min_chars=args.cped_min_chars,
+        min_texts=args.min_texts,
+        texts_per_author=args.texts_per_author,
+    )
+    elapsed = time.time() - t0
+    print(f"\nResults ({elapsed:.0f}s):")
+    for key, val in sorted(counts.items()):
+        print(f"  {key}: {val:,}")
+    size_mb = out_path.stat().st_size / 1_048_576
+    print(f"\nParquet size: {size_mb:.1f} MB → {out_path}")
