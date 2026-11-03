@@ -9,6 +9,7 @@ Sources included:
   douban_short : Douban movie reviews by username (Chinese)
   douban_side  : Douban book/movie/music reviews by user_id (Chinese)
   cped         : CPED TV-drama dialogue utterances by speaker (Chinese)
+  reddit       : Reddit comments of 10,000 prolific authors, 2015-2019 (English)
 
 Excluded:
   authbench         : max 5 docs/author, cannot meet min_texts=20
@@ -210,7 +211,35 @@ def _load_cped(base: Path, min_chars: int) -> list[dict[str, Any]]:
 # Parquet builder
 # ---------------------------------------------------------------------------
 
+_REDDIT_QUOTE = re.compile(r"^\s*(>|&gt;).*$", re.M)  # quoted text is someone else's words
+_MD_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+
+
+def _load_reddit(base: Path, min_chars: int) -> list[dict[str, Any]]:
+    """English Reddit comments of 10,000 prolific authors (2015-2019, 100-5,000 chars, Kaggle/BigQuery export).
+    Quoted lines and markdown link targets are dropped; [removed]/[deleted] bodies are skipped."""
+    df = pd.read_parquet(base / "reddit_authorship_10000authors.parquet")
+    rows: list[dict[str, Any]] = []
+    for author, body, subreddit, created in zip(df["author"], df["body"], df["subreddit"], df["created_utc"]):
+        body = str(body or "")
+        if body.strip() in ("[removed]", "[deleted]"):
+            continue
+        text = clean_text(_MD_LINK.sub(r"\1", _REDDIT_QUOTE.sub(" ", body)))
+        if len(text) < min_chars or not author:
+            continue
+        rows.append({
+            "source": "reddit",
+            "author_id": f"reddit:{author}",
+            "text": text,
+            "lang": "en",
+            "created": str(created),
+            "meta": json.dumps({"subreddit": str(subreddit)}),
+        })
+    return rows
+
+
 _SOURCE_SUBDIR: dict[str, str] = {
+    "reddit": "reddit_authorship",
     "weibo": "weibo_users",
     "commentr": "commentr",
     "douban_short": "douban_short",
@@ -246,6 +275,7 @@ def build_unified_parquet(
         ("douban_short", _load_douban_short, min_chars),
         ("douban_side",  _load_douban_side,  min_chars),
         ("cped",         _load_cped,         cped_min_chars),
+        ("reddit",       _load_reddit,       min_chars),
     ]
 
     all_rows: list[dict[str, Any]] = []

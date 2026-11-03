@@ -328,3 +328,17 @@ def test_build_triplets_meta_keys_present() -> None:
     for t in triplets:
         assert "author_id" in t.meta
         assert "negative_author_id" in t.meta
+
+
+def test_reddit_loader_drops_quotes_link_targets_and_removed(tmp_path):
+    import pandas as pd
+    from import_authorcorpora import _load_reddit
+    pd.DataFrame({
+        "author": ["a", "a", "b"],
+        "body": ["> quoted words\nMy own reply, see [the docs](https://x.y/z) please.", "[removed]",
+                 "&gt; also quoted\nShort but fine answer here."],
+        "subreddit": ["python", "python", "rust"], "created_utc": [1, 2, 3], "char_len": [0, 0, 0],
+    }).to_parquet(tmp_path / "reddit_authorship_10000authors.parquet")
+    rows = _load_reddit(tmp_path, 10)
+    assert [r["text"] for r in rows] == ["My own reply, see the docs please.", "Short but fine answer here."]
+    assert rows[0]["author_id"] == "reddit:a" and rows[0]["lang"] == "en"
