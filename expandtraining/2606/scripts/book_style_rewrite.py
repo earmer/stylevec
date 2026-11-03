@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from traits import judge
+from traits import TRAITS, judge
 
 ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / "expandtraining/2606/outputs/bookstyle"
@@ -69,8 +69,22 @@ STYLES: dict[str, tuple[str, int, str]] = {
     "theatrical": ("theatricality", +1, "theatrical, grandiloquent stage declamation"),
     "deadpan": ("theatricality", -1, "flat deadpan understatement"),
     "slang": ("nonstandard", +1, "heavy slang, internet speak or dialect words"),
+    # Tone styles: the traits a neutral paraphrase keeps (line-vs-paraphrase r 0.8-0.9), so only an explicit
+    # rewrite gives a same-content contrast on them. Not drawn for book chunks (make_chunks uses CHUNK_STYLES).
+    "sarcastic": ("irony", +1, "openly sarcastic and mocking: say it with a sneer, ironic praise, eye-rolling asides"),
+    "earnest": ("irony", -1, "completely earnest and heartfelt, with no irony or sarcasm at all"),
+    "tentative": ("hedging", +1, "tentative and evasive: hedge everything (maybe, perhaps, I guess / 或许, 可能, 吧), never commit"),
+    "categorical": ("hedging", -1, "absolutely categorical: flat assertions and commands, no softening or hedges"),
+    "cheerful": ("valence", +1, "exuberant and delighted, bubbling with positive feeling"),
+    "gloomy": ("valence", -1, "bitter, gloomy or despairing"),
+    "outburst": ("intensity", +1, "an emotional outburst: very intense, exclamations, repetition"),
+    "flat": ("intensity", -1, "flat and emotionless, detached, no feeling in the delivery"),
 }
-VERIFY_TRAITS = sorted({trait for trait, _, _ in STYLES.values()})
+TONE_STYLES = ["sarcastic", "earnest", "tentative", "categorical", "cheerful", "gloomy", "outburst", "flat"]
+CHUNK_STYLES = [name for name in STYLES if name not in TONE_STYLES]
+# Every trait is scored, so a rewrite's off-target drift is measured too; Jev bills the questions as input,
+# so this is ~30% more per request than scoring only the styled traits.
+VERIFY_TRAITS = list(TRAITS)
 
 REWRITE_SYSTEM = (
     "You rewrite short passages into a requested speaking or writing style. Keep every piece of content: the same "
@@ -164,7 +178,7 @@ def make_chunks(zh: int, en: int) -> None:
         rows_lang = [r for r in rows if r["lang"] == lang]
         rng.shuffle(rows_lang)
         rows = [r for r in rows if r["lang"] != lang] + rows_lang[:total]
-    names = list(STYLES)
+    names = CHUNK_STYLES
     for number, row in enumerate(rows):
         row["chunk_id"] = f"c{number:05d}"
         row["styles"] = rng.sample(names, STYLES_PER_CHUNK)
@@ -222,8 +236,10 @@ def polish(limit: int) -> None:
 def verify(limit: int) -> None:
     done = {row["job_id"] for row in read("verify.jsonl")}
     sources = {row["chunk_id"]: row for row in read("verify_sources.jsonl")}
-    todo = [row for row in read("polish.jsonl")
-            if row["job_id"] not in done and row["reply"].get("ok") and row["reply"].get("text")][:limit or None]
+    # Whole chunks in chunk order, so a limit keeps every style of the chunks it covers (one source score each).
+    todo = sorted((row for row in read("polish.jsonl")
+                   if row["job_id"] not in done and row["reply"].get("ok") and row["reply"].get("text")),
+                  key=lambda row: row["job_id"])[:limit or None]
     need = {row["chunk_id"]: row["source"] for row in todo if row["chunk_id"] not in sources}
 
     def score(text: str) -> dict:
@@ -276,7 +292,7 @@ def main() -> None:
     parser.add_argument("step", choices=["chunks", "rewrite", "polish", "verify", "report"])
     parser.add_argument("--zh", type=int, default=1500)
     parser.add_argument("--en", type=int, default=300)
-    parser.add_argument("--limit", type=int, default=0)
+    parser.add_argument("--limit", type=int, default=0, help="0 = all; verify defaults to 3000 (Jev budget)")
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.step == "chunks":
@@ -284,7 +300,7 @@ def main() -> None:
     elif args.step == "verify":
         if not os.environ.get("TYPESAFE_API_KEY"):
             sys.exit("TYPESAFE_API_KEY is not set")
-        verify(args.limit)
+        verify(args.limit or 3000)
     else:
         {"rewrite": rewrite, "polish": polish, "report": lambda _limit: report()}[args.step](args.limit)
 

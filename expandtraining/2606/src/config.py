@@ -121,8 +121,9 @@ def validate_loss_config(config: dict[str, Any]) -> None:
     if float(config["train"].get("named_trait_weight", 0.0)) < 0.0:
         raise ValueError("train.named_trait_weight must be non-negative (0 = off)")
     if float(config["train"].get("named_trait_weight", 0.0)) > 0.0:
-        if not config["train"].get("named_trait_files"):
-            raise ValueError("train.named_trait_weight needs train.named_trait_files (scripts/jev_label.py output)")
+        if not config["train"].get("named_trait_files") and not config["train"].get("named_trait_pair_files"):
+            raise ValueError("train.named_trait_weight needs train.named_trait_files (scripts/jev_label.py output) "
+                             "or train.named_trait_pair_files (scripts/trait_pairs.py output)")
         if int(config["train"].get("named_trait_batch", 64)) < 8:
             raise ValueError("train.named_trait_batch must be >= 8 for a correlation")
     max_steps = int(config["train"].get("max_steps", 0))

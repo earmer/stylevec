@@ -42,3 +42,29 @@ def test_sampler_reads_jev_labels_in_the_configured_trait_order(tmp_path):
     assert len(texts) == 8 and scores.shape == (8, 2)
     with pytest.raises(ValueError):
         NamedTraitSampler({"files": [str(path)], "names": ["nope"], "batch": 8, "weight": 1.0})
+
+
+def test_pair_loss_rewards_differences_that_track_the_score_change():
+    from named_traits import named_trait_pair_loss
+    torch.manual_seed(0)
+    content = torch.randn(32, 1, 4).repeat(1, 2, 1) * 5  # shared within each pair, unrelated to the scores
+    scores = torch.rand(32, 2, 2) * 4
+    tracks = (content[..., :2] + scores * 0.3).flatten(0, 1)
+    ignores = (content[..., :2] + scores[torch.randperm(32)] * 0.3).flatten(0, 1)
+    flat = scores.flatten(0, 1)
+    _, good = named_trait_pair_loss(torch.cat([tracks, torch.randn(64, 3)], dim=1), flat)
+    _, bad = named_trait_pair_loss(torch.cat([ignores, torch.randn(64, 3)], dim=1), flat)
+    assert float(good["named_trait_delta_corr"]) > 0.95 > 0.5 > float(bad["named_trait_delta_corr"])
+
+
+def test_sampler_pair_mode_returns_interleaved_pairs(tmp_path):
+    path = tmp_path / "pairs.jsonl"
+    with open(path, "w", encoding="utf-8") as handle:
+        for i in range(6):
+            handle.write(json.dumps({"a": f"a{i}", "b": f"b{i}", "scores_a": {n: [1.0, 0.9] for n in TRAITS},
+                                     "scores_b": {n: [3.0, 0.9] for n in TRAITS}}) + "\n")
+    sampler = NamedTraitSampler({"files": [], "pair_files": [str(path)], "names": ["warmth"], "batch": 8,
+                                 "weight": 1.0})
+    texts, scores = sampler.sample()
+    assert len(texts) == 8 and [t[0] for t in texts] == ["a", "b"] * 4
+    assert scores[0::2].eq(1.0).all() and scores[1::2].eq(3.0).all()
