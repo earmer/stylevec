@@ -11,6 +11,10 @@ own paraphrase, a line and its Jev-verified tone twin, a book passage and its ve
 {"a", "b", "scores_a", "scores_b"} from scripts/trait_pairs.py), and a second term asks each dimension's
 within-pair difference to correlate with the trait's difference across the pairs: the shared content cancels in
 the difference, so only the style change can explain it.
+
+Correlation is scale-free, so the named block can shrink until it no longer moves cosine (head_d: 1.6% of the
+squared norm). train.named_trait_norm_floor > 0 adds relu(1 - share / floor), where share is the batch mean of
+the named dimensions' squared norm in the unit embedding, so the block keeps at least that share.
 """
 from __future__ import annotations
 
@@ -32,6 +36,7 @@ def named_trait_settings_from_config(config: dict[str, Any]) -> dict[str, Any]:
         "names": list(train.get("named_trait_names", list(TRAITS))),
         "batch": int(train.get("named_trait_batch", 64)),
         "pair_files": list(train.get("named_trait_pair_files", [])),
+        "norm_floor": float(train.get("named_trait_norm_floor", 0.0)),
     }
 
 
@@ -97,6 +102,14 @@ def named_trait_pair_loss(embeddings: torch.Tensor, scores: torch.Tensor) -> tup
     return text_loss + delta_loss, stats
 
 
+def named_norm_floor_loss(embeddings: torch.Tensor, traits: int, floor: float) -> tuple[torch.Tensor, torch.Tensor]:
+    """relu(1 - share / floor) for the named block's mean share of the (unit) embedding's squared norm."""
+    with torch.autocast(device_type=embeddings.device.type, enabled=False):
+        z = embeddings.float()
+        share = (z[:, :traits].square().sum(dim=1) / z.square().sum(dim=1).clamp_min(1e-12)).mean()
+    return torch.relu(1.0 - share / floor), share.detach()
+
+
 def named_trait_step_loss(model: torch.nn.Module, tokenizer: Any, sampler: NamedTraitSampler | None, max_length: int,
                           device: torch.device) -> tuple[torch.Tensor | None, dict[str, torch.Tensor]]:
     """The weighted named-trait loss for one micro-batch, or (None, {}) when it is off."""
@@ -106,4 +119,8 @@ def named_trait_step_loss(model: torch.nn.Module, tokenizer: Any, sampler: Named
     tokens = tokenizer(texts, padding=True, truncation=True, max_length=max_length, return_tensors="pt")
     output = model(input_ids=tokens["input_ids"].to(device), attention_mask=tokens["attention_mask"].to(device))
     loss, stats = (named_trait_pair_loss if sampler.pairs else named_trait_loss)(output["embeddings"], scores)
+    if sampler.settings.get("norm_floor", 0.0) > 0.0:
+        floor_loss, share = named_norm_floor_loss(output["embeddings"], scores.shape[1], sampler.settings["norm_floor"])
+        loss = loss + floor_loss
+        stats.update({"named_trait_norm_share": share, "named_trait_floor_loss": floor_loss.detach()})
     return loss * sampler.settings["weight"], stats

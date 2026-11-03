@@ -68,3 +68,12 @@ def test_sampler_pair_mode_returns_interleaved_pairs(tmp_path):
     texts, scores = sampler.sample()
     assert len(texts) == 8 and [t[0] for t in texts] == ["a", "b"] * 4
     assert scores[0::2].eq(1.0).all() and scores[1::2].eq(3.0).all()
+
+
+def test_norm_floor_pushes_a_shrunken_named_block_back_up():
+    from named_traits import named_norm_floor_loss
+    small = torch.nn.functional.normalize(torch.cat([0.05 * torch.randn(16, 4), torch.randn(16, 60)], dim=1), dim=1)
+    loss, share = named_norm_floor_loss(small.requires_grad_(True), 4, 0.10)
+    assert float(share) < 0.01 and float(loss) > 0.9
+    big = torch.nn.functional.normalize(torch.cat([torch.randn(16, 4) * 3, torch.randn(16, 60)], dim=1), dim=1)
+    assert float(named_norm_floor_loss(big, 4, 0.10)[0]) == 0.0
