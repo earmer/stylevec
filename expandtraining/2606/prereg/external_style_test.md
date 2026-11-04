@@ -33,3 +33,14 @@ Item files (sha256, first 16):
 - 7f2110fceda2f937  data/episodes/external/authbench_shuffled.jsonl
 - 676071fbb6704cc7  data/episodes/external/cped.jsonl
 - 7f829be3bf16f454  data/episodes/external/cped_shuffled.jsonl
+
+## Voice-change ratings, frozen 2026-11-05 before any arm was scored on these items
+
+Items: data/human_ratings/voice_change_{quick,full}.md, genshin_v2.db pairs from held-out speakers, unique A, 12-60 chars,
+stratified by edit size and paraphrase batch. One rater, the user; broken items are excluded and counted.
+Primary, on the full set only: Spearman between each arm's cosine distance (line, paraphrase) and the 0-3 rating, within
+edit-size bins and within batch. Baseline: edit size. Pass: above the baseline by > 0.1 with a 99% item-bootstrap interval
+excluding 0. The quick set is only a check of the form; no decision rests on it.
+Item key files (sha256, first 16):
+- d7fd22b8901b77e5  data/human_ratings/voice_change_full_key.jsonl
+- 6404879857358ddd  data/human_ratings/voice_change_quick_key.jsonl
