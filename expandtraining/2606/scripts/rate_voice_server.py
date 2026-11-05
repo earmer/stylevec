@@ -2,12 +2,14 @@
 
     uv run python expandtraining/2606/scripts/rate_voice_server.py build-extra
     uv run python expandtraining/2606/scripts/rate_voice_server.py build-confirm
+    uv run python expandtraining/2606/scripts/rate_voice_server.py build-argon
     uv run python expandtraining/2606/scripts/rate_voice_server.py serve [--port 8765]
 
 build-extra: freezes the pairs beyond the pre-registered 100 into voice_change_extra_key.jsonl: held-out speakers,
 the same filter as the full set, minus the quick and full lines, ordered so that stopping anywhere keeps the full
 set's edit-size mix. build-confirm: freezes the confirmation queue of prereg/trait_confirmation.md: fresh pairs of speakers
-the trait predictor never saw, re-rates of the 95, and the pairs first rated with Gemini's score on screen. serve: the full 100 come first, then the extra pairs in sets of --set-size, in speaker and
+the trait predictor never saw, re-rates of the 95, and the pairs first rated with Gemini's score on screen. build-argon: freezes the small edits of prereg/trait_argon_test.md from
+the same unseen speakers. serve: the full 100 come first, then the extra pairs in sets of --set-size, in speaker and
 conversation order; the page shows one pair at a time and jumps on when it is rated. The page gets the talk around each line, the speaker's other lines and the official
 translations, never edit size, batch or an arm's score; --show-llm adds saved LLM answers, and each rating logs if
 they were on screen. Ratings append to voice_change_ratings.jsonl; the latest row
@@ -41,6 +43,7 @@ LLM_FILES = {"run": RATINGS_DIR / "voice_change_extra_llm_answers.jsonl",
 TRAIT_DIR = ROOT / "expandtraining/2606/outputs/traits"
 CONFIRM_MIX = {"small": 60, "mid": 12, "large": 4, "rewrite": 4}
 CONFIRM_RETEST = {"small": 12, "other": 6}
+ARGON_MIX = {"small": 300}
 CONFIRM_PER_SPEAKER = 3
 CONFIRM_MIN_LINES = 20
 NOT_A_VOICE = {"留言板"}  # a notice board
@@ -110,7 +113,8 @@ def pick_retests(full: list[dict], ratings: dict[int, dict], counts: dict[str, i
     return rng.sample(small, counts["small"]) + rng.sample(other, counts["other"])
 
 
-def build_confirm(out: Path) -> list[dict]:
+def unseen_pool(skip_ids: set[int] = frozenset()) -> list[dict]:
+    """Pairs of speakers the trait predictor never saw, outside small-dev and every rated pair."""
     seen_texts = {json.loads(line)["text"] for name in ("genshin_train", "genshin_val")
                   for line in open(TRAIT_DIR / f"{name}.jsonl", encoding="utf-8")}
     for line in open(TRAIT_DIR / "trait_pairs_train.jsonl", encoding="utf-8"):
@@ -119,8 +123,7 @@ def build_confirm(out: Path) -> list[dict]:
     full = read_jsonl(RATINGS_DIR / "voice_change_full_key.jsonl")
     extra = read_jsonl(RATINGS_DIR / "voice_change_extra_key.jsonl")
     small_dev = {row["id"] for row in read_jsonl(RATINGS_DIR / "voice_change_small_rule_labels.jsonl")}
-    log = read_jsonl(RATINGS_DIR / "voice_change_ratings.jsonl")
-    ratings = latest_ratings(log)
+    ratings = latest_ratings(read_jsonl(RATINGS_DIR / "voice_change_ratings.jsonl"))
     query = "select id,talk_id,speaker,origin_text,para_text,similarity from dialogues where dup_of is null order by id"
     rows = list(sqlite3.connect(DB).execute(query))
     lines: dict[str, set] = defaultdict(set)
@@ -130,14 +133,29 @@ def build_confirm(out: Path) -> list[dict]:
     pool, used = [], set()
     for id_, talk, speaker, a, b, similarity in rows:
         if (not speaker or "?" in speaker or "？" in speaker or speaker in NOT_A_VOICE or speaker in seen_speakers or len(lines[speaker]) < CONFIRM_MIN_LINES
-                or not b or a == b or not 12 <= len(a) <= 60 or a in used or b in seen_texts or id_ in small_dev or id_ in ratings):
+                or not b or a == b or not 12 <= len(a) <= 60 or a in used or b in seen_texts or id_ in small_dev or id_ in ratings or id_ in skip_ids):
             continue
         used.add(a)
         changed = 1 - difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
         pool.append({"id": id_, "talk_id": talk, "speaker": speaker, "batch": "new" if similarity is None else "old",
                      "changed": round(changed, 3), "bin": edit_bin(changed), "A": a, "B": b})
+    return pool
+
+
+def build_argon(out: Path) -> list[dict]:
+    skip = {row["id"] for row in read_jsonl(RATINGS_DIR / "voice_change_confirm_key.jsonl")}
+    picked = pick_fresh(unseen_pool(skip), ARGON_MIX, CONFIRM_PER_SPEAKER, SEED + 1)
+    ordered = [{**row, "item": n} for n, row in enumerate(picked, 1)]
+    out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in ordered), encoding="utf-8")
+    return ordered
+
+
+def build_confirm(out: Path) -> list[dict]:
+    full = read_jsonl(RATINGS_DIR / "voice_change_full_key.jsonl")
+    extra = read_jsonl(RATINGS_DIR / "voice_change_extra_key.jsonl")
+    ratings = latest_ratings(read_jsonl(RATINGS_DIR / "voice_change_ratings.jsonl"))
     seen_gemini = {row["id"] for row in ratings.values() if row["views"].get("llm")}
-    picked = ([{**row, "block": "fresh"} for row in pick_fresh(pool, CONFIRM_MIX, CONFIRM_PER_SPEAKER)]
+    picked = ([{**row, "block": "fresh"} for row in pick_fresh(unseen_pool(), CONFIRM_MIX, CONFIRM_PER_SPEAKER)]
               + [{**row, "block": "retest_95"} for row in pick_retests(full, ratings, CONFIRM_RETEST)]
               + [{**row, "block": "retest_gemini"} for row in extra if row["id"] in seen_gemini])
     random.Random(SEED).shuffle(picked)
@@ -322,6 +340,8 @@ def main() -> None:
     build.add_argument("--out", type=Path, default=RATINGS_DIR / "voice_change_extra_key.jsonl")
     confirm = sub.add_parser("build-confirm")
     confirm.add_argument("--out", type=Path, default=RATINGS_DIR / "voice_change_confirm_key.jsonl")
+    argon = sub.add_parser("build-argon")
+    argon.add_argument("--out", type=Path, default=RATINGS_DIR / "argon_test_key.jsonl")
     serve = sub.add_parser("serve")
     serve.add_argument("--port", type=int, default=8765)
     serve.add_argument("--set-size", type=int, default=50)
@@ -334,6 +354,9 @@ def main() -> None:
         return
     if args.command == "build-confirm":
         print(f"{args.out}: {len(build_confirm(args.out))} pairs")
+        return
+    if args.command == "build-argon":
+        print(f"{args.out}: {len(build_argon(args.out))} pairs")
         return
     store = Store(args.log, args.set_size, args.queue, args.show_llm)
     print(f"http://127.0.0.1:{args.port}  {len(store.ids)} pairs, {len(store.ratings)} rated, log {args.log}", flush=True)

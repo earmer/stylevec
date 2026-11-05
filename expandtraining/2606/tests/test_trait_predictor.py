@@ -9,7 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import torch
 
-from trait_predictor import NAMES, AttentionReadout, agreement, is_clean, predicted_change, trait_vector, weight_entropy_share
+import pandas as pd
+
+from trait_predictor import NAMES, AttentionReadout, agreement, is_clean, rank_gain, scan_targets, predicted_change, trait_vector, weight_entropy_share
 
 
 def test_trait_vector_keeps_the_score_and_the_trait_order():
@@ -84,3 +86,18 @@ def test_agreement_counts_exact_and_within_one_and_the_shift():
 
 def test_agreement_has_no_spearman_on_a_constant_rating():
     assert agreement([1, 1, 1], [0, 1, 2])["spearman"] is None
+
+
+def test_scan_targets_drops_a_pair_with_a_broken_run_and_averages_the_rest():
+    key = pd.DataFrame({"id": [1, 2]})
+    answers = [{"id": 1, "run": r, "answer": a} for r, a in (("1", "1y"), ("2", "3y"), ("careful", "2p"))]
+    answers += [{"id": 2, "run": r, "answer": a} for r, a in (("1", "1y"), ("2", "x"), ("careful", "2y"))]
+    kept = scan_targets(key, answers)
+    assert kept["id"].tolist() == [1] and kept["scan"][0] == 2 and kept["plain"][0] == 2
+
+
+def test_rank_gain_is_positive_when_the_score_ranks_better_than_the_base():
+    target = np.arange(50.0)
+    noisy = np.random.default_rng(0).permutation(target)
+    result = rank_gain(target, noisy, target, boots=50)
+    assert result["rho"] == 1 and result["gain"] > 0.5 and result["ci99"][0] > 0

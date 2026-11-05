@@ -5,6 +5,7 @@
     uv run python expandtraining/2606/scripts/trait_predictor.py frozen-head [--readout attention] [--scorer-dim 64] [--layers 6,12,18,24,28]
     uv run python expandtraining/2606/scripts/trait_predictor.py small-dev <run dir> [--score-rated]
     uv run python expandtraining/2606/scripts/trait_predictor.py confirm <run dir> [<run dir> ...]
+    uv run python expandtraining/2606/scripts/trait_predictor.py argon <run dir> [<run dir> ...]
 
 No speaker or author labels are trained on: the target is style, not who wrote it. The score of a pair is the mean
 absolute predicted trait difference, as for Jev's own scores in pairwise_voice_baseline.jev_change.
@@ -20,6 +21,7 @@ hidden states with learned weights (model.LayerFusion: the middle ones go throug
 small-dev: predicted change against the rule, scan and Jev targets on the small-edit pairs of voice_change_small_rule_labels,
 which no run trains on. It chooses between readouts, so the 95 are not used for that.
 confirm: the sealed test of prereg/trait_confirmation.md, on the fresh block only, plus how the re-rates agree with the first ratings.
+argon: the sealed test of prereg/trait_argon_test.md, against Argon's scan on small edits of unseen speakers.
 """
 from __future__ import annotations
 
@@ -351,6 +353,47 @@ def gemini_mean_answers() -> dict:
     return {i: float(np.mean(v)) for i, v in answers.items()}
 
 
+def scan_targets(key: pd.DataFrame, answers: list[dict]) -> pd.DataFrame:
+    """The pairs with a digit from all three runs, with the three-run and plain-run means. Others are dropped and counted."""
+    digits = defaultdict(dict)
+    for row in answers:
+        if row["answer"][0].isdigit():
+            digits[row["id"]][row["run"]] = int(row["answer"][0])
+    kept = key[key["id"].map(lambda i: len(digits[i]) == 3)].reset_index(drop=True)
+    return kept.assign(scan=[np.mean(list(digits[i].values())) for i in kept["id"]],
+                       plain=[np.mean([digits[i]["1"], digits[i]["2"]]) for i in kept["id"]])
+
+
+def rank_gain(score: np.ndarray, base: np.ndarray, target: np.ndarray, boots: int = 4000, seed: int = 20261105) -> dict:
+    """Spearman of score minus base against target, with a paired 99% bootstrap interval over pairs."""
+    rng = np.random.default_rng(seed)
+    rho = lambda s, t: float(spearmanr(s, t)[0])  # noqa: E731
+    samples = [rng.integers(0, len(target), len(target)) for _ in range(boots)]
+    diffs = [rho(score[i], target[i]) - rho(base[i], target[i]) for i in samples]
+    return {"rho": round(rho(score, target), 3), "gain": round(rho(score, target) - rho(base, target), 3),
+            "ci99": [round(float(q), 3) for q in np.nanquantile(diffs, [.005, .995])]}
+
+
+def run_argon(run_dirs: list[str]) -> None:
+    key = pd.read_json(resolve_repo_path(f"{RATINGS_DIR}/argon_test_key.jsonl"), lines=True)
+    answers = [json.loads(line) for line in open(resolve_repo_path(f"{RATINGS_DIR}/argon_test_answers.jsonl"), encoding="utf-8")]
+    pairs = scan_targets(key, answers)
+    edit = pairs["changed"].to_numpy(dtype=float)
+    print("pairs", len(pairs), "of", len(key), "scan", pairs["scan"].round(1).value_counts().sort_index().to_dict(), flush=True)
+    outcome = {"pairs": len(pairs), "edit": {t: round(float(spearmanr(edit, pairs[t])[0]), 3) for t in ("scan", "plain")}}
+    scored = pairs[["id", "scan", "plain", "changed"]].copy()
+    for run_dir in run_dirs:
+        out = resolve_repo_path(run_dir)
+        _, predict = load_run(out)
+        change = predicted_change(predict(list(pairs["A"])), predict(list(pairs["B"])))
+        scored[out.name] = change
+        outcome[out.name] = {t: rank_gain(change, edit, pairs[t].to_numpy()) for t in ("scan", "plain")}
+        print(out.name, outcome[out.name], flush=True)
+    print("edit", outcome["edit"], flush=True)
+    scored.to_json(resolve_repo_path(f"{RATINGS_DIR}/argon_test_scores.jsonl"), orient="records", lines=True)
+    save({"trait_argon_test": outcome})
+
+
 def run_confirm(run_dirs: list[str]) -> None:
     key = pd.read_json(resolve_repo_path(f"{RATINGS_DIR}/voice_change_confirm_key.jsonl"), lines=True)
     blind = read_ratings("voice_change_confirm_ratings.jsonl")
@@ -380,7 +423,7 @@ def run_confirm(run_dirs: list[str]) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=["frozen", "frozen-head", "lora", "small-dev", "confirm"])
+    parser.add_argument("mode", choices=["frozen", "frozen-head", "lora", "small-dev", "confirm", "argon"])
     parser.add_argument("run_dir", nargs="*")
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--delta-weight", type=float, default=1.0)
@@ -395,6 +438,8 @@ def main() -> None:
         run_small_dev(args.run_dir[0], args.score_rated)
     elif args.mode == "confirm":
         run_confirm(args.run_dir)
+    elif args.mode == "argon":
+        run_argon(args.run_dir)
     else:
         layers = tuple(int(x) for x in args.layers.split(",") if x)
         run_lora(args.steps, args.delta_weight, kind=args.readout, layers=layers, score_rated=args.score_rated,
