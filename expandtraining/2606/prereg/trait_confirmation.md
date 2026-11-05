@@ -67,3 +67,18 @@ rule this is inconclusive, but all three point estimates sit below edit size, an
 interval, so the 95's gain does not carry over to these speakers at face value. Not separable here: reuse of the 95, a harder speaker
 mix or noise on 36 pairs. retest_95, 5 pairs: exact .4, within one 1.0. retest_gemini, 14 pairs: exact .429, within one 1.0, Spearman
 .076, blind ratings .286 lower on average; distance to Gemini's mean .476 at first, .381 blind, so no sign of leaning on the score.
+
+## Post-hoc diagnostics, after the result (explanatory only; the result above stands)
+
+Within / small / overall. Fresh: edit .374/.344/.675; Jev mean .291/.356/.641; Jev tone .202/.348/.606; rule untied .453/.553/.696; scan average, 39
+pairs, .472/.536/.712; LoRA attention .142/.220/.536. The 95: edit .217/.258/.483; Jev mean .650/.571/.715; Jev tone .288/.488/.495; rule untied
+.625/.654/.684; scan average .662/.661/.749; LoRA attention .590/.526/.702. Every teacher falls on the fresh set, and the model falls most. Scan
+and rule stay above edit, so the set is not voiceless.
+
+Small edits: rater 0/30 at 2 or more against 10/32 on the 95 (Fisher p .0009), mean .633 against 1.25; Gemini scan mean .563 against .989, at 2 or
+more 1/29 against 3/31. Fresh speakers have a median of 42.5 lines against 263. LoRA attention against Jev, small edits: rho .695 fresh, .788 on the 95.
+On the 95 with small edits rated 0 or 1 only (22 pairs): LoRA attention .370, edit .193.
+
+The same 19 re-rated pairs, against the first rating then the blind one: LoRA attention .645 then .064; frozen taps .624 then .169; edit .455 then
+.335; scan .261 then .014. Ratings at 2 fell from 6 to 1. Gemini's score was on screen for 14 of the first ratings, and 19 pairs, 15 of them rated 1, is
+very few.
