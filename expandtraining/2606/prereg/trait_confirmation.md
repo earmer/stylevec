@@ -58,3 +58,12 @@ SHA-256 9cea28054f02a371785f437528b25a48d434ab38803d298ddbb14ba630599a51.
 The rule and arms are unchanged. Only the small-old (30) and mid-old (6) cells reach 5 items, so within rests on 36 pairs, and small
 ratings are only 0 or 1. Low power is expected: if the interval includes 0 the result is inconclusive, not a failure, and the same if
 a point estimate clears +.25 with a wide interval. The 5 retest_95 pairs are too few for a ceiling and are reported as counts only.
+
+## Result, on the 67 tagged pairs
+
+No pass. Fresh pairs: 40. Within / small / overall / minus edit, 99% interval: LoRA + attention .142/.220/.536/-.232 (-.715,.307); LoRA +
+mean .129/.204/.521/-.245 (-.703,.258); frozen attention + taps .218/.268/.559/-.156 (-.589,.303); edit size .374/.344/.675. By the amended
+rule this is inconclusive, but all three point estimates sit below edit size, and the primary arm's +.373 on the 95 is above this
+interval, so the 95's gain does not carry over to these speakers at face value. Not separable here: reuse of the 95, a harder speaker
+mix or noise on 36 pairs. retest_95, 5 pairs: exact .4, within one 1.0. retest_gemini, 14 pairs: exact .429, within one 1.0, Spearman
+.076, blind ratings .286 lower on average; distance to Gemini's mean .476 at first, .381 blind, so no sign of leaning on the score.

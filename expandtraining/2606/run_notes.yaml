@@ -428,3 +428,5 @@ trait_predictor_local_mac: >
   attention + layers 6,12,18,24,28: dev .805/.665, small-dev .667/.759, 95 .534/.481/.698/+.317 (.009,.609), entropy .749. Frozen
   attention .775/.620, .614/.723; with scorer .780/.631, .631/.736; frozen mean .728/.555, .557/.660. One seed; the 95 are reused,
   so prereg/trait_confirmation.md decides.
+  Sealed test, stopped at 67 tagged pairs, 40 fresh usable: no pass, inconclusive. LoRA attention within .142, small .220, minus edit
+  -.232 (-.715,.307); edit size within .374, small .344. The gain on the 95 did not carry over.
