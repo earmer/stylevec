@@ -4,6 +4,7 @@
     uv run python expandtraining/2606/scripts/trait_predictor.py lora [--steps 3000] [--delta-weight 1.0] [--readout attention] [--layers 6,12,18,24,28]
     uv run python expandtraining/2606/scripts/trait_predictor.py frozen-head [--readout attention] [--scorer-dim 64] [--layers 6,12,18,24,28]
     uv run python expandtraining/2606/scripts/trait_predictor.py small-dev <run dir> [--score-rated]
+    uv run python expandtraining/2606/scripts/trait_predictor.py confirm <run dir> [<run dir> ...]
 
 No speaker or author labels are trained on: the target is style, not who wrote it. The score of a pair is the mean
 absolute predicted trait difference, as for Jev's own scores in pairwise_voice_baseline.jev_change.
@@ -18,6 +19,7 @@ tokens through a small tanh layer instead of directly. --layers mixes those
 hidden states with learned weights (model.LayerFusion: the middle ones go through the backbone's final norm).
 small-dev: predicted change against the rule, scan and Jev targets on the small-edit pairs of voice_change_small_rule_labels,
 which no run trains on. It chooses between readouts, so the 95 are not used for that.
+confirm: the sealed test of prereg/trait_confirmation.md, on the fresh block only, plus how the re-rates agree with the first ratings.
 """
 from __future__ import annotations
 
@@ -34,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import numpy as np
+import pandas as pd
 import torch
 from scipy.stats import pearsonr, spearmanr
 
@@ -45,6 +48,8 @@ NAMES = list(TRAITS)
 TRAIT_DIR = "expandtraining/2606/outputs/traits"
 DB = "data/genshin/genshin_v2.db"
 OUT_DIR = "expandtraining/2606/outputs/trait_predictor"
+RATINGS_DIR = "data/human_ratings"
+LLM_ANSWERS = ("voice_change_extra_llm_answers.jsonl", "voice_change_small_careful_answers.jsonl")
 
 
 def trait_vector(scores: dict) -> list[float]:
@@ -225,12 +230,10 @@ def make_fusion(layers: tuple[int, ...], device):
     return LayerFusion("weighted_sum" if layers else "last", layers).to(device)
 
 
-def run_small_dev(run_dir: str, score_rated: bool = False) -> None:
+def load_run(out: Path):
     from peft import PeftModel
 
-    out = resolve_repo_path(run_dir)
     saved = json.loads((out / "dev.json").read_text(encoding="utf-8"))
-    data = load_data()
     tokenizer, base, device = load_base()
     frozen = saved.get("frozen", False)
     encoder = base if frozen else PeftModel.from_pretrained(base, out).to(device)
@@ -240,7 +243,13 @@ def run_small_dev(run_dir: str, score_rated: bool = False) -> None:
     fusion = make_fusion(tuple(saved.get("layers", ())), device)
     if saved.get("layers"):
         fusion.load_state_dict(torch.load(out / "fusion.pt", map_location=device))
-    predict = make_predict(make_encode(tokenizer, encoder, readout, fusion, device, frozen), [encoder, readout, fusion])
+    return saved, make_predict(make_encode(tokenizer, encoder, readout, fusion, device, frozen), [encoder, readout, fusion])
+
+
+def run_small_dev(run_dir: str, score_rated: bool = False) -> None:
+    out = resolve_repo_path(run_dir)
+    data = load_data()
+    saved, predict = load_run(out)
     train_texts = set(data["train"]) | {t for row in data["pairs"] for t in row[:2]}
     print(json.dumps({"run": out.name, "step": saved["step"], "small_dev": judge_small(predict, small_edit_pairs(train_texts))}), flush=True)
     if score_rated:
@@ -318,10 +327,61 @@ def run_lora(steps: int, delta_weight: float, seed: int = 42, kind: str = "mean"
         score_95(predict, data, f"trait_predictor_{label}")
 
 
+def read_ratings(name: str) -> dict:
+    """The latest usable voice rating per pair id."""
+    last = {r["id"]: r for r in map(json.loads, open(resolve_repo_path(f"{RATINGS_DIR}/{name}"), encoding="utf-8"))}
+    return {i: r["voice"] for i, r in last.items() if r["voice"] is not None and not r["broken"]}
+
+
+def agreement(first: list[int], second: list[int]) -> dict:
+    a, b = np.array(first), np.array(second)
+    varied = len(a) > 2 and a.std() > 0 and b.std() > 0
+    return {"pairs": len(a), "spearman": round(float(spearmanr(a, b)[0]), 3) if varied else None, "exact": round(float((a == b).mean()), 3),
+            "within_one": round(float((np.abs(a - b) <= 1).mean()), 3), "mean_second_minus_first": round(float((b - a).mean()), 3)}
+
+
+def gemini_mean_answers() -> dict:
+    """Mean voice digit of every saved Gemini answer per pair id; broken answers (x) have no digit."""
+    answers = defaultdict(list)
+    for name in LLM_ANSWERS:
+        for line in open(resolve_repo_path(f"{RATINGS_DIR}/{name}"), encoding="utf-8"):
+            row = json.loads(line)
+            if row["answer"][0].isdigit():
+                answers[row["id"]].append(int(row["answer"][0]))
+    return {i: float(np.mean(v)) for i, v in answers.items()}
+
+
+def run_confirm(run_dirs: list[str]) -> None:
+    key = pd.read_json(resolve_repo_path(f"{RATINGS_DIR}/voice_change_confirm_key.jsonl"), lines=True)
+    blind = read_ratings("voice_change_confirm_ratings.jsonl")
+    first = read_ratings("voice_change_ratings.jsonl")
+    rated = key[key["id"].isin(blind)].copy()
+    rated["voice"] = rated["id"].map(blind).astype(int)
+    fresh = rated[rated["block"] == "fresh"].reset_index(drop=True)
+    print("fresh", len(fresh), fresh.groupby(["bin", "batch"]).size().to_dict(), "voice", fresh["voice"].value_counts().sort_index().to_dict(), flush=True)
+    results = {"edit_size": fresh["changed"].to_numpy(dtype=float)}
+    for run_dir in run_dirs:
+        out = resolve_repo_path(run_dir)
+        _, predict = load_run(out)
+        results[out.name] = predicted_change(predict(list(fresh["A"])), predict(list(fresh["B"])))
+    outcome = {"fresh": report(fresh, results)}
+    gemini = gemini_mean_answers()
+    for block in ("retest_95", "retest_gemini"):
+        again = rated[(rated["block"] == block) & rated["id"].isin(first)]
+        before, after = [first[i] for i in again["id"]], list(again["voice"])
+        outcome[block] = agreement(before, after)
+        if block == "retest_gemini":
+            scored = [(gemini[i], first[i], blind[i]) for i in again["id"] if i in gemini]
+            outcome[block]["distance_to_gemini"] = {"pairs": len(scored), "first": round(float(np.mean([abs(g - x) for g, x, _ in scored])), 3),
+                                                    "blind": round(float(np.mean([abs(g - y) for g, _, y in scored])), 3)}
+        print(block, outcome[block], flush=True)
+    save({"trait_confirmation": outcome})
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("mode", choices=["frozen", "frozen-head", "lora", "small-dev"])
-    parser.add_argument("run_dir", nargs="?")
+    parser.add_argument("mode", choices=["frozen", "frozen-head", "lora", "small-dev", "confirm"])
+    parser.add_argument("run_dir", nargs="*")
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--delta-weight", type=float, default=1.0)
     parser.add_argument("--readout", choices=["mean", "attention"], default="mean")
@@ -332,7 +392,9 @@ def main() -> None:
     if args.mode == "frozen":
         run_frozen()
     elif args.mode == "small-dev":
-        run_small_dev(args.run_dir, args.score_rated)
+        run_small_dev(args.run_dir[0], args.score_rated)
+    elif args.mode == "confirm":
+        run_confirm(args.run_dir)
     else:
         layers = tuple(int(x) for x in args.layers.split(",") if x)
         run_lora(args.steps, args.delta_weight, kind=args.readout, layers=layers, score_rated=args.score_rated,

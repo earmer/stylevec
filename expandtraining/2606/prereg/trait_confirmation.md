@@ -48,3 +48,13 @@ confirms that the predictor beats edit size on new speakers; it does not rank th
   ceiling, with memory of yesterday's rating possibly inflating it.
 - retest_gemini: the same, plus the mean absolute distance to Gemini's mean answer in the first rating and in the blind one. A larger
   distance when blind means the first rating leaned on the score. The 27 are not a random sample, and most are label 1.
+
+## Amendment, before any score of these ratings
+
+The rater stopped after 69 pairs: 67 tagged and 2 with no voice rating. Usable: 40 fresh, 5 retest_95, 16 retest_gemini; 6 are broken. The
+stop was blind, and the page's speaker order was shuffled, so the rated part is not chosen by any score. Ratings are frozen at
+SHA-256 9cea28054f02a371785f437528b25a48d434ab38803d298ddbb14ba630599a51.
+
+The rule and arms are unchanged. Only the small-old (30) and mid-old (6) cells reach 5 items, so within rests on 36 pairs, and small
+ratings are only 0 or 1. Low power is expected: if the interval includes 0 the result is inconclusive, not a failure, and the same if
+a point estimate clears +.25 with a wide interval. The 5 retest_95 pairs are too few for a ceiling and are reported as counts only.

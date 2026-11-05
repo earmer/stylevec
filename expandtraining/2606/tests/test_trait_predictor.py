@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import torch
 
-from trait_predictor import NAMES, AttentionReadout, is_clean, predicted_change, trait_vector, weight_entropy_share
+from trait_predictor import NAMES, AttentionReadout, agreement, is_clean, predicted_change, trait_vector, weight_entropy_share
 
 
 def test_trait_vector_keeps_the_score_and_the_trait_order():
@@ -75,3 +75,12 @@ def test_weight_entropy_share_is_one_for_uniform_and_small_for_one_token():
     mask = torch.ones(1, 4, dtype=torch.long)
     assert weight_entropy_share(torch.full((1, 2, 4), 0.25), mask) == pytest.approx(1.0)
     assert weight_entropy_share(torch.tensor([[[1.0, 0, 0, 0]]]), mask) == pytest.approx(0.0)
+
+
+def test_agreement_counts_exact_and_within_one_and_the_shift():
+    result = agreement([0, 1, 2, 3], [0, 2, 2, 1])
+    assert result["exact"] == 0.5 and result["within_one"] == 0.75 and result["mean_second_minus_first"] == -0.25
+
+
+def test_agreement_has_no_spearman_on_a_constant_rating():
+    assert agreement([1, 1, 1], [0, 1, 2])["spearman"] is None
