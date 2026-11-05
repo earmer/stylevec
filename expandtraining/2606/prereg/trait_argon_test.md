@@ -39,3 +39,8 @@ which line changes voice more. The tally says which scorer the rater sided with;
 Pass. 293 of 300 pairs usable, 7 dropped for a broken answer in some run; 117,795 tokens. Spearman against the three-run mean, gain over edit size (.412), 99% interval: LoRA attention .613, +.201 (.069,.341);
 LoRA mean .611, +.199 (.071,.333); frozen taps .589, +.177 (.044,.319). Against plain runs only (edit .384): .588, +.205 (.068,.349); .586, +.202 (.064,.345); .567, +.183 (.041,.330). The arms cannot be ranked from this.
 Argon run 1 against run 2: exact .746, Spearman .722. Model against edit size: Spearman .473.
+
+## Audit result
+
+25 rounds, primary arm against Argon, sides hidden: rater sided with Argon 13, with the model 5, neither 5, broken 2. Two-sided binomial p .096 on the 18 decided rounds. No bearing on the pass. These rounds are the largest
+disagreements, so the tally says who the rater trusts when the two clash, not overall accuracy. Each round has one rater judgment, and the rater reports limited self-consistency.
