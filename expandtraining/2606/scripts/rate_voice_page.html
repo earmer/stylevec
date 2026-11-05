@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice Ratings</title>
+<style>
+:root{--bg:#f6f5f1;--card:#fff;--ink:#22211e;--muted:#6f6c64;--line:#dedbd2;--accent:#1f5f8b;--accent-ink:#fff;--mark:#f6dfa6;--warn:#a2401f;--focus:#1f5f8b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#17181a;--card:#222327;--ink:#ecebe6;--muted:#a3a198;--line:#3a3b40;--accent:#7db8e0;--accent-ink:#10222f;--mark:#6b5417;--warn:#ef9a7a;--focus:#7db8e0}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 "PingFang SC","Hiragino Sans GB","Noto Sans CJK SC",-apple-system,sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 16px}
+.bar{max-width:860px;margin:auto;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center}
+.bar select{font:inherit;padding:4px 6px;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;max-width:190px}
+#progress{font-variant-numeric:tabular-nums}
+#status{font-size:14px;color:var(--muted);margin-left:auto}
+#status.bad{color:var(--warn);font-weight:600}
+.toggles{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:14px;color:var(--muted)}
+.toggles label{display:inline-flex;gap:4px;align-items:center;cursor:pointer}
+main{max-width:860px;margin:auto;padding:12px 16px 120px}
+.scale{font-size:14px;color:var(--muted);margin:4px 0 16px}
+kbd{font:12px ui-monospace,monospace;border:1px solid var(--line);border-radius:4px;padding:0 4px;background:var(--card)}
+h2{font-size:20px;margin:0 0 8px;display:flex;gap:10px;align-items:baseline}
+h2 small{font-size:14px;font-weight:400;color:var(--muted)}
+details.refs{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin-bottom:12px;font-size:15px}
+details.refs summary{cursor:pointer;color:var(--muted);font-size:14px}
+details.refs ul{margin:8px 0 0;padding:0 0 0 18px}
+.more{background:none;border:0;color:var(--accent);font:inherit;font-size:14px;padding:4px 0;cursor:pointer}
+.pair{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin:10px 0}
+.pair.current{display:block}
+.pair.rated{border-left:4px solid var(--accent)}
+.nav{display:flex;justify-content:space-between;gap:8px;margin-top:12px}
+.nav button{font:inherit;font-size:14px;min-height:36px;padding:3px 14px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);cursor:pointer}
+.nav button:disabled{opacity:.4;cursor:default}
+.num{font-size:13px;color:var(--muted)}
+.talk{font-size:14px;color:var(--muted);margin:2px 0}
+.talk p{margin:1px 0}
+.talk b{font-weight:500}
+.text{font-size:18px;margin:6px 0;display:grid;grid-template-columns:22px 1fr;gap:2px 6px}
+.text .tag{font-weight:700;color:var(--muted)}
+body.showdiff .ch{background:var(--mark);border-radius:2px}
+.trans{display:none;font-size:14px;color:var(--muted);border-left:2px solid var(--line);padding-left:8px;margin:6px 0}
+body.showtrans .trans{display:block}
+.llm{display:none;font-size:14px;color:var(--muted);margin:6px 0}
+body.showllm .llm{display:block}
+.llm b{color:var(--ink);font-weight:600}
+.controls{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:10px;align-items:center}
+.group{display:flex;gap:4px;flex-wrap:wrap}
+.controls button{font:inherit;font-size:14px;min-height:36px;padding:3px 10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);cursor:pointer}
+.controls button.on{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.note{flex:1 1 160px;min-height:36px;font:inherit;font-size:14px;padding:3px 8px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink)}
+#next{display:none;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px;margin-top:20px;text-align:center}
+#next button{font:inherit;padding:6px 16px;border:0;border-radius:6px;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+@media (max-width:560px){#status{margin-left:0;width:100%}.text{font-size:17px}}
+</style>
+</head>
+<body>
+<header><div class="bar">
+  <select id="sets" aria-label="Rating set"></select>
+  <span id="progress"></span>
+  <div class="toggles">
+    <label><input type="checkbox" id="t-talk" checked> Conversation</label>
+    <label><input type="checkbox" id="t-translations"> Official JA / EN</label>
+    <label><input type="checkbox" id="t-diff" checked> Highlight changes</label>
+    <label id="l-llm" hidden><input type="checkbox" id="t-llm" checked> Gemini's score</label>
+  </div>
+  <span id="status" role="status">Loading</span>
+</div></header>
+<main>
+  <div class="scale">How much did B change the voice of A? <kbd>0</kbd> same <kbd>1</kbd> slight <kbd>2</kbd> clear <kbd>3</kbd> a different voice · Meaning: <kbd>y</kbd> kept <kbd>p</kbd> partly <kbd>n</kbd> lost · <kbd>x</kbd> B is broken<br><strong>It jumps to the next pair automatically</strong> once you pick voice and meaning, or x. Write any note first. <kbd>←</kbd> back · <kbd>→</kbd> skip</div>
+  <div id="groups"></div>
+  <div class="nav"><button id="back">← Back</button><button id="skip">Skip →</button></div>
+  <div id="next"><p id="next-text"></p><button id="next-btn"></button></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+const VOICE = [[0, "0 same"], [1, "1 slight"], [2, "2 clear"], [3, "3 different"]];
+const MEANING = [["y", "y kept"], ["p", "p partly"], ["n", "n lost"]];
+let sets = [], current = 0, cards = [], focus = 0, queue = [], sending = false;
+
+function store(key, value) { try { value === undefined ? 0 : localStorage.setItem(key, value); return localStorage.getItem(key); } catch { return null; } }
+const views = () => ({talk: $("t-talk").checked, diff: $("t-diff").checked, translations: $("t-translations").checked, llm: !$("l-llm").hidden && $("t-llm").checked});
+
+function applyViews() {
+  document.body.classList.toggle("showdiff", $("t-diff").checked);
+  document.body.classList.toggle("showtrans", $("t-translations").checked);
+  document.body.classList.toggle("showllm", $("t-llm").checked);
+  document.querySelectorAll(".talk").forEach(t => { t.style.display = $("t-talk").checked ? "" : "none"; });
+  for (const name of ["talk", "diff", "translations", "llm"]) store("view-" + name, $("t-" + name).checked ? "1" : "0");
+}
+
+function talkLines(lines) {
+  const box = el("div");
+  for (const line of lines) { const p = el("p"); p.append(el("b", "", (line.speaker || "—") + "："), line.text); box.append(p); }
+  return box;
+}
+
+function textRow(tag, segments) {
+  const row = el("div", "text");
+  row.append(el("span", "tag", tag));
+  const body = el("span");
+  for (const [text, changed] of segments) body.append(changed ? el("span", "ch", text) : document.createTextNode(text));
+  row.append(body);
+  return row;
+}
+
+function paint(card) {
+  const r = card.state;
+  card.voiceBtns.forEach((b, i) => b.classList.toggle("on", r.voice === i));
+  card.meaningBtns.forEach(([v, b]) => b.classList.toggle("on", r.meaning === v));
+  card.broken.classList.toggle("on", r.broken);
+  card.node.classList.toggle("rated", isRated(card));
+}
+const isRated = card => card.state.voice !== null || card.state.broken;
+
+function makePair(group, pair, number) {
+  const r = pair.rating || {};
+  const card = {id: pair.id, node: el("article", "pair"), state: {voice: r.voice ?? null, meaning: r.meaning ?? null, broken: !!r.broken, note: r.note || ""}};
+  const h = el("h2", "", group.speaker);
+  h.append(el("small", "", `${group.pairs.indexOf(pair) + 1} of ${group.pairs.length} for this speaker`));
+  const refs = el("details", "refs");
+  refs.open = true;
+  refs.append(el("summary", "", `Other lines by ${group.speaker}`));
+  const list = el("ul");
+  const draw = n => {
+    list.replaceChildren(...group.references.slice(0, n).map(t => el("li", "", t)));
+    if (n < group.references.length) {
+      const more = el("button", "more", "Show more lines");
+      more.onclick = () => draw(group.references.length);
+      list.append(more);
+    }
+  };
+  draw(6);
+  refs.append(list);
+  card.node.append(h, refs, el("div", "num", "Pair " + number));
+
+  const shown = 2;
+  const before = el("div", "talk"), after = el("div", "talk");
+  const fill = whole => {
+    before.replaceChildren(); after.replaceChildren();
+    const b = whole ? pair.before : pair.before.slice(-shown), a = whole ? pair.after : pair.after.slice(0, shown);
+    before.append(talkLines(b)); after.append(talkLines(a));
+    if (pair.before.length > shown || pair.after.length > shown) {
+      const more = el("button", "more", whole ? "Show less" : "Show more of the conversation");
+      more.onclick = () => fill(!whole);
+      after.append(more);
+    }
+    if (!b.length && !a.length) before.append(el("p", "", "(no other lines in this conversation)"));
+  };
+  fill(false);
+
+  const trans = el("div", "trans");
+  trans.append(el("div", "", "JA " + pair.ja), el("div", "", "EN " + pair.en));
+  const llm = el("div", "llm");
+  if (pair.llm.length) {
+    llm.append("Gemini: ");
+    pair.llm.forEach((a, i) => { llm.append(i ? " · " : "", a.label + " ", el("b", "", a.answer)); });
+  }
+  card.node.append(before, textRow("A", pair.aDiff), textRow("B", pair.bDiff), llm, trans, after);
+
+  const controls = el("div", "controls"), voice = el("div", "group"), meaning = el("div", "group");
+  card.voiceBtns = VOICE.map(([v, label]) => { const b = el("button", "", label); b.setAttribute("aria-label", "Voice " + label); b.onclick = () => setVoice(card, v); voice.append(b); return b; });
+  card.meaningBtns = MEANING.map(([v, label]) => { const b = el("button", "", label); b.setAttribute("aria-label", "Meaning " + label); b.onclick = () => setMeaning(card, v); meaning.append(b); return [v, b]; });
+  card.broken = el("button", "", "x broken");
+  card.broken.onclick = () => setBroken(card);
+  const note = el("input", "note");
+  note.placeholder = "Note (optional)"; note.maxLength = 500; note.value = card.state.note; note.setAttribute("aria-label", "Note");
+  note.onchange = () => { card.state.note = note.value; send(card); };
+  controls.append(voice, meaning, card.broken, note);
+  card.node.append(controls);
+  paint(card);
+  return card;
+}
+
+function send(card) {
+  queue.push({id: card.id, ...card.state, views: views()});
+  paint(card); progress(); flush();
+}
+
+async function flush() {
+  if (sending || !queue.length) return;
+  sending = true;
+  try {
+    while (queue.length) {
+      const res = await fetch("/api/rate", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(queue[0])});
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      queue.shift(); sets = data.sets; drawSets(); progress();
+    }
+    status("All ratings saved", false);
+    sending = false;
+  } catch {
+    status("NOT SAVED: is the server running? Retrying", true);
+    sending = false;
+    setTimeout(flush, 2000);
+  }
+}
+
+function status(text, bad) { $("status").textContent = text; $("status").classList.toggle("bad", bad); }
+
+const finished = card => card.state.broken || (card.state.voice !== null && card.state.meaning !== null);
+function jumpIfFinished(card) { if (finished(card)) setTimeout(() => { if (cards[focus] === card) nextUnrated(); }, 180); }
+function setVoice(card, v) { card.state.voice = card.state.voice === v ? null : v; if (card.state.voice !== null) card.state.broken = false; send(card); jumpIfFinished(card); }
+function setMeaning(card, v) { card.state.meaning = card.state.meaning === v ? null : v; if (card.state.meaning !== null) card.state.broken = false; send(card); jumpIfFinished(card); }
+function setBroken(card) { card.state.broken = !card.state.broken; if (card.state.broken) { card.state.voice = null; card.state.meaning = null; } send(card); jumpIfFinished(card); }
+
+function setFocus(i) {
+  if (!cards[i]) return;
+  cards[focus]?.node.classList.remove("current");
+  focus = i;
+  cards[i].node.classList.add("current");
+  $("back").disabled = i === 0;
+  $("skip").disabled = i === cards.length - 1;
+  window.scrollTo(0, 0);
+}
+
+function nextUnrated() {
+  for (let k = 1; k < cards.length; k++) {
+    const i = (focus + k) % cards.length;
+    if (!isRated(cards[i])) return setFocus(i);
+  }
+  progress();
+}
+
+function drawSets() {
+  const box = $("sets");
+  if (box.options.length !== sets.length) box.replaceChildren(...sets.map(s => { const o = el("option"); o.value = s.index; return o; }));
+  sets.forEach((s, i) => { box.options[i].textContent = `${s.label} (${s.rated}/${s.size})`; });
+  box.value = current;
+}
+
+function progress() {
+  const rated = cards.filter(isRated).length;
+  const total = sets.reduce((sum, s) => sum + s.rated, 0);
+  $("progress").textContent = `${rated} of ${cards.length} here · ${total} in all`;
+  const done = cards.length && rated === cards.length;
+  $("next").style.display = done ? "block" : "none";
+  if (done) {
+    const next = sets[current + 1];
+    $("next-text").textContent = next ? "This set is done." : "Every set is done.";
+    $("next-btn").style.display = next ? "" : "none";
+    if (next) $("next-btn").textContent = `Go to ${next.label}`;
+  }
+}
+
+async function load(index) {
+  status("Loading", false);
+  const res = await fetch("/api/set?n=" + index);
+  const data = await res.json();
+  current = index; cards = []; focus = 0;
+  const box = $("groups");
+  box.replaceChildren();
+  let number = 0;
+  for (const group of data.groups) {
+    for (const pair of group.pairs) { const card = makePair(group, pair, ++number); cards.push(card); box.append(card.node); }
+  }
+  $("l-llm").hidden = !data.groups.some(g => g.pairs.some(p => p.llm.length));
+  drawSets(); applyViews(); progress();
+  status("All ratings saved", false);
+  const first = cards.findIndex(c => !isRated(c));
+  setFocus(first < 0 ? 0 : first);
+  store("set", String(index));
+}
+
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input,select,textarea") || e.metaKey || e.ctrlKey || e.altKey) return;
+  const card = cards[focus];
+  if (!card) return;
+  const key = e.key.toLowerCase();
+  if ("0123".includes(key) && key.length === 1) setVoice(card, Number(key));
+  else if (key === "y" || key === "p" || key === "n") setMeaning(card, key);
+  else if (key === "x") setBroken(card);
+  else if (key === "arrowright") setFocus(focus + 1);
+  else if (key === "arrowleft") setFocus(focus - 1);
+  else return;
+  e.preventDefault();
+});
+for (const name of ["talk", "diff", "translations", "llm"]) {
+  const saved = name === "diff" ? null : store("view-" + name);  // highlighting starts on, whatever an old visit left
+  if (saved !== null) $("t-" + name).checked = saved === "1";
+  $("t-" + name).onchange = applyViews;
+}
+$("back").onclick = () => setFocus(focus - 1);
+$("skip").onclick = () => setFocus(focus + 1);
+$("sets").onchange = e => load(Number(e.target.value));
+$("next-btn").onclick = () => { load(current + 1); window.scrollTo(0, 0); };
+window.addEventListener("beforeunload", e => { if (queue.length) e.preventDefault(); });
+
+(async () => {
+  sets = await (await fetch("/api/sets")).json();
+  const saved = Number(store("set"));
+  const open = sets.findIndex(s => s.rated < s.size);
+  await load(Number.isInteger(saved) && sets[saved] && sets[saved].rated < sets[saved].size ? saved : Math.max(open, 0));
+})().catch(() => status("Could not reach the server", true));
+</script>
+</body>
+</html>

@@ -420,3 +420,11 @@ head_f_1gpu__both__s42: >
   Result at 1050: top-1 0.210 (data 0.198, within noise; best of head_f), sep 2.53, sep_orig 4.66, sep_para
   3.58, sep_diff 3.19 (all highest), leak 0.652 (push's rise), voice-over-topic 0.556 (episodes 0.571). Episodes
   carry the gains; push adds leak.
+trait_predictor_local_mac: >
+  17-trait Jev predictor on Qwen3-0.6B, seed 42, 3000 steps, no speaker labels, the 95's speakers out of training. Local runs,
+  scripts/trait_predictor.py. Dev is line r / delta r. Small-dev is 1,013 rule pairs, y_untied / y_jev (edit .457 / .429). The 95 is
+  within / small / overall / minus edit, 99% interval. LoRA r=8 mean: dev .843/.698, small-dev .659/.782, 95 .555/.455/.682/+.338
+  (.029,.626). LoRA r=8 attention: dev .851/.708, small-dev .668/.792, 95 .590/.526/.702/+.373 (.066,.664), entropy .948. Frozen
+  attention + layers 6,12,18,24,28: dev .805/.665, small-dev .667/.759, 95 .534/.481/.698/+.317 (.009,.609), entropy .749. Frozen
+  attention .775/.620, .614/.723; with scorer .780/.631, .631/.736; frozen mean .728/.555, .557/.660. One seed; the 95 are reused,
+  so prereg/trait_confirmation.md decides.
