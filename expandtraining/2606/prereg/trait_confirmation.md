@@ -82,3 +82,10 @@ On the 95 with small edits rated 0 or 1 only (22 pairs): LoRA attention .370, ed
 The same 19 re-rated pairs, against the first rating then the blind one: LoRA attention .645 then .064; frozen taps .624 then .169; edit .455 then
 .335; scan .261 then .014. Ratings at 2 fell from 6 to 1. Gemini's score was on screen for 14 of the first ratings, and 19 pairs, 15 of them rated 1, is
 very few.
+
+Second post-hoc pass, after the rater stated that their ratings are not a gold standard and are less consistent than Argon's. The sealed result is still
+judged by the rule above. Against Argon's scan average, fresh, all 39 / small 29: Jev .891/.766; frozen taps .841/.704; LoRA mean .827/.673; LoRA attention
+.829/.666; edit .789/.543; rater .712/.536. On small-dev, LoRA attention against scan is .660, so the speaker shift does not lower the model's agreement with
+Argon. Same 19 re-rates: rater exact .421, Spearman .214; Argon run 1 against run 2 exact .632, Spearman .464. Argon run 1 against run 2 on small-dev: exact .768,
+Spearman .791; run 1 against the careful prompt: exact .299, Spearman .611. Five re-rates fell from 2 to 1: four had Gemini's answers on screen at first, with
+careful at 2 and the plain runs at 0 or 1, so those first ratings may have followed the shown score. The earlier "no sign of leaning" reading is withdrawn.
