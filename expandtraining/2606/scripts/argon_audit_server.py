@@ -5,7 +5,7 @@
     uv run python expandtraining/2606/scripts/argon_audit_server.py score
 
 build: pairs the pairs the model ranks furthest above Argon with those Argon ranks furthest above the model, at similar edit size. serve: the rater
-picks the line that changes voice more, or neither. score: who the rater sided with. See prereg/trait_argon_test.md.
+picks the line that changes voice more, or neither, or marks the round broken when an edited line is faulty. score: who the rater sided with. See prereg/trait_argon_test.md.
 """
 from __future__ import annotations
 
@@ -70,16 +70,18 @@ def build() -> int:
 
 
 def tally(rows: list[dict], choices: dict[int, str]) -> dict:
-    model = argon = neither = 0
+    model = argon = neither = broken = 0
     for row in rows:
         choice = choices.get(row["round"])
         if choice == "neither":
             neither += 1
+        elif choice == "broken":
+            broken += 1
         elif choice:
             model += (choice == "left") == row["model_left"]
             argon += (choice == "left") != row["model_left"]
     p = binomtest(model, model + argon).pvalue if model + argon else None
-    return {"rounds": len(rows), "sided_with_model": model, "sided_with_argon": argon, "neither": neither, "two_sided_p": p}
+    return {"rounds": len(rows), "sided_with_model": model, "sided_with_argon": argon, "neither": neither, "broken": broken, "two_sided_p": p}
 
 
 def side(pair: dict, conn: sqlite3.Connection) -> dict:
@@ -111,12 +113,12 @@ PAGE = """<!doctype html><html lang="zh"><meta charset="utf-8"><title>Voice Audi
 :root{--bg:#fff;--ink:#222;--mute:#666;--line:#ddd;--mark:#ffe08a}@media(prefers-color-scheme:dark){:root{--bg:#1c1c1e;--ink:#eee;--mute:#aaa;--line:#444;--mark:#7a5c00}}
 body{margin:0 auto;max-width:1000px;padding:16px;font:17px/1.6 system-ui;background:var(--bg);color:var(--ink)}.row{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:700px){.row{grid-template-columns:1fr}}
 .card{border:1px solid var(--line);border-radius:8px;padding:12px}.mute{color:var(--mute);font-size:14px}mark{background:var(--mark);color:inherit}button{font:inherit;padding:8px 14px;margin:12px 8px 0 0;cursor:pointer}kbd{border:1px solid var(--line);border-radius:4px;padding:0 4px}</style>
-<p id="top"></p><p>Which edit changes the speaker's voice more? <kbd>1</kbd> left <kbd>2</kbd> right <kbd>0</kbd> neither or can't tell <kbd>←</kbd> back</p><div class="row" id="cards"></div><div><button data-c="left">1 Left</button><button data-c="right">2 Right</button><button data-c="neither">0 Neither</button><button id="back">← Back</button></div>
+<p id="top"></p><p>Which edit changes the speaker's voice more? <kbd>1</kbd> left <kbd>2</kbd> right <kbd>0</kbd> neither or can't tell <kbd>x</kbd> an edited line is broken <kbd>←</kbd> back</p><div class="row" id="cards"></div><div><button data-c="left">1 Left</button><button data-c="right">2 Right</button><button data-c="neither">0 Neither</button><button data-c="broken">x Broken</button><button id="back">← Back</button></div>
 <script>let rounds=[],picks={},at=0;const $=i=>document.getElementById(i);
 const card=(s,n)=>{const d=document.createElement("div");d.className="card";const p=(t,c)=>{const e=document.createElement("p");e.textContent=t;if(c)e.className=c;d.append(e);return e};p(n+" · "+s.speaker,"mute");s.before.forEach(t=>p(t,"mute"));p("A "+s.A);const b=p("B ");s.B.forEach(([t,m])=>{const e=document.createElement(m?"mark":"span");e.textContent=t;b.append(e)});s.after.forEach(t=>p(t,"mute"));return d};
 function draw(){const done=Object.keys(picks).length;if(at>=rounds.length){const open=rounds.findIndex(r=>!picks[r.round]);if(open<0){$("top").textContent="Done: "+done+" of "+rounds.length+" saved.";$("cards").replaceChildren();return}at=open}const r=rounds[at];$("top").textContent="Round "+(at+1)+" of "+rounds.length+" · "+done+" saved"+(picks[r.round]?" · you chose "+picks[r.round]:"");$("cards").replaceChildren(card(r.left,"Left"),card(r.right,"Right"));scrollTo(0,0)}
 async function pick(c){if(at>=rounds.length)return;const r=rounds[at];const x=await fetch("/api/choose",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({round:r.round,choice:c})});if(!x.ok){$("top").textContent="NOT SAVED: is the server running?";return}picks[r.round]=c;at++;draw()}
-document.querySelectorAll("[data-c]").forEach(b=>b.onclick=()=>pick(b.dataset.c));$("back").onclick=()=>{at=Math.max(0,at-1);draw()};addEventListener("keydown",e=>{const m={"1":"left","2":"right","0":"neither"}[e.key];if(m)pick(m);if(e.key==="ArrowLeft"){at=Math.max(0,at-1);draw()}});
+document.querySelectorAll("[data-c]").forEach(b=>b.onclick=()=>pick(b.dataset.c));$("back").onclick=()=>{at=Math.max(0,at-1);draw()};addEventListener("keydown",e=>{const m={"1":"left","2":"right","0":"neither","x":"broken"}[e.key];if(m)pick(m);if(e.key==="ArrowLeft"){at=Math.max(0,at-1);draw()}});
 (async()=>{const d=await(await fetch("/api/rounds")).json();rounds=d.rounds;picks=d.picks;at=rounds.findIndex(r=>!picks[r.round]);if(at<0)at=rounds.length;draw()})();</script></html>"""
 
 
@@ -145,7 +147,7 @@ def serve(port: int) -> None:
                 self.reply(b"{}", status=404)
                 return
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))))
-            if body.get("round") not in known or body.get("choice") not in ("left", "right", "neither"):
+            if body.get("round") not in known or body.get("choice") not in ("left", "right", "neither", "broken"):
                 self.reply(b"{}", status=400)
                 return
             with open(CHOICES, "a", encoding="utf-8") as handle:

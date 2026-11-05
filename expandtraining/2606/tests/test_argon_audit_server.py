@@ -17,8 +17,8 @@ def test_rounds_oppose_the_two_scorers_at_similar_edit_size_and_never_reuse_a_pa
 
 def test_tally_follows_the_hidden_side():
     rows = [{"round": 1, "model_left": True}, {"round": 2, "model_left": False}, {"round": 3, "model_left": True}, {"round": 4, "model_left": True}]
-    result = audit.tally(rows, {1: "left", 2: "left", 3: "neither"})
-    assert (result["sided_with_model"], result["sided_with_argon"], result["neither"]) == (1, 1, 1)
+    result = audit.tally(rows, {1: "left", 2: "left", 3: "neither", 4: "broken"})
+    assert (result["sided_with_model"], result["sided_with_argon"], result["neither"], result["broken"]) == (1, 1, 1, 1)
 
 
 def test_segments_mark_changes_and_deletions():
