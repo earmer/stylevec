@@ -446,3 +446,8 @@ hongloumeng_matched_local_mac: >
   Local, cached predictions, prereg/hongloumeng_matched_test.md. No pass: content classifier .715 on matched pairs, limit .65. Traits kept at nearly unmatched size and AUC .702 above all placebos (max .551), but
   content characters still .763 and function characters .701. Stage 4b audit check: none of 3 models flips any of the 25 rounds; on the 13 Argon rounds, gap to frozen start -.365 -> -.312, 9 up 4 down, p .267.
   Paired on the 293: Stage 4b minus start +.025 (99% -.002,.051), minus LoRA attention .000 (-.067,.062).
+landing_audit_local_mac: >
+  Local audit, scripts/landing_audit.py, LoRA attention and frozen taps, no training. Coverage of the training set, zero-shot en and ja against zh on aligned lines of unseen speakers, Jev recheck of 400 ja lines (cap $0.20),
+  trait health on real text, voice over topic on CPED, Reddit, AuthBench, Aozora against shuffled twins. Descriptive, one seed.
+  Result: training data all zh; Genshin plus book and tone rewrites, none social or CPED. Zero-shot on unseen speakers, LoRA attention: en r .73 with zh, ja .69; against Jev on translations en .79, ja .73, SD ratio about .65. Jev zh against Jev translation .72, so transferred labels are no better. Jev retest ja .998.
+  Traits: rankings as expected, CPED has 12 traits below half SD. Voice: CPED .492, Reddit .511, both inside chance and level with TF-IDF; AuthBench .727 and Aozora .680 below TF-IDF (.811, .891).

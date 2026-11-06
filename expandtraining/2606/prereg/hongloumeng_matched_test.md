@@ -23,3 +23,5 @@ Descriptive only: banquet, poetry, household and illness scenes by fixed keyword
 Balance failed, so by the rule above this test did not remove content. Content classifier: unmatched .855, matched .715, limit .65; the mean cosine of kept pairs is only .32. The other two parts met their
 limits: all five traits kept their sign with intervals excluding 0 (playfulness -.48, irony -.46, swagger -.34, deference +.28, hedging +.26 passage SD, nearly the unmatched sizes), and the window AUC of .702
 is above all 20 placebos (mean .484, max .551). The same matched window gives content characters .763 (placebos .601, .670) and function characters .701, so the traits do not beat them. 1,130 pairs, length still 161 against 134 characters before regression.
+
+Subsets, descriptive and outside the pass rule. Dialogue (665 pairs): trait AUC .688 against content AUC .669, all five traits kept with intervals excluding 0. Narration (144 pairs): trait AUC .680 against content .780, only playfulness kept. The dialogue content AUC is still above the .65 limit, and the two AUCs were not tested against each other, so this is a pattern and not a pass.
