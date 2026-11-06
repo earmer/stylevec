@@ -430,3 +430,15 @@ trait_predictor_local_mac: >
   so prereg/trait_confirmation.md decides.
   Sealed test, stopped at 67 tagged pairs, 40 fresh usable: no pass, inconclusive. LoRA attention within .142, small .220, minus edit
   -.232 (-.715,.307); edit size within .374, small .344. The gain on the 95 did not carry over.
+trait_remote_stage4b_hongloumeng: >
+  AutoDL, one box, scripts/trait_remote.sh. Moved from the Mac at the user's request; the local Stage 4b was killed at about step 600
+  (dev .611 +.199 at step 400) and restarts from step 0, so numbers are CUDA, not comparable step by step with the MPS curve. Stage 4b:
+  warm-start frozen taps, 800 steps, 16 lines + 8 Jev pairs + 8 scan pairs, scan weight 1, equal trait weights; judged on the 293 (now
+  development, was .589 +.177) with 4 small-dev speakers held out. 红楼梦: chapter-80 benchmark (issue #4) on LoRA attention, frozen taps,
+  LoRA mean, masked and unmasked, next to the old methods; the book is far from the training dialogue, chapter 80 is a noisy proxy for style.
+  Result, Stage 4b at 800 (fixed, not picked on the 293): dev .613 +.201 (.072,.340), start .589 +.177; plain .589 +.205; held .581 -> .620, fit .676 -> .793; Jev line/delta .805/.665 ->
+  .789/.651; 95 small .481 -> .424; fresh small .268 -> .292. Level with unmodified LoRA attention (.613), no gain over it, so no new sealed set. Result, 红楼梦 reanalysis placebo at b=80,
+  LoRA attention: as is .98 (z +4.9, null max .77), masked .99; length corrected .891, 1/39; minus register .85 (+1.3, null max .85); minus content .32. Scan splits at 80 from chapters 1,
+  6, 12 (p .015, .045, .040), not when masked from 6 or 12. Old 256d .92 (+1.9); difference +.064 (-.07,.27). Content characters alone: 1.00, split at 80. Same design flaw as before:
+  chapter 80 cannot separate style from content. Book mean archaic 2.67 against train 1.44 (sd .68). CUDA and MPS predictions agree to 4e-5. The box idled in its 20-minute grace: my launch
+  ssh never returned.
