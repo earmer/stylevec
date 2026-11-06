@@ -442,3 +442,7 @@ trait_remote_stage4b_hongloumeng: >
   6, 12 (p .015, .045, .040), not when masked from 6 or 12. Old 256d .92 (+1.9); difference +.064 (-.07,.27). Content characters alone: 1.00, split at 80. Same design flaw as before:
   chapter 80 cannot separate style from content. Book mean archaic 2.67 against train 1.44 (sd .68). CUDA and MPS predictions agree to 4e-5. The box idled in its 20-minute grace: my launch
   ssh never returned.
+hongloumeng_matched_local_mac: >
+  Local, cached predictions, prereg/hongloumeng_matched_test.md. No pass: content classifier .715 on matched pairs, limit .65. Traits kept at nearly unmatched size and AUC .702 above all placebos (max .551), but
+  content characters still .763 and function characters .701. Stage 4b audit check: none of 3 models flips any of the 25 rounds; on the 13 Argon rounds, gap to frozen start -.365 -> -.312, 9 up 4 down, p .267.
+  Paired on the 293: Stage 4b minus start +.025 (99% -.002,.051), minus LoRA attention .000 (-.067,.062).
