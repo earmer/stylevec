@@ -1,0 +1,128 @@
+{
+ "rubric": "src/traits_v21.py",
+ "target": "jev-1.14.0",
+ "source": "respan/span-02",
+ "fit": "y_jev ~ a*y_span + b, least squares on 300 lines (150 pairs, outputs/traits/cal300); clip result to [0,4]",
+ "n_lines": 300,
+ "calibration": {
+  "formality": {
+   "a": 0.9984,
+   "b": -0.009,
+   "raw_mae": 0.233,
+   "cv_mae": 0.235,
+   "line_r": 0.943
+  },
+  "archaic": {
+   "a": 1.0462,
+   "b": -0.0971,
+   "raw_mae": 0.218,
+   "cv_mae": 0.216,
+   "line_r": 0.924
+  },
+  "deference": {
+   "a": 0.6979,
+   "b": 0.4477,
+   "raw_mae": 0.206,
+   "cv_mae": 0.2,
+   "line_r": 0.733
+  },
+  "intensity": {
+   "a": 1.0936,
+   "b": -0.2124,
+   "raw_mae": 0.27,
+   "cv_mae": 0.258,
+   "line_r": 0.921
+  },
+  "valence": {
+   "a": 0.9558,
+   "b": 0.0565,
+   "raw_mae": 0.22,
+   "cv_mae": 0.23,
+   "line_r": 0.958
+  },
+  "playfulness": {
+   "a": 0.867,
+   "b": -0.0904,
+   "raw_mae": 0.395,
+   "cv_mae": 0.292,
+   "line_r": 0.876
+  },
+  "age_voice": {
+   "a": 1.0664,
+   "b": -0.2445,
+   "raw_mae": 0.29,
+   "cv_mae": 0.276,
+   "line_r": 0.906
+  },
+  "ornament": {
+   "a": 1.0006,
+   "b": 0.0745,
+   "raw_mae": 0.248,
+   "cv_mae": 0.247,
+   "line_r": 0.894
+  },
+  "spokenness": {
+   "a": 1.1119,
+   "b": -0.667,
+   "raw_mae": 0.451,
+   "cv_mae": 0.276,
+   "line_r": 0.95
+  },
+  "hedging": {
+   "a": 1.1228,
+   "b": -0.42,
+   "raw_mae": 0.325,
+   "cv_mae": 0.286,
+   "line_r": 0.87
+  },
+  "verbosity": {
+   "a": 1.2248,
+   "b": -0.3158,
+   "raw_mae": 0.241,
+   "cv_mae": 0.206,
+   "line_r": 0.857
+  },
+  "irony": {
+   "a": 0.5937,
+   "b": 0.5172,
+   "raw_mae": 0.32,
+   "cv_mae": 0.268,
+   "line_r": 0.74
+  },
+  "swagger": {
+   "a": 0.6175,
+   "b": 0.711,
+   "raw_mae": 0.243,
+   "cv_mae": 0.166,
+   "line_r": 0.819
+  },
+  "warmth": {
+   "a": 0.8082,
+   "b": 0.3471,
+   "raw_mae": 0.266,
+   "cv_mae": 0.254,
+   "line_r": 0.86
+  },
+  "syntactic_complexity": {
+   "a": 0.9819,
+   "b": 0.0304,
+   "raw_mae": 0.206,
+   "cv_mae": 0.208,
+   "line_r": 0.921
+  },
+  "abstraction": {
+   "a": 1.2177,
+   "b": -0.4768,
+   "raw_mae": 0.271,
+   "cv_mae": 0.239,
+   "line_r": 0.922
+  },
+  "ego_focus": {
+   "a": 0.881,
+   "b": 0.1342,
+   "raw_mae": 0.253,
+   "cv_mae": 0.262,
+   "line_r": 0.932
+  }
+ }
+}
