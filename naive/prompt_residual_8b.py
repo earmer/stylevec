@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Prompt residual experiment with OpenRouter qwen3-embedding-8b."""
 
+import os
 import sqlite3
 import time
 from pathlib import Path
@@ -12,7 +13,7 @@ from sklearn.metrics import silhouette_score
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
 CACHE_DIR = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
-API_KEY = "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"
+API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 API_URL = "https://openrouter.ai/api/v1/embeddings"
 MODEL = "qwen/qwen3-embedding-8b"
 PER_SPEAKER = 25
@@ -58,7 +59,7 @@ def embed_openrouter(texts, prompt=""):
         for attempt in range(3):
             try:
                 r = requests.post(API_URL, headers=headers,
-                                  json={"model": MODEL, "input": batch})
+                                  json={"model": MODEL, "input": batch}, timeout=(10, 120))
                 r.raise_for_status()
                 embs = [d["embedding"] for d in r.json()["data"]]
                 all_embs.extend(embs)

@@ -44,7 +44,7 @@ def embed_batch(texts, model, batch_size=256):
         batch = texts[i:i + batch_size]
         for attempt in range(3):
             try:
-                r = requests.post(OLLAMA_URL, json={"model": model, "input": batch})
+                r = requests.post(OLLAMA_URL, json={"model": model, "input": batch}, timeout=(10, 120))
                 r.raise_for_status()
                 all_embs.extend(r.json()["embeddings"])
                 break

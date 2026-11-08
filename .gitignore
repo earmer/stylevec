@@ -76,3 +76,8 @@ data/datasets/msynthstel/.claude/
 .env
 # SwanLab API key (TOK=...); piped to remote boxes, never committed.
 swanlab.env
+data/genshin/textmap/
+data/genshin/agd/
+genshin/conf_en.json
+genshin/conf_ja.json
+genshin/conf.json

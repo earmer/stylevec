@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """LDA generalization at scale: top 100 speakers, 4:1 train/test split."""
 
+import os
 import sqlite3
 import time
 import numpy as np
@@ -11,7 +12,7 @@ from sklearn.metrics import silhouette_score
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "genshin" / "genshin.db"
 CACHE = Path(__file__).resolve().parent.parent / "artifacts" / "cache"
-API_KEY = "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"
+API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 API_URL = "https://openrouter.ai/api/v1/embeddings"
 MODEL = "qwen/qwen3-embedding-8b"
 PROMPT = "分析这段文本的语言风格和说话习惯"
@@ -58,7 +59,7 @@ def embed_openrouter(texts, batch_size=64):
             try:
                 r = requests.post(API_URL,
                                   headers={"Authorization": f"Bearer {API_KEY}"},
-                                  json={"model": MODEL, "input": batch})
+                                  json={"model": MODEL, "input": batch}, timeout=(10, 120))
                 r.raise_for_status()
                 all_embs.extend([d["embedding"] for d in r.json()["data"]])
                 break
